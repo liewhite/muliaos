@@ -1,0 +1,8 @@
+target/
+.bsp/
+.metals/
+.bloop/
+.vscode/
+project/project/
+*.log
+/dev-data/

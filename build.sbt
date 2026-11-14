@@ -1,0 +1,152 @@
+// muliao（Scala 版）构建。模块图与依赖方向见 docs/stack.md「模块与依赖方向」。
+// 领域之间只能沿下面 `domain(...)` 里写的方向依赖：sbt 的模块依赖不能成环，
+// 反向 import 在编译期就找不到类，所以这份列表就是依赖方向的唯一来源。
+
+ThisBuild / scalaVersion := "3.10.1"
+ThisBuild / organization := "muliao"
+ThisBuild / version      := "0.1.0-SNAPSHOT"
+ThisBuild / scalacOptions ++= Seq(
+  "-deprecation",
+  "-feature",
+  "-unchecked",
+  "-Wunused:imports",
+  "-Wvalue-discard",
+  "-Werror"
+)
+
+// quill 4.9.0 依赖 zio-json 0.10（只用于 Postgres jsonb，SQLite 用不到），允许被 1.x 取代
+ThisBuild / libraryDependencySchemes += "dev.zio" %% "zio-json" % VersionScheme.Always
+
+val V = new {
+  val zio        = "2.1.27"
+  val zioJson    = "1.1.2"
+  val zioSchema  = "1.9.1"
+  val zioProcess = "0.8.1"
+  val zioLogging = "2.5.4"
+  val zioHttp    = "3.11.6" // 与 tapir-zio-http-server 1.14.1 依赖的版本一致
+  val tapir      = "1.14.1"
+  val apispec    = "0.12.1"
+  val quill      = "4.9.0"
+  val sqlite     = "3.54.1.0"
+  val flyway     = "13.12.2"
+  val tomlj      = "2.2.0"
+  val laminar    = "18.0.0-M5"
+}
+
+lazy val commonJvm = Seq(
+  libraryDependencies ++= Seq(
+    "dev.zio" %% "zio"          % V.zio,
+    "dev.zio" %% "zio-streams"  % V.zio,
+    "dev.zio" %% "zio-test"     % V.zio % Test,
+    "dev.zio" %% "zio-test-sbt" % V.zio % Test
+  ),
+  Test / fork := true,
+  Test / javaOptions ++= Seq("-Dfile.encoding=UTF-8", "--enable-native-access=ALL-UNNAMED")
+)
+
+// ---- 前后端共用：编号、错误体、接口声明（tapir） ----
+lazy val contract = crossProject(JVMPlatform, JSPlatform)
+  .crossType(CrossType.Pure)
+  .in(file("modules/contract"))
+  .settings(
+    libraryDependencies ++= Seq(
+      "dev.zio"                     %%% "zio-json"       % V.zioJson,
+      "com.softwaremill.sttp.tapir" %%% "tapir-core"     % V.tapir,
+      "com.softwaremill.sttp.tapir" %%% "tapir-json-zio" % V.tapir,
+      "dev.zio"                     %%% "zio-test"       % V.zio % Test,
+      "dev.zio"                     %%% "zio-test-sbt"   % V.zio % Test
+    )
+  )
+
+// ---- 平台基础：不含领域词汇 ----
+lazy val platform = project
+  .in(file("modules/platform"))
+  .dependsOn(contract.jvm)
+  .settings(commonJvm)
+  .settings(
+    libraryDependencies ++= Seq(
+      "dev.zio"                       %% "zio-http"                 % V.zioHttp,
+      "dev.zio"                       %% "zio-json"                 % V.zioJson,
+      "dev.zio"                       %% "zio-schema"               % V.zioSchema,
+      "dev.zio"                       %% "zio-schema-json"          % V.zioSchema,
+      "dev.zio"                       %% "zio-schema-derivation"    % V.zioSchema,
+      "dev.zio"                       %% "zio-logging"              % V.zioLogging,
+      "dev.zio"                       %% "zio-logging-slf4j2-bridge" % V.zioLogging,
+      "com.softwaremill.sttp.tapir"   %% "tapir-zio-http-server"    % V.tapir,
+      "com.softwaremill.sttp.tapir"   %% "tapir-openapi-docs"       % V.tapir,
+      "com.softwaremill.sttp.apispec" %% "openapi-circe"            % V.apispec,
+      ("dev.zio"                      %% "quill-jdbc-zio"           % V.quill)
+        .excludeAll(
+          ExclusionRule("com.mysql"),
+          ExclusionRule("mysql"),
+          ExclusionRule("com.h2database"),
+          ExclusionRule("org.postgresql"),
+          ExclusionRule("com.microsoft.sqlserver"),
+          ExclusionRule("com.oracle.database.jdbc")
+        ),
+      "org.xerial"                     % "sqlite-jdbc"              % V.sqlite,
+      "org.flywaydb"                   % "flyway-core"              % V.flyway,
+      "org.tomlj"                      % "tomlj"                    % V.tomlj
+    )
+  )
+
+// ---- 给 agent 的工具的共同契约 ----
+lazy val toolkit = project
+  .in(file("modules/toolkit"))
+  .dependsOn(platform)
+  .settings(commonJvm)
+
+// ---- 以某身份起命令：子进程、进程组、写沙箱、secret 注入与打码 ----
+lazy val exec = project
+  .in(file("modules/exec"))
+  .dependsOn(platform)
+  .settings(commonJvm)
+  .settings(libraryDependencies += "dev.zio" %% "zio-process" % V.zioProcess)
+
+// ---- 领域：依赖方向就是这里的参数 ----
+def domain(name: String, deps: ClasspathDep[ProjectReference]*): Project =
+  Project(name, file(s"modules/$name"))
+    .dependsOn((Seq[ClasspathDep[ProjectReference]](platform, toolkit) ++ deps)*)
+    .settings(commonJvm)
+
+lazy val resources = domain("resources")                         // 资源、agent 与权限
+lazy val models    = domain("models", exec)                      // 模型接入、MCP、外部服务
+lazy val sessions  = domain("sessions", resources, models)       // 会话与运行
+lazy val workspace = domain("workspace", sessions, exec)         // 文件、命令、后台任务、页面
+lazy val notifications = domain("notifications", sessions)                 // 通知与推送
+lazy val board     = domain("board", sessions, notifications)           // issue 看板
+lazy val triggers  = domain("triggers", sessions, workspace, notifications) // 触发器
+lazy val history   = domain("history", sessions, board)          // 工作历史与活动回顾
+
+lazy val domains = Seq(resources, models, sessions, workspace, notifications, board, triggers, history)
+
+// ---- 组装入口：唯一依赖全部领域的模块 ----
+lazy val app = project
+  .in(file("modules/app"))
+  .dependsOn(domains.map(p => p: ClasspathDep[ProjectReference])*)
+  .settings(commonJvm)
+  .settings(
+    Compile / mainClass := Some("muliao.app.Main"),
+    run / fork          := true
+  )
+
+// ---- 一次性迁移工具：读旧数据，写新数据目录 ----
+lazy val migrate = project
+  .in(file("modules/migrate"))
+  .dependsOn(domains.map(p => p: ClasspathDep[ProjectReference])*)
+  .settings(commonJvm)
+
+// ---- 前端（Scala.js + Laminar），只依赖接口契约 ----
+lazy val web = project
+  .in(file("modules/web"))
+  .enablePlugins(ScalaJSPlugin)
+  .dependsOn(contract.js)
+  .settings(
+    scalaJSUseMainModuleInitializer := true,
+    libraryDependencies += "com.raquo" %%% "laminar" % V.laminar
+  )
+
+lazy val root = project
+  .in(file("."))
+  .aggregate((Seq[ProjectReference](contract.jvm, contract.js, platform, toolkit, exec, app, migrate, web) ++ domains.map(p => p: ProjectReference))*)
+  .settings(publish / skip := true)
