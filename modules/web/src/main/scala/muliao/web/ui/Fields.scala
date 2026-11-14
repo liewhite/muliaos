@@ -208,6 +208,6 @@ object Fields:
 /** 发送快捷键：⌘+Enter（Mac）/ Ctrl+Enter；Enter 换行。 */
 object SendKey:
   private val isMac = dom.window.navigator.platform.toLowerCase.contains("mac") || dom.window.navigator.userAgent.contains("iPhone")
-  val hint: String  = if isMac then "⌘+Enter 发送" else "Ctrl+Enter 发送"
+  val hint: String  = if isMac then "⌘↩ 发送" else "Ctrl+↩ 发送"
   def isSend(e: dom.KeyboardEvent): Boolean =
     e.key == "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing

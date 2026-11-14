@@ -79,6 +79,10 @@ object Remote:
   def apply[A](topics: String*)(fetch: => Future[A]): Signal[Load[A]] =
     triggered(EventStream.merge(Events.changes.filter(topics.contains).mapToUnit, Events.ready, Events.refreshNow.events))(fetch)
 
+  /** 同上，另外在 `more` 发出时也重拉（如「显示更多」）。 */
+  def withMore[A](more: EventStream[Unit], topics: String*)(fetch: => Future[A]): Signal[Load[A]] =
+    triggered(EventStream.merge(Events.changes.filter(topics.contains).mapToUnit, Events.ready, Events.refreshNow.events, more))(fetch)
+
   /** 只在页面挂上与用户操作后拉取（不随主题刷新）。 */
   def once[A](fetch: => Future[A]): Signal[Load[A]] = triggered(Events.refreshNow.events)(fetch)
 

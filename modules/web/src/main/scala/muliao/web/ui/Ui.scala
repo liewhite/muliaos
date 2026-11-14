@@ -46,7 +46,8 @@ object Ui:
       size: Size = Size.Md,
       iconOnly: Boolean = false,
       pending: Signal[Boolean] = Val(false),
-      label: String = ""
+      label: String = "",
+      disabledIf: Signal[Boolean] = Val(false)
   )(mods: Modifier[Button]*): Button =
     button(
       tpe := "button",
@@ -54,16 +55,21 @@ object Ui:
       dataAttr("slot") := "button",
       Option.when(label.nonEmpty)(aria.label := label),
       Option.when(label.nonEmpty && iconOnly)(title := label),
-      disabled <-- pending,
+      disabled <-- pending.combineWith(disabledIf).map(_ || _),
       dataAttr("pending") <-- pending.map(_.toString),
       child.maybe <-- pending.map(p => Option.when(p)(spinner("spinner--sm spinner--current"))),
       mods
     )
 
-  def iconBtn(icon: String, label: String, variant: Variant = Variant.Ghost, size: Size = Size.Sm, iconCls: String = "size-5")(
-      mods: Modifier[Button]*
-  ): Button =
-    btn(variant, size, iconOnly = true, label = label)(Icon(icon, iconCls), mods)
+  def iconBtn(
+      icon: String,
+      label: String,
+      variant: Variant = Variant.Ghost,
+      size: Size = Size.Sm,
+      iconCls: String = "size-5",
+      disabledIf: Signal[Boolean] = Val(false)
+  )(mods: Modifier[Button]*): Button =
+    btn(variant, size, iconOnly = true, label = label, disabledIf = disabledIf)(Icon(icon, iconCls), mods)
 
   /** 站内链接：走前端路由；`withFrom` 时目标页的返回回到这里。 */
   def appLink(url: String, withFrom: Boolean = true)(mods: Modifier[Anchor]*): Anchor =
@@ -112,6 +118,8 @@ object Ui:
   def page(
       title: Modifier[HtmlElement],
       back: Option[Route] = None,
+      /** 返回的上级页随数据而定时（如 thread 回发起会话）：给出取上级页的函数，代替 `back` */
+      backTo: Option[() => Route] = None,
       actions: Modifier[HtmlElement] = emptyMod,
       footer: Modifier[HtmlElement] = emptyMod,
       wide: Boolean = false,
@@ -123,7 +131,7 @@ object Ui:
         cls := "flex items-center gap-2 border-b border-separator bg-surface px-3 pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2",
         // 手机上每个页面左上角都有管理菜单（二级页面也是，在返回前）；桌面端左侧栏已有同一个按钮
         iconBtn("Menu", "管理菜单")(cls := "md:hidden", onClick --> (_ => adminMenuOpen.set(true))),
-        back.map(b => iconBtn("ChevronLeft", "返回")(onClick --> (_ => Router.back(b)))),
+        back.map(b => () => b).orElse(backTo).map(b => iconBtn("ChevronLeft", "返回")(onClick --> (_ => Router.back(b())))),
         h1(cls := "min-w-0 flex-1 truncate text-lg font-semibold", title),
         div(cls := "flex items-center gap-2", actions)
       ),
@@ -285,5 +293,9 @@ final class Action:
             case None       => error.set(Some(Http.messageOf(t)))
           Success(false)
     }
+
+  /** 同 `run`，不关心结果（按钮的点击）。 */
+  def fire(action: => Future[Any], toast: Option[String] = None, leave: Option[() => Unit] = None): Unit =
+    run(action, toast, leave): Unit
 
   def errorView(title: String = "出错了"): Modifier[HtmlElement] = Ui.errorAlert(error.signal, title)
