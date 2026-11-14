@@ -114,7 +114,8 @@ final case class Migrations(domain: String)
 
 object Migrations:
   private[db] def runAll(ds: DataSource, all: Seq[Migrations]): IO[AppError, Unit] =
-    ZIO.foreachDiscard(all) { m =>
+    // 没有迁移目录的领域（没有自己的表）跳过，免得 Flyway 每次启动报「找不到迁移」
+    ZIO.foreachDiscard(all.filter(m => getClass.getClassLoader.getResource(s"db/${m.domain}") != null)) { m =>
       ZIO
         .attemptBlocking(
           Flyway
