@@ -41,6 +41,11 @@ trait Board:
 
   def delete(id: IssueId): IO[AppError, Unit]
 
+  /** [from, to) 里对 issue 的操作（活动回顾用），按时间排：`agent` 给出时是它做的，加上用户在它负责或被指派的 issue 上做的；
+    * 不给是用户与全部 agent 做的。平台自己记的不算。
+    */
+  def activity(agent: Option[AgentId], from: Long, to: Long): IO[AppError, List[IssueActivity]]
+
   /** 会话事件：issue 会话最终失败记一条动态；一次运行结束后停滞时请 agent 表态（一次）。 */
   def onSession(e: SessionEvent): UIO[Unit]
 
@@ -247,6 +252,24 @@ object Board:
           },
           sessions = links.map(l => IssueSessionView(l.agent, lns.getOrElse(l.agent, l.agent.value), l.session, sts.get(l.session).fold("idle")(_.label)))
         )
+
+    def activity(agent: Option[AgentId], from: Long, to: Long): IO[AppError, List[IssueActivity]] =
+      for
+        events <- db.read(Repo.eventsBetween(from, to))
+        mine   <- ZIO.foreach(agent)(a => db.read(Repo.ofAgent(a))).map(_.map(_.toSet))
+        picked  = events.filter { e =>
+                    (e.actor, agent) match
+                      case (Actor.System(_), _)           => false
+                      case (_, None)                      => true
+                      case (Actor.Agent(id, _), Some(a))  => id == a
+                      case (Actor.User, Some(_))          => mine.exists(_(e.issue))
+                  }
+        titles <- db.read(Repo.titles(picked.map(_.issue).distinct)).map(_.map((i, t, _) => i -> t).toMap)
+        r      <- render(Nil, picked)
+      yield picked.map { e =>
+        val (text, body) = r.activity(e.activity)
+        IssueActivity(e.issue, titles.getOrElse(e.issue, ""), e.at, r.actor(e.actor), e.actor.where, text, body)
+      }
 
     // ---- 写 ----
 

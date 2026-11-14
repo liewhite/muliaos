@@ -160,6 +160,16 @@ private[sessions] object Repo:
             .take(lift(limit))
         ).orInternal
 
+  /** 编号以 `prefix` 开头的会话（`prefix` 由调用方保证只含编号用的字符）。最多取两个，够判断唯一与否。 */
+  def sessionsWithPrefix(prefix: String): Read[List[SessionRow]] =
+    Sql.run(sessions.filter(s => sql"substr(${s.id}, 1, ${lift(prefix.length)}) = ${lift(prefix)}".asCondition).take(2)).orInternal
+
+  /** `from` 之后有过活动的会话（`agent` 给出时只要它的）。 */
+  def touchedSince(agent: Option[AgentId], from: Long): Read[List[SessionRow]] =
+    agent match
+      case None    => Sql.run(sessions.filter(_.updatedAt >= lift(from))).orInternal
+      case Some(a) => Sql.run(sessions.filter(s => s.updatedAt >= lift(from) && s.agentId == lift(a))).orInternal
+
   /** 不空闲的会话（有进行中的运行、等待中的工作或排队的信）。 */
   val busySessions: Read[List[SessionRow]] =
     Sql.run(
@@ -222,6 +232,15 @@ private[sessions] object Repo:
   def lastRun(session: SessionId): Read[Option[RunRow]] =
     Sql.run(runs.filter(_.sessionId == lift(session)).sortBy(_.id)(using Ord.desc).take(1)).map(_.headOption).orInternal
 
+  /** 这些会话里在 [from, to) 之间开始或结束的运行。 */
+  def runsBetween(ids: List[SessionId], from: Long, to: Long): Read[List[RunRow]] =
+    Sql.run(
+      runs.filter(r =>
+        liftQuery(ids).contains(r.sessionId) &&
+          ((r.startedAt >= lift(from) && r.startedAt < lift(to)) || r.finishedAt.exists(f => f >= lift(from) && f < lift(to)))
+      )
+    ).orInternal
+
   def runsIn(states: List[String]): Read[List[RunRow]] =
     Sql.run(runs.filter(r => liftQuery(states).contains(r.state))).orInternal
 
@@ -255,6 +274,14 @@ private[sessions] object Repo:
 
   def entriesFrom(session: SessionId, from: Long): Read[List[EntryRow]] =
     Sql.run(entries.filter(e => e.sessionId == lift(session) && e.id >= lift(from)).sortBy(_.id)).orInternal
+
+  /** 这些会话里在 [from, to) 之间开始的来信与回复。 */
+  def messagesBetween(ids: List[SessionId], from: Long, to: Long): Read[List[EntryRow]] =
+    Sql.run(
+      entries
+        .filter(e => liftQuery(ids).contains(e.sessionId) && e.startedAt >= lift(from) && e.startedAt < lift(to) && (e.kind == "letter" || e.kind == "reply"))
+        .sortBy(_.id)
+    ).orInternal
 
   def entry(id: Long): Read[Option[EntryRow]] =
     Sql.run(entries.filter(_.id == lift(id))).map(_.headOption).orInternal

@@ -134,3 +134,6 @@ object Halt:
       case IssueStatus.InProgress =>
         m.toRight("改成 in_progress 是改方向，要给留言（message）说清接下来做什么").map(_ => Halt(status, m))
       case s => Left(s"叫停后不能改成 ${s.label}：停下不是做完，只能是 backlog / blocked / cancelled / in_progress（改方向，要留言）")
+
+/** 一条动态连同它所在的 issue（活动回顾用），文字已按 [[Render]] 写好。 */
+final case class IssueActivity(issue: IssueId, title: String, at: Long, actor: String, session: Option[SessionId], text: String, comment: Option[String])

@@ -125,3 +125,11 @@
 - **时间线**：表 `issue_event` 只增不改，`actor` 是 `user` / `system` / agent 编号，`session_id` 是发生在哪个会话，`activity` 是 `Activity` 的 JSON。工作历史（#873）的「对 issue 的操作」从这里按时间、agent 取。
 - **工具参数里的枚举**：Scala 3 enum 加 `@caseName("in_progress")` 并派生 zio-schema，JSON Schema 里就是带 `enum` 的字符串（`ToolArgs` 取 `@caseName`），解码也认它。
 - **测试**：`RulesSpec`（规则纯函数）、`BoardSpec`（真库、真会话与通知领域、假模型：投递规则、依赖放行、停滞与请表态、审核与冲突、会话失败、叫停、开始、删除、删 agent、工具、HTTP）。
+
+## 工作历史与活动回顾（history，#873）
+- **组装**：`History.layer`（要 `Database`、`ChangeBus`、`Sessions`、`Board`、`Agents`、`GeneralSettings`）；`HistoryLink.attach` 在 `Sessions.start` 之前调用，登记 4 个工具（`HistoryTools.toolNames`，汇进 `ToolCatalog`）；`HistoryHttp.endpoints` 交给 HTTP 服务（接口声明在 contract 的 `HistoryApi`，`GET /api/history`）。记下后广播主题 `history`。删 agent 不清理（工作历史保留），不登记 `AgentHook`。
+- **只追加**：表 `history_entry` 上的触发器拒绝 UPDATE / DELETE（库级），程序里也没有改、删的入口。一批在一个事务里写，任一条不合法（`NewEntry.make`：标题、摘要不空，日期不在今天之后；重要程度 1–3）整批不记。
+- **检索**：不用 FTS（中文分词、trigram 对两个字的词无效）；SQL 先按 agent、日期、重要程度和最长的那个词（`instr`）筛，再由纯函数 `Search.rank` 要求每个词都出现、按相关度（标题与引用里出现的权重 3、摘要里 1，乘出现次数）排，同分按重要程度、日期。没有关键字时按日期倒序直接在 SQL 里取。
+- **活动回顾**：按配置时区把一天换成 [from, to)，从会话领域 `Sessions.activity`（有来信/回复或运行的会话、来源为用户的来信、最终失败的运行）、看板 `Board.activity`（该 agent 做的，加用户在它当前负责或被指派的 issue 上做的；不给 agent 是用户与全部 agent 的；平台记的不算）和本领域当天的历史取数，文字由纯函数 `OverviewText` 写，按行分页（`Pages`，每次约 4 万字符，最后一行说明 offset）。
+- **读会话**：`Sessions.find` 按编号或唯一前缀找会话，`Sessions.timeline` 的投影经纯函数 `Reading.items` 变成带标签的条目（USER/TRIGGER/ISSUE/DELEGATION/EVENT、ASSISTANT、`call <工具>`、`result <工具>`、`error <工具>`、CONTEXT、COMPACTION、`NOTICE <种类>`；思考不读出），`ReadFilter` 按标签、正则（不分大小写）、时刻筛选，用户与回答正文不截、其余按 clip 截，按条分页。
+- **测试**：`PureSpec`（相关度、记录校验、分页、读会话的条目与筛选、回顾的写法）、`HistorySpec`（真库、真会话/看板/通知领域、假模型：四个工具经模型调用、整批拒绝、库级拒绝改删、按天汇总单个与全部 agent 及别的日子、前缀与筛选与续读、HTTP）。

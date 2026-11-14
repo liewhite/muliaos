@@ -50,6 +50,11 @@ trait Sessions:
 
   def timeline(id: SessionId): IO[AppError, List[TimelineItem]]
 
+  /** 按编号或它的唯一前缀找会话（`session_read` 用）。 */
+  def find(prefix: String): IO[AppError, SessionInfo]
+
+  /** [from, to) 里的会话活动（活动回顾用）：有来信或回复的会话、用户亲手发的消息、最终失败的运行。`agent` 不给是全部。 */
+  def activity(agent: Option[AgentId], from: Long, to: Long): IO[AppError, SessionActivity]
   /** 最后一条回复的正文。 */
   def lastAnswer(id: SessionId): IO[AppError, String]
 
@@ -135,6 +140,43 @@ object Sessions:
         d       <- display
       yield Timeline.items(entries, calls, uploads.map(u => u.id.value -> u).toMap, d)
 
+    def find(prefix: String): IO[AppError, SessionInfo] =
+      val p = prefix.trim.toLowerCase
+      if p.isEmpty || !p.forall(c => c.isDigit || ('a' to 'f').contains(c)) then ZIO.fail(AppError.invalid(s"会话编号「$prefix」不对：是十六进制字符（给前缀也行）"))
+      else
+        db.read(Repo.sessionsWithPrefix(p)).flatMap {
+          case List(row) => SessionInfo.decode(row)
+          case Nil       => ZIO.fail(AppError.notFound(s"没有编号以 $p 开头的会话（可能已删除）"))
+          case _         => ZIO.fail(AppError.invalid(s"编号以 $p 开头的会话不止一个，多给几位"))
+        }
+
+    def activity(agent: Option[AgentId], from: Long, to: Long): IO[AppError, SessionActivity] =
+      for
+        rows    <- db.read(Repo.touchedSince(agent, from))
+        ids      = rows.map(_.id)
+        msgs    <- db.read(Repo.messagesBetween(ids, from, to))
+        runs    <- db.read(Repo.runsBetween(ids, from, to))
+        infos   <- ZIO.foreach(rows)(SessionInfo.decode).map(_.map(i => i.id -> i).toMap)
+        letters <- ZIO.foreach(msgs.filter(_.kind == "letter"))(m => Decode.entry(m).map(m -> _.body))
+        states  <- e.states(ids)
+      yield
+        val bySession = msgs.groupBy(_.sessionId)
+        val runsOf    = runs.groupBy(_.sessionId)
+        val failed    = runs.filter(r => r.state == RunState.Failed.label && r.finishedAt.exists(f => f >= from && f < to))
+        def inRange(t: Long) = t >= from && t < to
+        val active = (bySession.keys ++ runsOf.keys).toList.distinct.flatMap { id =>
+          infos.get(id).map { i =>
+            val ms    = bySession.getOrElse(id, Nil)
+            val rs    = runsOf.getOrElse(id, Nil)
+            val times = ms.map(_.startedAt) ++ rs.flatMap(r => (r.startedAt :: r.finishedAt.toList).filter(inRange))
+            ActiveSession(i.id, i.agent, i.origin, i.title, states.getOrElse(id, WorkState.Idle), ms.size, times.min, times.max, rs.size, rs.count(failed.contains))
+          }
+        }
+        val said = letters.collect { case (row, EntryBody.Mail(l)) if l.source == Source.User => row -> l.text }.flatMap { (row, text) =>
+          infos.get(row.sessionId).map(i => UserSaid(row.sessionId, i.agent, row.startedAt, text))
+        }
+        val failures = failed.flatMap(r => infos.get(r.sessionId).map(i => RunFailure(r.sessionId, i.agent, r.id, r.finishedAt.getOrElse(r.startedAt), r.error.getOrElse("（没有记下原因）"))))
+        SessionActivity(active.sortBy(_.first), said.sortBy(_.at), failures.sortBy(_.at))
     private def names(ids: List[AgentId]): UIO[Map[AgentId, String]] =
       ZIO.foreach(ids.distinct)(id => agents.get(id).map(a => id -> a.name.value).orElseSucceed(id -> id.value)).map(_.toMap)
 

@@ -127,6 +127,10 @@ private[board] object Repo:
   def eventsOf(issue: IssueId): Read[List[IssueEvent]] =
     Sql.run(events.filter(_.issueId == lift(issue)).sortBy(_.id)).orInternal.flatMap(ZIO.foreach(_)(decodeEvent))
 
+  /** [from, to) 之间的全部动态，按时间排。 */
+  def eventsBetween(from: Long, to: Long): Read[List[IssueEvent]] =
+    Sql.run(events.filter(e => e.at >= lift(from) && e.at < lift(to)).sortBy(_.id)).orInternal.flatMap(ZIO.foreach(_)(decodeEvent))
+
   // ---- 已请表态 ----
 
   def nudged(issue: IssueId, agent: AgentId): Read[Boolean] =

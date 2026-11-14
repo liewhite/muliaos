@@ -1,6 +1,6 @@
 package muliao.sessions
 
-import muliao.contract.{AgentId, IssueId, SessionId, ThreadName, TriggerName}
+import muliao.contract.{AgentId, IssueId, RunId, SessionId, ThreadName, TriggerName}
 import muliao.toolkit.Suspension
 import zio.Chunk
 import zio.json.*
@@ -141,3 +141,28 @@ enum Answer:
   case Answers(answers: List[String])
   /** 批准与否；`always`：以后同样的调用不再问 */
   case Decision(approved: Boolean, always: Boolean)
+
+// ---- 一段时间里的活动（工作历史的活动回顾用） ----
+
+/** 一个会话在这段时间里的活动。`messages`：来信与回复的条数，`first` / `last`：其中最早、最晚一条的开始时间；`runs`：这段时间里开始或结束的运行。 */
+final case class ActiveSession(
+    id: SessionId,
+    agent: AgentId,
+    origin: Origin,
+    title: String,
+    state: WorkState,
+    messages: Int,
+    first: Long,
+    last: Long,
+    runs: Int,
+    failedRuns: Int
+)
+
+/** 用户亲手发的一条消息（来源是用户，不含转述）。 */
+final case class UserSaid(session: SessionId, agent: AgentId, at: Long, text: String)
+
+/** 一次最终失败的运行。 */
+final case class RunFailure(session: SessionId, agent: AgentId, run: RunId, at: Long, error: String)
+
+/** 一段时间里的会话活动，各项按时间排。 */
+final case class SessionActivity(sessions: List[ActiveSession], said: List[UserSaid], failures: List[RunFailure])
