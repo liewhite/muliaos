@@ -1,0 +1,2 @@
+CREATE TABLE broken_two (id INTEGER);
+THIS IS NOT SQL;
