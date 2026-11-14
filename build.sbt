@@ -148,7 +148,30 @@ lazy val app = project
   .settings(commonJvm)
   .settings(
     Compile / mainClass := Some("muliao.app.Main"),
-    run / fork          := true
+    run / fork          := true,
+    // ---- 打包（#877，由 deploy/build.sh 调用）：fat jar 里带上前端（资源路径 web/），清单写版本与本地访问许可 ----
+    assembly / assemblyJarName := "muliao.jar",
+    // 前端由 deploy/build.sh 先用 Vite 构建到 target/web-dist/web/；这里只把它当成一个类路径目录收进 jar
+    assembly / fullClasspath += Attributed.blank(target.value / "web-dist"),
+    assembly / packageOptions += Package.ManifestAttributes(
+      "Implementation-Version" -> sys.props.getOrElse("muliao.version", "dev"),
+      "Enable-Native-Access"   -> "ALL-UNNAMED" // sqlite-jdbc 等的本地库，免得 JDK 25 每次启动警告
+    ),
+    // 只在打包时出现的重名文件。io/getquill：dev.zio:quill-sql 4.9.0 自带了一份 io.getquill:quill-engine 4.8.5 里的类，
+    // 开发时类路径上 quill-sql 在前，所以取第一个与开发时一致；其余是清单、版本说明、编译期配置，取哪份都不影响运行。
+    // scalafmt 与 Scala 2.13 编译器（quill 带进来的）不排除：quill 运行时格式化 SQL 可能用到，省下的体积不值得冒找不到类的险。
+    assembly / assemblyMergeStrategy := {
+      case PathList("module-info.class")                            => MergeStrategy.discard
+      case PathList("META-INF", "versions", _, "module-info.class") => MergeStrategy.discard
+      case PathList("META-INF", xs @ _*) if xs.lastOption.contains("MANIFEST.MF") && xs.contains("OSGI-INF") => MergeStrategy.discard
+      case PathList("META-INF", "io.netty.versions.properties")     => MergeStrategy.first
+      case PathList("io", "getquill", _*)                           => MergeStrategy.first
+      case PathList("scala", "annotation", f) if f.startsWith("unroll.") => MergeStrategy.first
+      case "deriving.conf"                                          => MergeStrategy.first
+      case x =>
+        val old = (assembly / assemblyMergeStrategy).value
+        old(x)
+    }
   )
 
 // ---- 一次性迁移工具：读旧数据，写新数据目录 ----

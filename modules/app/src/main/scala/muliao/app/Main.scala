@@ -13,6 +13,7 @@ import java.nio.file.Paths
   * {{{
   * muliao serve <配置文件>   起服务
   * muliao openapi            把接口描述（OpenAPI JSON）打到标准输出
+  * muliao version            打印版本（打包时写进 jar 清单的 `<时间>-<commit>`，开发时是 dev）
   * }}}
   */
 object Main extends ZIOAppDefault:
@@ -29,7 +30,8 @@ object Main extends ZIOAppDefault:
       case Chunk("serve", path) =>
         serve(path).foldZIO(e => Console.printLineError(s"启动失败：${e.message}").ignore *> exit(ExitCode.failure), ZIO.succeed(_))
       case Chunk("openapi") => Console.printLine(HttpServer.openApi(contractEndpoints, version))
-      case _                => Console.printLineError("用法：muliao serve <配置文件> | muliao openapi").ignore *> exit(ExitCode(2))
+      case Chunk("version") => Console.printLine(version)
+      case _                => Console.printLineError("用法：muliao serve <配置文件> | muliao openapi | muliao version").ignore *> exit(ExitCode(2))
     }
 
   private def serve(path: String): IO[AppError, Unit] =
@@ -37,7 +39,7 @@ object Main extends ZIOAppDefault:
       ZIO
         .scoped(
           for
-            _   <- ZIO.logInfo(s"muliao $version 启动，配置 ${cfg.path}")
+            _   <- ZIO.logInfo(s"muliao $version 启动，pid ${ProcessHandle.current.pid}，配置 ${cfg.path}")
             _   <- InstanceLock.acquire(cfg.general.dataDir)
             env <- Assembly.layer(cfg).build
             _   <- Assembly.boot(version).provideSomeEnvironment[Scope](_ ++ env)
