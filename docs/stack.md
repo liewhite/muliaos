@@ -110,3 +110,9 @@
 - **组装**：`Notifications.layer`（要 `Database`、`ChangeBus`、`OutboundHttp`、`PushSettings`、`GeneralSettings`）；`SessionLink.attach` 在 `Sessions.start` 之前调用：登记 `notify_user` 工具（名字在 `SessionLink.toolNames`，汇进 `ToolCatalog`）、会话事件订阅（规则在纯函数 `SessionRules.wanted`）、会话未读；`NotificationsHttp.endpoints` 交给 HTTP 服务。
 - **推送载荷**（Service Worker 契约）：`{"title","body","url","badge"}`，`url` 没有时是 `/notifications`，`badge` 是发出那一刻的未读数；标题、正文按字截到 120 / 600。
 - **测试**：`CryptoSpec`（RFC 8291 例子逐字节、VAPID 签名验签、openssl 私钥互通）、`NotificationsSpec`（事务、逐设备重试与订阅清理、已读、会话事件、HTTP）。现有私钥的验收：`sbt "notifications/Test/runMain muliao.notifications.VapidKeyCheck <私钥文件>"`（先复制再读），公钥与 `openssl pkey -pubout` 对照。
+
+## 工作区领域的接法（#869，给下游领域与组装入口）
+- **组装**：`Workspace.layer`（要 `PageSigner.fromSecret(server.cookieSecret)`）起全部服务，并把 8 个工具、skill 脚本的批准执行者 `skill_run`、异步工作种类 `job`、agent 忙碌判断与删除清理登记到上游；工具名与类别 `Workspace.toolInfos` 汇进资源领域的 `ToolCatalog`。启动顺序：`Sessions.start` 之后调 `Jobs.recover`（上次没收尾的后台任务标为被中断、不盲杀，补交结局）。接口 `WorkspaceHttp.endpoints(auth)`，其中页面文件 `/site/<agent>/<page>/<签名>/<文件>` 不要登录，带隔离响应头（CSP sandbox、nosniff、允许跨源读取）。
+- **以 agent 身份起命令**：一律经 `AgentExec.command(agent, program, secrets, SecretUse)` 得到 `CommandSpec`（工作目录、写沙箱、secret 注入），再 `Exec.run/start`；输出可经 `annotate` 补写沙箱拦截说明。触发器的前置检查与常驻命令用它，不自己算可写范围。
+- **文件读写**：`FileAccess` 按可写范围检查（平台私有文件对非 admin 读写都不行），资源目录里的文件经 `AssetGuard` + `AssetStore.write`；`WriteMode.Overwrite` 要求本次运行读过（读过的指纹按运行记在内存里），`Patch` 不要求。`AssetStore.write` 覆盖已有文件时沿用原权限位（skill 脚本不丢可执行位）。
+- **后台任务**：输出在工作目录 `jobs/<编号>.log`；关停时结束并标被中断，结局下次启动补交（表 `job` 的 `reported`）。
