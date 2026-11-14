@@ -158,13 +158,20 @@ lazy val migrate = project
   .settings(commonJvm)
 
 // ---- 前端（Scala.js + Laminar），只依赖接口契约 ----
+// 由 modules/web 下的 Vite 驱动（@scala-js/vite-plugin-scalajs）：npm 依赖（Tailwind、HeroUI 样式、Markdown 等）由 Vite 打包。
 lazy val web = project
   .in(file("modules/web"))
   .enablePlugins(ScalaJSPlugin)
   .dependsOn(contract.js)
   .settings(
     scalaJSUseMainModuleInitializer := true,
-    libraryDependencies += "com.raquo" %%% "laminar" % V.laminar
+    scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.ESModule).withESFeatures(_.withESVersion(org.scalajs.linker.interface.ESVersion.ES2018))), // ES2018：正则的后行断言与 \p{L}
+    libraryDependencies ++= Seq(
+      "com.raquo"                   %%% "laminar"            % V.laminar,
+      "com.softwaremill.sttp.tapir" %%% "tapir-sttp-client4" % V.tapir,
+      "dev.zio"                     %%% "zio-test"           % V.zio % Test,
+      "dev.zio"                     %%% "zio-test-sbt"       % V.zio % Test
+    )
   )
 
 lazy val root = project

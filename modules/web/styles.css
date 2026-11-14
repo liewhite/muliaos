@@ -1,0 +1,130 @@
+@import "tailwindcss";
+@import "@heroui/styles";
+@import "katex/dist/katex.min.css";
+@plugin "@tailwindcss/typography";
+
+/* 类名写在 Scala 源码里 */
+@source "./src/main/scala";
+
+/* 其余样式全部用 HeroUI 组件与 Tailwind 类名；这里只放二者都不覆盖的全局设置 */
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+/* iOS 主屏 PWA（status-bar-style 为 black-translucent）里，html 的 100% 高度少算了顶部安全区，
+   底部会空出一条状态栏高度的空白；补上这段。只对 iOS 生效，浏览器里 Safari 竖屏时 inset-top 为 0 */
+@supports (-webkit-touch-callout: none) {
+  html {
+    height: calc(100% + env(safe-area-inset-top));
+  }
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* iOS 输入框字号小于 16px 时聚焦会自动缩放页面 */
+input,
+textarea,
+select {
+  font-size: max(16px, 1em);
+}
+
+/* 负责项目（owner）的颜色：色相由 看板的负责项目配色 给出（内联 --owner-hue），这里按亮/暗主题定亮度与彩度。用 oklch：
+   各色相亮度一致，黄、绿也和蓝、紫一样对比度够 */
+.owner-color {
+  --owner-fg: oklch(0.5 0.13 var(--owner-hue));
+  --owner-bg: oklch(0.95 0.04 var(--owner-hue));
+}
+
+.dark .owner-color {
+  --owner-fg: oklch(0.8 0.12 var(--owner-hue));
+  --owner-bg: oklch(0.3 0.06 var(--owner-hue));
+}
+
+/* 文件预览的代码高亮（highlight.js 的类名，文件浏览）：配色取 GitHub 亮/暗主题，跟随界面主题 */
+.hljs-comment,
+.hljs-quote {
+  color: #6e7781;
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-type,
+.hljs-meta .hljs-keyword {
+  color: #cf222e;
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-meta .hljs-string {
+  color: #0a3069;
+}
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-attr,
+.hljs-attribute,
+.hljs-symbol,
+.hljs-selector-attr {
+  color: #0550ae;
+}
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: #8250df;
+}
+.hljs-built_in,
+.hljs-params,
+.hljs-meta {
+  color: #953800;
+}
+.hljs-deletion {
+  color: #82071e;
+}
+.dark .hljs-comment,
+.dark .hljs-quote {
+  color: #8b949e;
+}
+.dark .hljs-keyword,
+.dark .hljs-selector-tag,
+.dark .hljs-type,
+.dark .hljs-meta .hljs-keyword {
+  color: #ff7b72;
+}
+.dark .hljs-string,
+.dark .hljs-regexp,
+.dark .hljs-addition,
+.dark .hljs-meta .hljs-string {
+  color: #a5d6ff;
+}
+.dark .hljs-number,
+.dark .hljs-literal,
+.dark .hljs-variable,
+.dark .hljs-attr,
+.dark .hljs-attribute,
+.dark .hljs-symbol,
+.dark .hljs-selector-attr {
+  color: #79c0ff;
+}
+.dark .hljs-title,
+.dark .hljs-section,
+.dark .hljs-name,
+.dark .hljs-selector-id,
+.dark .hljs-selector-class {
+  color: #d2a8ff;
+}
+.dark .hljs-built_in,
+.dark .hljs-params,
+.dark .hljs-meta {
+  color: #ffa657;
+}
+.dark .hljs-deletion {
+  color: #ffdcd7;
+}

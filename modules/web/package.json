@@ -1,0 +1,26 @@
+{
+  "name": "muliao-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "@heroui/styles": "^3.2.7",
+    "@scala-js/vite-plugin-scalajs": "^1.1.0",
+    "@tailwindcss/typography": "^0.5.20",
+    "@tailwindcss/vite": "^4.3.5",
+    "tailwindcss": "^4.3.5",
+    "vite": "^8.3.8"
+  },
+  "dependencies": {
+    "@dagrejs/dagre": "^3.1.3",
+    "dompurify": "^3.4.18",
+    "highlight.js": "^11.12.0",
+    "katex": "^0.18.10",
+    "lucide": "^1.73.0",
+    "marked": "^18.2.0",
+    "marked-katex-extension": "^5.1.13"
+  }
+}
