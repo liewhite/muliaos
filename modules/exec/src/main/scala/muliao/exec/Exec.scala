@@ -60,7 +60,7 @@ object Exec:
       case Program.Argv(p, args)  => p +: args
     val sandboxed = spec.sandbox match
       case Sandbox.Unrestricted   => command
-      case Sandbox.Confined(w, h) => Chunk("/usr/bin/sandbox-exec", "-p", Sandbox.profile(w, h)) ++ command
+      case Sandbox.Confined(w, h, r) => Chunk("/usr/bin/sandbox-exec", "-p", Sandbox.profile(w, h, r)) ++ command
     setpgrp ++ sandboxed
 
   /** 起命令；scope 结束时主进程还没退出就结束整组。 */

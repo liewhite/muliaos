@@ -123,6 +123,19 @@ object ExecSpec extends ZIOSpecDefault:
              )
       yield assertTrue(r.output.contains("noread"), r.output.contains("nowrite"), r.output.contains("wrote"), !Files.exists(secret.resolve("new")))
     },
+    test("沙箱：可写目录里收回写权限的部分能读不能写") {
+      for
+        root  <- tempDir
+        ro    <- ZIO.succeed(Files.createDirectories(root.resolve("ro")))
+        _     <- ZIO.succeed(Files.writeString(ro.resolve("f"), "keep"))
+        rootR <- RealPath.resolve(root)
+        roR   <- RealPath.resolve(ro)
+        r <- Exec.run(
+               shell(s"cat '$ro/f'; echo; echo x > '$ro/f' || echo nowrite; echo y > '$root/ok' && echo wrote", root, Sandbox.Confined(Chunk(rootR), readOnly = Chunk(roR))),
+               10.seconds
+             )
+      yield assertTrue(r.output.contains("keep"), r.output.contains("nowrite"), r.output.contains("wrote"), Files.readString(ro.resolve("f")) == "keep")
+    },
     test("沙箱规则：先禁止全部写，再放开设备文件") {
       val p = Sandbox.profile(Chunk.empty)
       assertTrue(p.contains("(deny file-write*)"), p.contains("/dev/null"))

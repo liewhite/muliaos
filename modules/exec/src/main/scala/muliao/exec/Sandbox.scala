@@ -35,22 +35,26 @@ enum Sandbox:
   /** 不限制（平台自己的命令、admin）。 */
   case Unrestricted
 
-  /** 只能写 `writable` 里的目录（及其下所有文件）和系统的几个设备文件；`hidden` 里的读写都不行（平台私有文件），优先于 `writable`。
-    * 路径由调用方按权限算好。
+  /** 只能写 `writable` 里的目录（及其下所有文件）和系统的几个设备文件；`readOnly` 是 `writable` 里收回写权限的部分；
+    * `hidden` 里的读写都不行（平台私有文件），优先于前两者。路径由调用方按权限算好。
     */
-  case Confined(writable: Chunk[RealPath], hidden: Chunk[RealPath] = Chunk.empty)
+  case Confined(writable: Chunk[RealPath], hidden: Chunk[RealPath] = Chunk.empty, readOnly: Chunk[RealPath] = Chunk.empty)
 
 object Sandbox:
   private def quote(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
   private def subpaths(ps: Chunk[RealPath]) = ps.map(p => s"  (subpath ${quote(p.path.toString)})").mkString("\n")
 
-  /** macOS sandbox-exec 的规则：先禁止全部写，再放开可写路径，最后禁止读写私有路径（后写的规则优先）。 */
-  def profile(writable: Chunk[RealPath], hidden: Chunk[RealPath] = Chunk.empty): String =
+  /** macOS sandbox-exec 的规则：先禁止全部写，再放开可写路径，再收回只读部分的写，最后禁止读写私有路径（后写的规则优先）。 */
+  def profile(writable: Chunk[RealPath], hidden: Chunk[RealPath] = Chunk.empty, readOnly: Chunk[RealPath] = Chunk.empty): String =
     val paths = subpaths(writable)
-    val deny =
+    val noWrite =
+      if readOnly.isEmpty then ""
+      else s"(deny file-write*\n${subpaths(readOnly)})\n"
+    val deny = noWrite + (
       if hidden.isEmpty then ""
       else s"(deny file-read* file-write*\n${subpaths(hidden)})\n"
+    )
     s"""(version 1)
        |(allow default)
        |(deny file-write*)
