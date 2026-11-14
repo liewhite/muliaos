@@ -106,7 +106,7 @@ final case class SessionsHttp(sessions: Sessions, files: Files, agents: Agents, 
 
   def endpoints(auth: Auth): List[ApiEndpoint] =
     List(
-      SessionsApi.list.secured(auth)(_ => (agent, q, before, limit) => sessions.list(agent, q, before, limit.getOrElse(50))),
+      SessionsApi.list.secured(auth)(_ => (agent, origins, q, before, limit) => sessions.list(agent, q, before, limit.getOrElse(50), origins)),
       SessionsApi.create.secured(auth)(_ => create),
       SessionsApi.get.secured(auth)(_ => sessions.detail),
       SessionsApi.timeline.secured(auth)(_ => sessions.timeline),

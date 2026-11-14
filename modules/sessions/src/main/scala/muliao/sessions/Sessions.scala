@@ -59,7 +59,8 @@ trait Sessions:
   def lastAnswer(id: SessionId): IO[AppError, String]
 
   // ---- 界面 ----
-  def list(agent: Option[AgentId], q: Option[String], before: Option[Long], limit: Int): IO[AppError, SessionPage]
+  /** @param origins 只要这些来源（user / trigger / issue / thread；空是不限） */
+  def list(agent: Option[AgentId], q: Option[String], before: Option[Long], limit: Int, origins: List[String] = Nil): IO[AppError, SessionPage]
   def detail(id: SessionId): IO[AppError, SessionDetail]
   def retry(id: SessionId): IO[AppError, Unit]
   def answer(id: SessionId, entry: Long, call: String, a: Answer): IO[AppError, Unit]
@@ -190,12 +191,13 @@ object Sessions:
           st.getOrElse(r.id, WorkState.Idle).label, unread(r.id), r.createdAt, r.updatedAt)
       )
 
-    def list(agent: Option[AgentId], q: Option[String], before: Option[Long], limit: Int): IO[AppError, SessionPage] =
+    def list(agent: Option[AgentId], q: Option[String], before: Option[Long], limit: Int, origins: List[String]): IO[AppError, SessionPage] =
       val n    = limit.max(1).min(200)
       val text = q.map(_.trim).filter(_.nonEmpty)
       for
-        rows   <- db.read(Repo.listSessions(agent, text, before.getOrElse(Long.MaxValue), n))
-        pinned <- if before.isEmpty && text.isEmpty then db.read(Repo.busySessions).map(_.filter(r => agent.forall(_ == r.agentId))) else ZIO.succeed(Nil)
+        rows   <- db.read(Repo.listSessions(agent, origins, text, before.getOrElse(Long.MaxValue), n))
+        pinned <- (if before.isEmpty && text.isEmpty then db.read(Repo.busySessions) else ZIO.succeed(Nil))
+                    .map(_.filter(r => agent.forall(_ == r.agentId) && (origins.isEmpty || origins.contains(r.origin))))
         ids     = pinned.map(_.id).toSet
         all    <- summaries(pinned.sortBy(-_.updatedAt) ++ rows.filterNot(r => ids(r.id)))
       yield SessionPage(all, Option.when(rows.size == n)(rows.last.updatedAt))
@@ -209,6 +211,8 @@ object Sessions:
         letters <- ZIO.foreach(queued)(q => Decode.letter(q.letter).map(q -> _))
         uploads <- db.read(Repo.uploadsOf(letters.flatMap(_._2.files.toList).distinct.map(FileId.wrap))).map(_.map(u => u.id.value -> u).toMap)
         waits   <- e.waitsOf(id)
+        threads <- db.read(Repo.threadsOf(id)).flatMap(summaries)
+        dels    <- db.read(Repo.delegationsOf(waits.filter(_.kind == e.DelegationKind).flatMap(_.ref.toLongOption)))
         open    <- db.read(Repo.openCalls(id)).flatMap(Decode.calls)
         size    <- e.contextSize(id)
         used    <- db.read(Repo.usageOfSession(id))
@@ -216,7 +220,11 @@ object Sessions:
         summary = summary,
         run = run.map(r => RunView(r.id.value, r.state, r.error, r.retryNote, r.startedAt, r.finishedAt)),
         queued = letters.map((q, l) => QueuedView(q.id, l.source.label, l.text, l.files.toList.flatMap(uploads.get).map(Timeline.file), l.checkIn, q.createdAt)),
-        waits = waits.map(w => WaitItem(w.id, w.kind, w.ref, w.label, w.heartbeat, w.dueAt, w.createdAt)),
+        waits = waits.map { w =>
+          val thread = Option.when(w.kind == e.DelegationKind)(w.ref.toLongOption).flatten.flatMap(d => dels.find(_.id == d)).map(_.threadId)
+          WaitItem(w.id, w.kind, w.ref, w.label, w.heartbeat, w.dueAt, w.createdAt, thread)
+        },
+        threads = threads,
         pending = open.collect { case c if c.state == CallState.Suspended => c.pause.map(p => PendingCall(c.entryId, c.callId, c.name, Timeline.pending(p))) }.flatten,
         contextTokens = size,
         compactionThreshold = settings.compactionThresholdTokens,
