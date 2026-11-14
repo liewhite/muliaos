@@ -33,11 +33,11 @@ object SessionsHttpSpec extends ZIOSpecDefault:
       Resp(resp.statusCode, resp.body, resp.headers.map.asScala.view.mapValues(_.asScala.mkString(",")).toMap)
     }
 
-    /** 读 SSE 的第一条 data。 */
+    /** 读 SSE 的第一条业务事件的 data（跳过连接帧 ready、ping）。 */
     def firstEvent(path: String): Task[String] = ZIO.attemptBlocking {
       val req   = HttpRequest.newBuilder(URI.create(base + path)).header("Cookie", cookie).GET().build()
       val lines = http.send(req, HttpResponse.BodyHandlers.ofLines()).body()
-      try lines.iterator().asScala.find(_.startsWith("data:")).map(_.stripPrefix("data:").trim).getOrElse("")
+      try lines.iterator().asScala.find(l => l.startsWith("data:") && !l.contains("intervalSeconds")).map(_.stripPrefix("data:").trim).getOrElse("")
       finally lines.close()
     }
 
