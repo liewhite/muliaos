@@ -1,0 +1,50 @@
+package muliao.web.pages.issues
+
+import com.raquo.laminar.api.L.*
+import muliao.contract.*
+import muliao.web.ui.*
+
+import IssueModel.*
+
+/** issue 的小部件：状态圆点、负责项目的色点与胶囊、负责项目与指派人的下拉框（看板与 issue 页共用）。 */
+object IssueParts:
+  def statusDot(s: IssueStatus): HtmlElement =
+    span(cls := s"inline-block size-3 shrink-0 rounded-full border-2 ${statusColor(s)}", aria.hidden := true)
+
+  /** 负责项目的色点；不着色时是灰点。 */
+  def ownerDot(hue: Option[Int]): HtmlElement = hue match
+    case Some(h) => span(cls := "owner-color inline-block size-2.5 shrink-0 rounded-full bg-(--owner-fg)", styleAttr := ownerStyle(h), aria.hidden := true)
+    case None    => span(cls := "inline-block size-2.5 shrink-0 rounded-full bg-muted", aria.hidden := true)
+
+  /** 负责项目的胶囊：浅色底 + owner 色文字。 */
+  def ownerChip(hue: Option[Int], name: String): HtmlElement =
+    span(
+      hue match
+        case Some(h) => Seq(cls := "owner-color inline-flex items-center gap-1.5 rounded-full bg-(--owner-bg) px-2 py-0.5 text-xs font-medium text-(--owner-fg)", styleAttr := ownerStyle(h))
+        case None    => Seq(cls := "inline-flex items-center gap-1.5 rounded-full bg-default px-2 py-0.5 text-xs font-medium text-muted")
+      ,
+      ownerDot(hue),
+      name
+    )
+
+  /** 左侧色条用 owner 色的卡片类与样式。 */
+  def ownerBar(hue: Option[Int]): Seq[Modifier[HtmlElement]] = hue match
+    case Some(h) => Seq(cls := "owner-color border-l-(--owner-fg)", styleAttr := ownerStyle(h))
+    case None    => Seq(cls := "border-l-transparent")
+
+  /** 负责项目的选项：每个 agent 前带它的色点。`assignable` 时是在给 issue 定 owner（不是筛选）：归档的不列，当前值除外。 */
+  def ownerOptions(agents: List[AgentSummary], keep: Option[AgentId], assignable: Boolean): List[Opt[AgentId]] =
+    val listed = if assignable then AgentsData.selectable(agents, keep) else agents
+    listed.map(a => Opt(a.id, a.name.value, prefix = Some(() => ownerDot(ownerHue(agents, Some(a.id))))))
+
+  /** 指派人选项：未指派、我、各个 agent。归档的不能被指派，只在它就是当前指派人时留着以便显示。 */
+  def assigneeOptions(agents: List[AgentSummary], current: AssigneeChoice): List[Opt[AssigneeChoice]] =
+    val keep = current match
+      case AssigneeChoice.Agent(id) => Some(id)
+      case _                        => None
+    Opt(AssigneeChoice.Nobody, "未指派") :: Opt(AssigneeChoice.Me, "我") ::
+      AgentsData.selectable(agents, keep).map(a => Opt(AssigneeChoice.Agent(a.id), a.name.value))
+
+  def statusOptions: List[Opt[IssueStatus]] = Statuses.map(s => Opt(s, statusLabel(s)))
+
+  def priorityOptions: List[Opt[Priority]] = Priorities.map(p => Opt(p, priorityLabel(p)))
