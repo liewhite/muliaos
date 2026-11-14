@@ -4,7 +4,6 @@ import com.raquo.laminar.api.L.*
 import muliao.contract.*
 import muliao.web.core.*
 import muliao.web.ui.*
-import org.scalajs.dom
 
 import Http.ec
 
@@ -16,7 +15,6 @@ object AgentPicker:
     val open     = Var(false)
     val query    = Var("")
     val expanded = Var(Set.empty[String])
-    val marker   = s"ap${scala.util.Random.nextInt(1 << 30)}"
     val current  = agents.combineWith(selected).map((as, v) => v.flatMap(id => as.find(_.id == id)))
     def choose(id: AgentId): Unit =
       onPick(id)
@@ -39,13 +37,12 @@ object AgentPicker:
       )
     div(
       cls := "select select--full-width select--secondary relative",
-      dataAttr("picker") := marker,
       span(cls := "label", labelText),
       button(
         tpe := "button",
         cls := "select__trigger select__trigger--full-width",
         aria.expanded <-- open.signal,
-        onClick --> (_ => open.update(!_)),
+        onClick --> { e => e.stopPropagation(); open.update(!_) },
         span(
           cls := "select__value flex min-w-0 items-center gap-2",
           child <-- current.map {
@@ -59,7 +56,9 @@ object AgentPicker:
         Option.when(o)(
           div(
             cls := "absolute left-0 top-full z-50 mt-1 flex w-[min(28rem,90vw)] flex-col rounded-xl bg-overlay shadow-lg ring-1 ring-separator",
-            documentEvents(_.onClick.filter(e => e.target.asInstanceOf[dom.Element].closest(s"[data-picker='$marker']") == null)) --> (_ => open.set(false)),
+            // 点到外面就收起：弹层里的点击不冒泡到 document（点分组会重画列表，被点的元素已离开 DOM，不能再按祖先判断）
+            onClick --> (_.stopPropagation()),
+            documentEvents(_.onClick) --> (_ => open.set(false)),
             div(
               cls := "relative p-2",
               Icon("Search", "pointer-events-none absolute top-1/2 left-5 size-4 -translate-y-1/2 text-muted"),
