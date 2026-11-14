@@ -69,13 +69,14 @@ private[triggers] final case class Streams(core: Core, scope: Scope, hosted: Ref
         at     <- now
         _      <- fails.get.flatMap(n => health.update(_.updated(id, Health(Some(at), n))))
         _      <- (Clock.sleep(tuning.stableAfter) *> stable(id, key, fails)).forkScoped
-        _      <- Streams.background(c.stderr.runForeach(line => Streams.append(log, line, tuning.stderrMaxBytes)))
+        errRead <- Promise.make[Nothing, Unit]
+        _      <- Streams.background(c.stderr.runForeach(line => Streams.append(log, line, tuning.stderrMaxBytes)) *> errRead.succeed(()))
         mask    = Masker(cmd.spec.secrets)
         read   <- Promise.make[Nothing, Unit]
         _      <- Streams.background(c.stdout.map(mask.mask).filter(_.trim.nonEmpty).runForeach(queue.offer) *> read.succeed(()))
         code   <- c.exitCode
         // 主进程退出后限时读完余下的输出（留在后台的子进程占着输出不放时不等它）
-        _      <- read.await.timeout(Exec.DrainGrace)
+        _      <- (read.await *> errRead.await).timeout(Exec.DrainGrace)
       yield code
     )
     attempt.either.flatMap { r =>

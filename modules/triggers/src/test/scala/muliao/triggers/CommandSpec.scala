@@ -152,7 +152,7 @@ object CommandSpec extends ZIOSpecDefault:
           t   <- tg.create(streamOf("flaky", a, "echo started >&2; if [ -f stable ]; then sleep 30; else exit 3; fi"))
           v1  <- eventually("记下故障")(tg.view(t.id))(_.faults.exists(_.source == "stream"))
           al  <- eventually("告警会话")(triggerSessions(a))(_.nonEmpty)
-          log <- read(ws.resolve(Streams.logName(TriggerName.wrap("flaky"))))
+          log <- eventually("标准错误进日志")(read(ws.resolve(Streams.logName(TriggerName.wrap("flaky")))))(_.linesIterator.count(_ == "started") >= 3)
           _   <- write(ws.resolve("stable"), "")
           v2  <- eventually("跑稳后清除")(tg.view(t.id))(v => v.faults.isEmpty && v.runningSince.nonEmpty)
           _   <- tg.update(t.id, TriggerPatch(enabled = Some(false)))
