@@ -101,6 +101,16 @@ object RolesPage:
               case as  => as.map(secondaryChip)
             }
           ),
+          // 收录规则现在匹配到的（服务端逐条算）
+          child.maybe <-- Rules.checks(r.map(_.allow)).map(_.values.flatMap(_.matches).toList.distinct.sorted).map(ms =>
+            Option.when(ms.nonEmpty)(
+              div(
+                cls := "flex flex-wrap items-center gap-1.5",
+                span(cls := "text-muted", s"匹配到（${ms.size}）"),
+                ms.map(m => span(cls := "chip chip--default chip--sm chip--soft font-mono", m))
+              )
+            )
+          ),
           child.maybe <-- r.map(_.deny).map(ds =>
             Option.when(ds.nonEmpty)(
               div(cls := "flex flex-wrap items-center gap-1.5", span(cls := "text-muted", "禁止"), ds.map(d => Ui.chip(d, Tone.Danger)(cls := "font-mono")))
