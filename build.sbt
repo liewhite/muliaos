@@ -38,6 +38,7 @@ val V = new {
   val jsoup      = "1.24.1"
   val readability4j = "1.0.8"
   val flexmark   = "0.64.8"
+  val cronUtils  = "9.2.1"
 }
 
 lazy val commonJvm = Seq(
@@ -133,7 +134,8 @@ lazy val sessions  = domain("sessions", resources, models)       // 会话与运
 lazy val workspace = domain("workspace", sessions % "compile->compile;test->test", exec)         // 文件、命令、后台任务、页面
 lazy val notifications = domain("notifications", sessions % "compile->compile;test->test")                 // 通知与推送
 lazy val board     = domain("board", sessions % "compile->compile;test->test", notifications) // issue 看板
-lazy val triggers  = domain("triggers", sessions, workspace, notifications) // 触发器
+lazy val triggers  = domain("triggers", sessions % "compile->compile;test->test", workspace % "compile->compile;test->test", notifications) // 触发器
+  .settings(libraryDependencies += "com.cronutils" % "cron-utils" % V.cronUtils)
 lazy val history   = domain("history", sessions % "compile->compile;test->test", board) // 工作历史与活动回顾
 
 lazy val domains = Seq(resources, models, sessions, workspace, notifications, board, triggers, history)

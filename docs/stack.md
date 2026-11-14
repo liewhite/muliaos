@@ -133,3 +133,10 @@
 - **活动回顾**：按配置时区把一天换成 [from, to)，从会话领域 `Sessions.activity`（有来信/回复或运行的会话、来源为用户的来信、最终失败的运行）、看板 `Board.activity`（该 agent 做的，加用户在它当前负责或被指派的 issue 上做的；不给 agent 是用户与全部 agent 的；平台记的不算）和本领域当天的历史取数，文字由纯函数 `OverviewText` 写，按行分页（`Pages`，每次约 4 万字符，最后一行说明 offset）。
 - **读会话**：`Sessions.find` 按编号或唯一前缀找会话，`Sessions.timeline` 的投影经纯函数 `Reading.items` 变成带标签的条目（USER/TRIGGER/ISSUE/DELEGATION/EVENT、ASSISTANT、`call <工具>`、`result <工具>`、`error <工具>`、CONTEXT、COMPACTION、`NOTICE <种类>`；思考不读出），`ReadFilter` 按标签、正则（不分大小写）、时刻筛选，用户与回答正文不截、其余按 clip 截，按条分页。
 - **测试**：`PureSpec`（相关度、记录校验、分页、读会话的条目与筛选、回顾的写法）、`HistorySpec`（真库、真会话/看板/通知领域、假模型：四个工具经模型调用、整批拒绝、库级拒绝改删、按天汇总单个与全部 agent 及别的日子、前缀与筛选与续读、HTTP）。
+
+## 触发器领域的接法（#872，给组装入口与迁移）
+- **组装**：`Triggers.layer`（要 `Database`、`ChangeBus`、`Sessions`、`SessionHooks`、`Agents`、`AgentHooks`、`Notifications`、`AgentExec`、`ResourcePaths`、`GeneralSettings`、`TriggerSettings`）在 `Sessions.start` 之前构建：它把 6 个工具（名字与类别在 `Triggers.toolInfos`，汇进 `ToolCatalog`）和 agent 删除时的清理登记到上游。`Sessions.start`、`Jobs.recover` 之后调 `Triggers.start` 起到期扫描与常驻流托管；它们跑在 layer 的 scope 里，关停时随之停下（常驻命令整组结束）。接口 `TriggersHttp.endpoints(auth)`，主题 `triggers`。
+- **配置**：`[triggers] precheck_timeout_seconds`（默认 60）。cron 与不带时区的时刻按 `[general] timezone` 解释。
+- **数据**（表 `trigger_def`、`trigger_fault`）：`kind` + `config`（`TriggerConfig` 的 JSON，键名驼峰：`cron`、`at`、`command`、`secrets`、`debounceSeconds`）、`precheck`（`PrecheckSpec` 的 JSON：`command`、`fireWhen`、`secrets`），读出时一次解析成 `Mode` / `Precheck`，读不懂报内部错误（不自动停用）。`next_at` 为空的启用中的定时、一次性，扫描时按「现在」补上（迁移可以不填）；已结束的一次性 `finished_at` 非空，名字只在没结束的之间唯一。迁移进来的一律 `enabled = 0`（#864 红线）。
+- **触发只有一个出口** `Core.fire`：agent 能不能接活（归档：定时跳过、一次性推送用户没做、流式事件丢弃）→ 防重叠（正在跑前置检查的靠内存集合；上次开的会话不空闲就跳过，定时计入 `skipped`，挡路会话在等待时通知用户一次）→ 前置检查（`bash` 开 pipefail，事件行从标准输入喂入）→ 在一个事务里经 `Sessions.deliverIn` 开会话并记下这次触发。
+- **测试**：`ModelSpec`（纯函数）、`ScheduleSpec`（测试时钟：定时、防重叠、停机补一次、停用不补、一次性、归档）、`CommandSpec`（真实进程：前置检查各模式与失败/超时、常驻流防抖与排队、退避重启与故障、工具、HTTP）。用测试时钟拨时间的测试把资源目录轮询调大（`TestEnv.layer(assetPoll = 1.hour)`），否则拨一次时钟要跑成千上万次轮询。

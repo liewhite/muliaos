@@ -1,6 +1,6 @@
 package muliao.app
 
-import muliao.contract.{AuthApi, BoardApi, HistoryApi, ModelsApi, NotificationsApi, ResourcesApi, SessionsApi}
+import muliao.contract.{AuthApi, BoardApi, HistoryApi, ModelsApi, NotificationsApi, ResourcesApi, SessionsApi, TriggersApi}
 import muliao.platform.{AppError, GeneralSettings, InstanceLock}
 import muliao.platform.config.ConfigFile
 import muliao.platform.db.Database
@@ -44,10 +44,10 @@ object Main extends ZIOAppDefault:
       ServerSettings.section,
       muliao.resources.ResourcesSettings.section,
       muliao.resources.VaultSettings.section
-    ) ++ muliao.models.Module.sections ++ muliao.models.Module.optionalSections ++ muliao.sessions.Module.sections ++ muliao.notifications.Module.sections).map(_.key).toSet
+    ) ++ muliao.models.Module.sections ++ muliao.models.Module.optionalSections ++ muliao.sessions.Module.sections ++ muliao.notifications.Module.sections ++ muliao.triggers.Module.sections).map(_.key).toSet
 
   /** 全部接口声明（导出接口描述用）。 */
-  private val contractEndpoints = AuthApi.all ++ ResourcesApi.all ++ ModelsApi.all ++ SessionsApi.all ++ NotificationsApi.all ++ BoardApi.all ++ HistoryApi.all ++ List(HttpServer.events, HttpServer.openApiEndpoint)
+  private val contractEndpoints = AuthApi.all ++ ResourcesApi.all ++ ModelsApi.all ++ SessionsApi.all ++ NotificationsApi.all ++ BoardApi.all ++ TriggersApi.all ++ HistoryApi.all ++ List(HttpServer.events, HttpServer.openApiEndpoint)
 
   def run: ZIO[ZIOAppArgs, Any, Any] =
     getArgs.flatMap {

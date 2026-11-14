@@ -31,8 +31,16 @@ type ThreadName = ThreadName.Type
 object IssueId extends LongId
 type IssueId = IssueId.Type
 
-object TriggerName extends StringId
+/** 触发器名：小写字母、数字和 `-`，至多 64 个字符；在没结束的触发器之间唯一。 */
+object TriggerName extends StringId:
+  private val Pattern = "^[a-z0-9-]{1,64}$".r
+  protected override def validate(a: String): Option[String] =
+    Option.unless(Pattern.matches(a))(s"触发器名只能用小写字母、数字和 -（1–64 个字符）：$a")
 type TriggerName = TriggerName.Type
+
+/** 触发器不变的编号（已结束的一次性触发器名字可以被重用，靠它区分）。 */
+object TriggerId extends LongId
+type TriggerId = TriggerId.Type
 
 /** 后台任务。 */
 object JobId extends LongId
