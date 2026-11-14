@@ -135,6 +135,24 @@ object McpSpec extends ZIOSpecDefault:
         c.problems.exists(p => p.contains("nocmd") && p.contains("/no/such/cmd"))
       )
     },
+    test("连不上的 server 当场收掉已起的进程，不等这次连接的 scope 结束") {
+      for
+        dir <- tempDir
+        // 起得来但关掉标准输出、不说协议：初始化等到超时（30 秒）失败
+        r <- ZIO.scoped {
+               for
+                 c    <- ZIO.serviceWithZIO[McpConnector](_.connectAll(
+                           Chunk(McpServerSpec("mute", McpTransport.Stdio("/bin/bash", Chunk("-c", "echo $$ > mute.pid; exec 1>&-; sleep 30"), Map.empty))),
+                           secrets,
+                           Launch(dir, Sandbox.Unrestricted)
+                         )).timeout(60.seconds)
+                 pid  <- ZIO.succeed(Files.readString(dir.resolve("mute.pid")).trim.toLong)
+                 _    <- ZIO.sleep(500.millis)
+                 live <- alive(pid)
+               yield (c, live)
+             }
+      yield assertTrue(r._1.exists(_.problems.size == 1), !r._2)
+    },
     test("stdio server 关在写沙箱里：只能写给定目录") {
       for
         dir     <- tempDir

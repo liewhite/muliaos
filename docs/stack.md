@@ -74,10 +74,18 @@
 - **迁移**：脚本放 `modules/<领域>/src/main/resources/db/<领域>/V<n>__<说明>.sql`，每个领域自己的版本记录表 `schema_history_<领域>`，版本号互不干扰；一个领域待执行的迁移在一个事务里，失败整体回滚；库里有程序不认识的迁移（库比程序新）拒绝启动。领域之间不建外键。
 - **错误**：领域失败归入 `AppError` 四类（`Domain`/`Unavailable`/`External`/`Internal`）；接口层 `AppError.toApi` 转统一错误体；工具层 `ToolFailure.fromAppError` 转「请重试 / 暂时不可用 / 中止」，挂起用 `ToolOutcome.Suspended`。
 - **重试**：外部调用 `.retryTransient()`（2 秒起翻倍、单次最长 5 分钟、累计 30 分钟放弃，遵守 Retry-After），只重试 `Unavailable`。
-- **出站 HTTP**：一律经 `OutboundHttp`（系统代理及其例外列表、统一 User-Agent、状态码与连接错误分类），不直接用 zio-http 客户端。
+- **出站 HTTP**：一律经 `OutboundHttp`（系统代理及其例外列表、统一 User-Agent、状态码与连接错误分类），不直接用 zio-http 客户端。`send`/`open` 只把 2xx 当成功；要按对方契约自己解读状态码（跟随跳转、区分错误体）用 `exchange`。
 - **接口**：在 contract 里基于 `Api.base`/`Api.secure` 声明，服务端用 `Endpoints.secured(auth)` / `.public` 接上逻辑，交给 `HttpServer.serve` 的 `domainEndpoints`。
 - **工具**：`Tool[Ctx, In](名字, 说明, Access, Scheduling, Display)((in, ctx) => ...)`，参数类型 `In` 派生 zio-schema，字段说明用 `@description`，敏感字段标 `@sensitive`。
-- **命令**：`Exec.run(spec, timeout)` / `Exec.start(spec)`；沙箱 `Sandbox.Confined(可写, 私有)` 只收 `RealPath`（`RealPath.resolve` 解析出的真实路径），可写范围由调用方按权限算好。
+- **命令**：`Exec.run(spec, timeout)` / `Exec.start(spec)`；走标准输入输出对话的（本地 MCP server）用 `Exec.attach(spec)`；沙箱 `Sandbox.Confined(可写, 私有)` 只收 `RealPath`（`RealPath.resolve` 解析出的真实路径），可写范围由调用方按权限算好。
+- **可选配置段**：配了才有的功能（网页工具、语音转写）用 `ConfigFile.optionalSection`，文件里没有这一段得到 `None`。
+
+## 模型接入与外部服务（models 模块）
+- **配置**：`[models]` 必填：`default_model = "<服务商>:<模型名>"`，`[models.providers.<名字>]` 写 `protocol`（`anthropic` / `openai-responses`）、`base_url`（Anthropic 不带 `/v1`，OpenAI 带）、`api_key`、`max_concurrency`（默认 4）、`max_output_tokens`（可选）；`idle_timeout_seconds`（默认 180）是回复流多久没数据算断。`[web]`（`api_key`、`base_url`）与 `[transcription]`（`api_key`、`model`、`base_url`、`max_bytes`、`vocabulary`、`language_hints`）可选。
+- **请求模型**：`Models.request(ModelRef, ModelRequest)` 得到 `ZStream[ReplyEvent]`，最后一个是 `Finished(reply)`；用 `ReplyBuilder` 折叠事件得到到目前为止的各段（被打断时保存已生成的部分）。不重试：`AppError.Unavailable` 由调用方退避重试整步。回复各段的 `Seal` 是协议要回传的数据，只在收完的段上有，回传时只发同协议的：被打断的、别家协议的思考自然不发回。
+- **图片**：发给模型前在 `Models.request` 里统一整理（长图切段、超限缩小、坏图换成说明、超过张数上限的较早图片换成说明），会话历史存原件。
+- **MCP**：`McpConnector.connectAll(servers, secrets, launch)` 在调用方的 scope 里连接，得到工具（`<server>_<工具名>`）与没连上的原因；`SecretLookup` 由资源领域按使用者权限实现，`Launch` 给出 stdio server 的工作目录与写沙箱。
+- **测试**：协议读流用真实服务商录下的响应（`modules/models/src/test/resources/fixtures/`，录制脚本 `record_fixtures.py` 在同一目录，密钥从本机配置读、不打印）。对真实服务商各跑一次：`sbt "models/Test/runMain muliao.models.LiveCheck <配置文件> claude:<模型>@high,openai:<模型> <录音> audio/mp4"`（两轮工具调用验证回传思考、模型列表、网页搜索与抓取、语音转写）。
 
 ## 资源、agent 与权限（resources，#866）
 - 资源目录的文件格式与布局与现有 `~/.muliao/assets` 兼容（agent 目录名就是 agent 名；`platform/access.toml` 里 `[agents.<编号>]`；secret 是 Fernet 密文，主密钥在配置 `[vault] key`）。SKILL.md 的 frontmatter 用 snakeyaml-engine 解析。

@@ -114,6 +114,18 @@ object ModelsSpec extends ZIOSpecDefault:
         for e <- decode(AnthropicWire, sse("""{"type":"content_block_delta","index":3,"delta":{"type":"text_delta","text":"x"}}""")).flip
         yield assertTrue(!e.isTransient, e.message.contains("不合协议"))
       },
+      test("空闲超时按两次数据之间算：持续有数据的长回复不超时，卡住的才超时") {
+        val whole  = fixture("anthropic-tool-call.sse")
+        val pieces = Chunk.fromIterable(whole.grouped(whole.size / 3 + 1).toList)
+        for
+          slow  <- Models.decode(AnthropicWire, ZStream.fromIterable(pieces).schedule(Schedule.spaced(40.seconds)).flattenChunks, 1.minute, "t").runCollect.fork
+          _     <- TestClock.adjust(5.minutes)
+          ok    <- slow.join
+          stuck <- Models.decode(AnthropicWire, ZStream.fromChunk(pieces.head) ++ ZStream.never, 1.minute, "t").runCollect.flip.fork
+          _     <- TestClock.adjust(61.seconds)
+          e     <- stuck.join
+        yield assertTrue(finished(ok).toolCalls.size == 1, e.isTransient, e.message.contains("没有动静"))
+      },
       test("SSE：多行 data、注释、CRLF") {
         val raw = Chunk.fromArray(": comment\r\nevent: a\r\ndata: 1\r\ndata: 2\r\n\r\ndata: x\n\n".getBytes("UTF-8"))
         for events <- ZStream.fromChunk(raw).rechunk(3).via(Sse.decode).runCollect

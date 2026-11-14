@@ -1,6 +1,6 @@
 package muliao.app
 
-import muliao.contract.{AuthApi, ResourcesApi}
+import muliao.contract.{AuthApi, ModelsApi, ResourcesApi}
 import muliao.platform.{AppError, GeneralSettings, InstanceLock}
 import muliao.platform.config.ConfigFile
 import muliao.platform.db.Database
@@ -37,17 +37,17 @@ object Main extends ZIOAppDefault:
 
   /** 配置文件里允许出现的段。各领域有了自己的配置段就加在这里。 */
   private val sections: Set[String] =
-    Set(
+    (List(
       GeneralSettings.section,
       LogSettings.section,
       HttpSettings.section,
       ServerSettings.section,
       muliao.resources.ResourcesSettings.section,
       muliao.resources.VaultSettings.section
-    ).map(_.key)
+    ) ++ muliao.models.Module.sections ++ muliao.models.Module.optionalSections).map(_.key).toSet
 
   /** 全部接口声明（导出接口描述用）。 */
-  private val contractEndpoints = AuthApi.all ++ ResourcesApi.all ++ List(HttpServer.events, HttpServer.openApiEndpoint)
+  private val contractEndpoints = AuthApi.all ++ ResourcesApi.all ++ ModelsApi.all ++ List(HttpServer.events, HttpServer.openApiEndpoint)
 
   def run: ZIO[ZIOAppArgs, Any, Any] =
     getArgs.flatMap {

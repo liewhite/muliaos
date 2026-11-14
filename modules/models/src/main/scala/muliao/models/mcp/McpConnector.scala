@@ -51,7 +51,7 @@ object McpConnector:
 
     def connectAll(servers: Chunk[McpServerSpec], secrets: SecretLookup, launch: Launch): ZIO[Scope, Nothing, Connected] =
       ZIO
-        .foreachPar(servers)(s => connect(s, secrets, launch).either.map(s -> _))
+        .foreachPar(servers)(s => isolated(connect(s, secrets, launch)).either.map(s -> _))
         .map { results =>
           val connected = results.collect { case (_, Right(tools)) => tools }.flatten
           // 两个 server 的工具前缀后撞名：都不要，免得调错
@@ -62,6 +62,13 @@ object McpConnector:
           Connected(tools, problems)
         }
         .tap(c => ZIO.foreachDiscard(c.problems)(p => ZIO.logWarning(p)))
+
+    /** 在调用方 scope 下的子 scope 里连：连不上时当场收掉已起的进程，连上了就随调用方的 scope 一起结束。 */
+    private def isolated[E, A](connecting: ZIO[Scope, E, A]): ZIO[Scope, E, A] =
+      for
+        child <- ZIO.serviceWithZIO[Scope](_.fork)
+        a     <- child.extend[Any](connecting).tapErrorCause(c => child.close(Exit.failCause(c)))
+      yield a
 
     def probe(server: McpServerSpec, secrets: SecretLookup, launch: Launch): IO[AppError, Chunk[String]] =
       ZIO.scoped(connect(server, secrets, launch).map(_.map(_.spec.name.stripPrefix(s"${server.name}_")))).mapError(AppError.invalid)
@@ -166,7 +173,7 @@ object McpConnector:
     private def result(r: McpSchema.CallToolResult, masker: Masker): IO[ToolFailure, ToolOutcome] =
       val blocks: Chunk[ToolContent] = Chunk.fromIterable(Option(r.content).map(_.asScala).getOrElse(Nil)).map {
         case c: McpSchema.TextContent  => ToolContent.Text(masker.mask(c.text))
-        case c: McpSchema.ImageContent => ToolContent.Image(c.mimeType, Chunk.fromArray(Base64.getDecoder.decode(c.data)))
+        case c: McpSchema.ImageContent => ToolContent.Image(Option(c.mimeType).getOrElse("image/png"), Chunk.fromArray(Base64.getDecoder.decode(c.data)))
         case c: McpSchema.AudioContent => ToolContent.Text(s"[音频内容（${c.mimeType}），无法展示]")
         case c: McpSchema.EmbeddedResource =>
           c.resource match
