@@ -1,0 +1,354 @@
+package muliao.sessions.store
+
+import io.getquill.*
+import muliao.contract.{AgentId, RunId, SessionId}
+import muliao.platform.db.*
+import muliao.platform.db.Sql.*
+import muliao.sessions.FileId
+
+// ---- 行 ----
+
+final case class SessionRow(
+    id: SessionId,
+    agentId: AgentId,
+    origin: String,
+    originRef: Option[String],
+    parentId: Option[SessionId],
+    title: String,
+    pendingReply: String,
+    createdAt: Long,
+    updatedAt: Long
+)
+
+final case class InboxRow(id: Long, sessionId: SessionId, letter: String, dedupeKey: Option[String], createdAt: Long)
+
+final case class RunRow(
+    id: RunId,
+    sessionId: SessionId,
+    state: String,
+    error: Option[String],
+    retryAt: Option[Long],
+    retryNote: Option[String],
+    startedAt: Long,
+    finishedAt: Option[Long]
+)
+
+final case class EntryRow(
+    id: Long,
+    sessionId: SessionId,
+    runId: Option[RunId],
+    kind: String,
+    body: String,
+    search: String,
+    startedAt: Long,
+    finishedAt: Long
+)
+
+final case class ToolCallRow(
+    entryId: Long,
+    callId: String,
+    sessionId: SessionId,
+    seq: Int,
+    name: String,
+    args: String,
+    state: String,
+    pause: Option[String],
+    result: Option[String],
+    startedAt: Option[Long],
+    finishedAt: Option[Long]
+)
+
+final case class WaitRow(
+    id: Long,
+    sessionId: SessionId,
+    kind: String,
+    ref: String,
+    label: String,
+    heartbeatSeconds: Option[Int],
+    dueAt: Option[Long],
+    createdAt: Long
+)
+
+final case class DelegationRow(
+    id: Long,
+    requesterId: SessionId,
+    threadId: SessionId,
+    mode: String,
+    callEntry: Option[Long],
+    callId: Option[String],
+    done: Boolean,
+    result: Option[String],
+    createdAt: Long
+)
+
+final case class UploadRow(id: FileId, sha256: String, name: String, mediaType: String, size: Long, createdAt: Long)
+
+final case class UsageRow(
+    id: Long,
+    at: Long,
+    agentId: AgentId,
+    sessionId: SessionId,
+    model: String,
+    input: Long,
+    output: Long,
+    cacheRead: Long,
+    cacheWrite: Long
+)
+
+/** 本领域全部表的读写。只做存取，不含规则。 */
+private[sessions] object Repo:
+  private inline def sessions    = quote(querySchema[SessionRow]("session"))
+  private inline def inbox       = quote(querySchema[InboxRow]("inbox"))
+  private inline def runs        = quote(querySchema[RunRow]("run"))
+  private inline def entries     = quote(querySchema[EntryRow]("entry"))
+  private inline def calls       = quote(querySchema[ToolCallRow]("tool_call"))
+  private inline def waits       = quote(querySchema[WaitRow]("wait"))
+  private inline def delegations = quote(querySchema[DelegationRow]("delegation"))
+  private inline def uploads     = quote(querySchema[UploadRow]("upload"))
+  private inline def usages      = quote(querySchema[UsageRow]("usage"))
+
+  // ---- 会话 ----
+
+  def session(id: SessionId): Read[Option[SessionRow]] =
+    Sql.run(sessions.filter(_.id == lift(id))).map(_.headOption).orInternal
+
+  def sessionsOf(ids: List[SessionId]): Read[List[SessionRow]] =
+    Sql.run(sessions.filter(s => liftQuery(ids).contains(s.id))).orInternal
+
+  def sessionsOfAgent(agent: AgentId): Read[List[SessionRow]] =
+    Sql.run(sessions.filter(_.agentId == lift(agent))).orInternal
+
+  def issueSession(agent: AgentId, ref: String): Read[Option[SessionRow]] =
+    Sql.run(sessions.filter(s => s.agentId == lift(agent) && s.origin == "issue" && s.originRef.exists(_ == lift(ref))))
+      .map(_.headOption)
+      .orInternal
+
+  def thread(parent: SessionId, agent: AgentId, name: String): Read[Option[SessionRow]] =
+    Sql.run(
+      sessions.filter(s => s.parentId.exists(_ == lift(parent)) && s.agentId == lift(agent) && s.origin == "thread" && s.originRef.exists(_ == lift(name)))
+    ).map(_.headOption).orInternal
+
+  def threadsOf(parent: SessionId): Read[List[SessionRow]] =
+    Sql.run(sessions.filter(s => s.parentId.exists(_ == lift(parent))).sortBy(_.createdAt)).orInternal
+
+  /** 会话列表：按最近活动倒序。`agent` 筛选，`text`（不分大小写的子串）搜来信、回复与工具调用参数。 */
+  def listSessions(agent: Option[AgentId], text: Option[String], before: Long, limit: Int): Read[List[SessionRow]] =
+    (agent, text) match
+      case (None, None) =>
+        Sql.run(sessions.filter(_.updatedAt < lift(before)).sortBy(_.updatedAt)(using Ord.desc).take(lift(limit))).orInternal
+      case (Some(a), None) =>
+        Sql.run(sessions.filter(s => s.updatedAt < lift(before) && s.agentId == lift(a)).sortBy(_.updatedAt)(using Ord.desc).take(lift(limit))).orInternal
+      case (None, Some(p)) =>
+        Sql.run(
+          sessions
+            .filter(s => s.updatedAt < lift(before) && entries.filter(e => e.sessionId == s.id && sql"instr(lower(${e.search}), lower(${lift(p)})) > 0".asCondition).nonEmpty)
+            .sortBy(_.updatedAt)(using Ord.desc)
+            .take(lift(limit))
+        ).orInternal
+      case (Some(a), Some(p)) =>
+        Sql.run(
+          sessions
+            .filter(s =>
+              s.updatedAt < lift(before) && s.agentId == lift(a) &&
+                entries.filter(e => e.sessionId == s.id && sql"instr(lower(${e.search}), lower(${lift(p)})) > 0".asCondition).nonEmpty
+            )
+            .sortBy(_.updatedAt)(using Ord.desc)
+            .take(lift(limit))
+        ).orInternal
+
+  /** 不空闲的会话（有进行中的运行、等待中的工作或排队的信）。 */
+  val busySessions: Read[List[SessionRow]] =
+    Sql.run(
+      sessions.filter(s =>
+        runs.filter(r => r.sessionId == s.id && (r.state == "running" || r.state == "suspended")).nonEmpty ||
+          waits.filter(_.sessionId == s.id).nonEmpty || inbox.filter(_.sessionId == s.id).nonEmpty
+      )
+    ).orInternal
+
+  def insertSession(r: SessionRow): Tx[Unit] = Sql.run(sessions.insertValue(lift(r))).unit.orInternal
+
+  def touch(id: SessionId, at: Long): Tx[Unit] =
+    Sql.run(sessions.filter(_.id == lift(id)).update(_.updatedAt -> lift(at))).unit.orInternal
+
+  def setPendingReply(id: SessionId, json: String): Tx[Unit] =
+    Sql.run(sessions.filter(_.id == lift(id)).update(_.pendingReply -> lift(json))).unit.orInternal
+
+  /** 发起会话删了：它开出的 thread 保留，脱离发起会话。 */
+  def orphanThreads(parent: SessionId): Tx[Unit] =
+    Sql.run(sessions.filter(_.parentId.exists(_ == lift(parent))).update(_.parentId -> None)).unit.orInternal
+
+  def deleteSession(id: SessionId): Tx[Unit] =
+    for
+      _ <- Sql.run(calls.filter(_.sessionId == lift(id)).delete).orInternal
+      _ <- Sql.run(entries.filter(_.sessionId == lift(id)).delete).orInternal
+      _ <- Sql.run(runs.filter(_.sessionId == lift(id)).delete).orInternal
+      _ <- Sql.run(inbox.filter(_.sessionId == lift(id)).delete).orInternal
+      _ <- Sql.run(waits.filter(_.sessionId == lift(id)).delete).orInternal
+      _ <- Sql.run(delegations.filter(d => d.threadId == lift(id) || d.requesterId == lift(id)).delete).orInternal
+      _ <- Sql.run(sessions.filter(_.id == lift(id)).delete).orInternal
+    yield ()
+
+  // ---- 排队的来信 ----
+
+  def queued(session: SessionId): Read[List[InboxRow]] =
+    Sql.run(inbox.filter(_.sessionId == lift(session)).sortBy(_.id)).orInternal
+
+  def queuedCounts(ids: List[SessionId]): Read[Map[SessionId, Long]] =
+    Sql.run(inbox.filter(i => liftQuery(ids).contains(i.sessionId)).groupByMap(_.sessionId)(i => (i.sessionId, count(i.id))))
+      .map(_.toMap)
+      .orInternal
+
+  /** 有排队来信的会话（启动时续跑）。 */
+  val sessionsWithMail: Read[List[SessionId]] = Sql.run(inbox.map(_.sessionId).distinct).orInternal
+
+  def hasQueuedKey(session: SessionId, key: String): Read[Boolean] =
+    Sql.run(inbox.filter(i => i.sessionId == lift(session) && i.dedupeKey.exists(_ == lift(key))).nonEmpty).orInternal
+
+  def enqueue(session: SessionId, letter: String, key: Option[String], at: Long): Tx[Long] =
+    Sql.run(inbox.insertValue(lift(InboxRow(0L, session, letter, key, at))).returningGenerated(_.id)).orInternal
+
+  def dequeue(ids: List[Long]): Tx[Unit] =
+    Sql.run(inbox.filter(i => liftQuery(ids).contains(i.id)).delete).unit.orInternal
+
+  def dropQueued(session: SessionId): Tx[Long] =
+    Sql.run(inbox.filter(_.sessionId == lift(session)).delete).orInternal
+
+  // ---- 运行 ----
+
+  def lastRun(session: SessionId): Read[Option[RunRow]] =
+    Sql.run(runs.filter(_.sessionId == lift(session)).sortBy(_.id)(using Ord.desc).take(1)).map(_.headOption).orInternal
+
+  def runsIn(states: List[String]): Read[List[RunRow]] =
+    Sql.run(runs.filter(r => liftQuery(states).contains(r.state))).orInternal
+
+  /** 这些会话里没结束的运行（运行中或挂起）。 */
+  def activeRuns(ids: List[SessionId]): Read[List[RunRow]] =
+    Sql.run(runs.filter(r => liftQuery(ids).contains(r.sessionId) && (r.state == "running" || r.state == "suspended"))).orInternal
+
+  def insertRun(session: SessionId, at: Long): Tx[RunId] =
+    Sql.run(runs.insertValue(lift(RunRow(RunId.wrap(1L), session, "running", None, None, None, at, None))).returningGenerated(_.id)).orInternal
+
+  def setRunState(id: RunId, state: String, error: Option[String], finishedAt: Option[Long]): Tx[Unit] =
+    Sql.run(
+      runs
+        .filter(_.id == lift(id))
+        .update(_.state -> lift(state), _.error -> lift(error), _.finishedAt -> lift(finishedAt), _.retryAt -> None, _.retryNote -> None)
+    ).unit.orInternal
+
+  def setRetry(id: RunId, at: Option[Long], note: Option[String]): Tx[Unit] =
+    Sql.run(runs.filter(_.id == lift(id)).update(_.retryAt -> lift(at), _.retryNote -> lift(note))).unit.orInternal
+
+  // ---- 时间线 ----
+
+  def insertEntry(r: EntryRow): Tx[Long] =
+    Sql.run(entries.insertValue(lift(r)).returningGenerated(_.id)).orInternal
+
+  def updateEntryBody(id: Long, body: String, search: String, finishedAt: Long): Tx[Unit] =
+    Sql.run(entries.filter(_.id == lift(id)).update(_.body -> lift(body), _.search -> lift(search), _.finishedAt -> lift(finishedAt))).unit.orInternal
+
+  def entriesOf(session: SessionId): Read[List[EntryRow]] =
+    Sql.run(entries.filter(_.sessionId == lift(session)).sortBy(_.id)).orInternal
+
+  def entriesFrom(session: SessionId, from: Long): Read[List[EntryRow]] =
+    Sql.run(entries.filter(e => e.sessionId == lift(session) && e.id >= lift(from)).sortBy(_.id)).orInternal
+
+  def entry(id: Long): Read[Option[EntryRow]] =
+    Sql.run(entries.filter(_.id == lift(id))).map(_.headOption).orInternal
+
+  /** 最近一条某种类的。 */
+  def lastEntry(session: SessionId, kind: String): Read[Option[EntryRow]] =
+    Sql.run(entries.filter(e => e.sessionId == lift(session) && e.kind == lift(kind)).sortBy(_.id)(using Ord.desc).take(1))
+      .map(_.headOption)
+      .orInternal
+
+  // ---- 工具调用 ----
+
+  def insertCalls(rs: List[ToolCallRow]): Tx[Unit] =
+    Sql.run(liftQuery(rs).foreach(r => calls.insertValue(r))).unit.orInternal
+
+  def callsOf(entryId: Long): Read[List[ToolCallRow]] =
+    Sql.run(calls.filter(_.entryId == lift(entryId)).sortBy(_.seq)).orInternal
+
+  def callsOfSession(session: SessionId): Read[List[ToolCallRow]] =
+    Sql.run(calls.filter(_.sessionId == lift(session))).orInternal
+
+  def call(entryId: Long, callId: String): Read[Option[ToolCallRow]] =
+    Sql.run(calls.filter(c => c.entryId == lift(entryId) && c.callId == lift(callId))).map(_.headOption).orInternal
+
+  def openCalls(session: SessionId): Read[List[ToolCallRow]] =
+    Sql.run(calls.filter(c => c.sessionId == lift(session) && c.state != "done").sortBy(c => (c.entryId, c.seq))).orInternal
+
+  def callsInState(state: String): Read[List[ToolCallRow]] =
+    Sql.run(calls.filter(_.state == lift(state))).orInternal
+
+  def setCall(entryId: Long, callId: String, state: String, pause: Option[String], result: Option[String], startedAt: Option[Long], finishedAt: Option[Long]): Tx[Unit] =
+    Sql.run(
+      calls
+        .filter(c => c.entryId == lift(entryId) && c.callId == lift(callId))
+        .update(_.state -> lift(state), _.pause -> lift(pause), _.result -> lift(result), _.startedAt -> lift(startedAt), _.finishedAt -> lift(finishedAt))
+    ).unit.orInternal
+
+  // ---- 等待 ----
+
+  def waitsOf(session: SessionId): Read[List[WaitRow]] =
+    Sql.run(waits.filter(_.sessionId == lift(session)).sortBy(_.id)).orInternal
+
+  def waitCounts(ids: List[SessionId]): Read[Map[SessionId, Long]] =
+    Sql.run(waits.filter(w => liftQuery(ids).contains(w.sessionId)).groupByMap(_.sessionId)(w => (w.sessionId, count(w.id))))
+      .map(_.toMap)
+      .orInternal
+
+  val allWaits: Read[List[WaitRow]] = Sql.run(waits).orInternal
+
+  def waitByRef(kind: String, ref: String): Read[Option[WaitRow]] =
+    Sql.run(waits.filter(w => w.kind == lift(kind) && w.ref == lift(ref))).map(_.headOption).orInternal
+
+  def waitById(id: Long): Read[Option[WaitRow]] =
+    Sql.run(waits.filter(_.id == lift(id))).map(_.headOption).orInternal
+
+  def insertWait(r: WaitRow): Tx[Long] =
+    Sql.run(waits.insertValue(lift(r)).returningGenerated(_.id)).orInternal
+
+  def deleteWait(id: Long): Tx[Long] =
+    Sql.run(waits.filter(_.id == lift(id)).delete).orInternal
+
+  // ---- 委派 ----
+
+  def insertDelegation(r: DelegationRow): Tx[Long] =
+    Sql.run(delegations.insertValue(lift(r)).returningGenerated(_.id)).orInternal
+
+  def delegation(id: Long): Read[Option[DelegationRow]] =
+    Sql.run(delegations.filter(_.id == lift(id))).map(_.headOption).orInternal
+
+  def openDelegationsTo(thread: SessionId): Read[List[DelegationRow]] =
+    Sql.run(delegations.filter(d => d.threadId == lift(thread) && !d.done)).orInternal
+
+  def openDelegationsFrom(requester: SessionId): Read[List[DelegationRow]] =
+    Sql.run(delegations.filter(d => d.requesterId == lift(requester) && !d.done)).orInternal
+
+  /** 交回结局；已交回过的不再改（返回 0）。 */
+  def finishDelegation(id: Long, result: String): Tx[Long] =
+    Sql.run(delegations.filter(d => d.id == lift(id) && !d.done).update(_.done -> true, _.result -> lift(Option(result)))).orInternal
+
+  def setDelegationCall(id: Long, entry: Long, call: String): Tx[Unit] =
+    Sql.run(delegations.filter(_.id == lift(id)).update(_.callEntry -> lift(Option(entry)), _.callId -> lift(Option(call)))).unit.orInternal
+
+  // ---- 附件 ----
+
+  def insertUpload(r: UploadRow): Tx[Unit] = Sql.run(uploads.insertValue(lift(r))).unit.orInternal
+
+  def upload(id: FileId): Read[Option[UploadRow]] =
+    Sql.run(uploads.filter(_.id == lift(id))).map(_.headOption).orInternal
+
+  def uploadsOf(ids: List[FileId]): Read[List[UploadRow]] =
+    Sql.run(uploads.filter(u => liftQuery(ids).contains(u.id))).orInternal
+
+  // ---- 用量 ----
+
+  def insertUsage(r: UsageRow): Tx[Unit] = Sql.run(usages.insertValue(lift(r)).returningGenerated(_.id)).unit.orInternal
+
+  def usageBetween(from: Long, to: Long): Read[List[UsageRow]] =
+    Sql.run(usages.filter(u => u.at >= lift(from) && u.at < lift(to))).orInternal
+
+  def usageOfSession(session: SessionId): Read[List[UsageRow]] =
+    Sql.run(usages.filter(_.sessionId == lift(session))).orInternal
