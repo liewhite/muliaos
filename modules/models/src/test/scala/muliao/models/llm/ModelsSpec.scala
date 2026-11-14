@@ -163,7 +163,7 @@ object ModelsSpec extends ZIOSpecDefault:
           !json.contains("别家的")
         )
       },
-      test("OpenAI：工具结果在前、回传推理与编号、别家思考不发、关思考不要加密推理") {
+      test("OpenAI：工具结果在前、回传推理与编号、别家思考不发、关思考不要加密推理、带缓存键") {
         val reasoning = ReplyPart.Thinking("摘要", Some(Seal(Protocol.OpenAiResponses, obj("id" -> s("rs_1"), "encrypted_content" -> s("enc")))))
         val foreign   = ReplyPart.Thinking("别家的", Some(Seal(Protocol.Anthropic, obj("signature" -> s("sig")))))
         val call      = ReplyPart.ToolCall("call_1", "get_weather", "{}", Some(Seal(Protocol.OpenAiResponses, obj("id" -> s("fc_1")))))
@@ -174,7 +174,8 @@ object ModelsSpec extends ZIOSpecDefault:
             Message.Assistant(Chunk(reasoning, foreign, call)),
             Message.User(Chunk(UserPart.Text("继续"), UserPart.ToolResult("call_1", Chunk(ToolContent.Text("晴")), isError = false)))
           ),
-          Thinking.Off
+          Thinking.Off,
+          cacheKey = Some("sess-1")
         )
         val body  = OpenAiResponsesWire.body("m", req, Some(100))
         val input = body.at("input").arr
@@ -185,6 +186,8 @@ object ModelsSpec extends ZIOSpecDefault:
           body.at("reasoning").at("effort").str.contains("none"),
           body.at("include") == Json.Null,
           body.at("max_output_tokens").long.contains(100L),
+          body.at("prompt_cache_key").str.contains("sess-1"),
+          OpenAiResponsesWire.body("m", req.copy(cacheKey = None), None).at("prompt_cache_key") == Json.Null,
           !body.toJson.contains("别家的")
         )
       }

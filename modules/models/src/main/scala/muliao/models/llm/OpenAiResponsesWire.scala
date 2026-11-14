@@ -47,6 +47,8 @@ object OpenAiResponsesWire extends Wire:
       "input"             -> Some(arr(input)),
       "tools"             -> Option.when(tools.nonEmpty)(arr(tools)),
       "max_output_tokens" -> maxTokens.map(m => n(m.toLong)),
+      // 没有它时连续两步常落到不同的缓存上，前缀不变也命中不了
+      "prompt_cache_key"  -> req.cacheKey.map(s),
       "reasoning"         -> Some(reasoning),
       "include"           -> Option.when(req.thinking != Thinking.Off)(arr(List(s("reasoning.encrypted_content"))))
     )

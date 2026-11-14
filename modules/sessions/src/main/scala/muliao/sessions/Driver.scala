@@ -164,7 +164,7 @@ private[sessions] trait DriverPart:
   /** 组装这一次请求：固定说明 + 工具 + 最近压缩点之后的时间线。 */
   def buildRequest(kit: Kit): IO[AppError, ModelRequest] =
     window(kit.info.id).map((summary, entries, calls, att) =>
-      ModelRequest(kit.system, kit.defs, ModelView.messages(summary, entries, calls, att), kit.thinking)
+      ModelRequest(kit.system, kit.defs, ModelView.messages(summary, entries, calls, att), kit.thinking, cacheKey = Some(kit.info.id.value))
     )
 
   /** 最近压缩点之后的时间线、其中的调用与用到的附件。 */

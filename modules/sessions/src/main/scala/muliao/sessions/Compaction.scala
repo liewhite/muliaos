@@ -33,7 +33,7 @@ private[sessions] trait CompactionPart:
         val cut     = replies(replies.size - keep)
         val ask     = Entry(Long.MaxValue, None, EntryBody.Context(Prompt.compactionRequest), 0L, 0L)
         val earlier = entries.filter(_.id < cut) :+ ask
-        val req     = ModelRequest(kit.system, kit.defs, ModelView.messages(summary, earlier, calls, att), kit.thinking)
+        val req     = ModelRequest(kit.system, kit.defs, ModelView.messages(summary, earlier, calls, att), kit.thinking, cacheKey = Some(id.value))
         for
           _     <- ZIO.logInfo(s"会话 ${id.value} 压缩上下文：总结第 $cut 条之前的部分")
           reply <- callModel(kit, run, req, None)

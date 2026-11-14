@@ -98,7 +98,9 @@ final case class ModelRequest(
     tools: Chunk[ToolDef],
     messages: Chunk[Message],
     thinking: Thinking = Thinking.Default,
-    maxTokens: Option[Int] = None
+    maxTokens: Option[Int] = None,
+    /** 前缀相同的一组请求的标识（如会话编号）：OpenAI Responses 据此把请求路由到同一份提示缓存；Anthropic 靠缓存断点，不用它 */
+    cacheKey: Option[String] = None
 )
 
 /** `<服务商>:<模型名>`，如 `claude:claude-opus-4`。 */
