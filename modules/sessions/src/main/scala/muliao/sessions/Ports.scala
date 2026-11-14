@@ -59,8 +59,18 @@ enum SessionEvent:
   /** 会话回到空闲（回答完）、最终失败或被停止。`toUser`：用户在等这个回答 */
   case Settled(session: SessionId, agent: AgentId, origin: Origin, outcome: Outcome, toUser: Boolean)
   /** 有调用在等用户（提问、等批准）；`toUser`：用户在等这个会话 */
-  case NeedsUser(session: SessionId, agent: AgentId, what: String, toUser: Boolean)
+  case NeedsUser(session: SessionId, agent: AgentId, need: UserNeed, toUser: Boolean)
   case Deleted(session: SessionId, agent: AgentId, origin: Origin)
+
+/** 挂起的调用要用户做什么。 */
+enum UserNeed:
+  case Answers(questions: Int)
+  case Approval(summary: String)
+
+  /** 给用户看的一句话。 */
+  def text: String = this match
+    case Answers(n)  => s"有 $n 个问题等你回答"
+    case Approval(s) => s"等你批准：$s"
 
 trait SessionListener:
   def on(event: SessionEvent): UIO[Unit]

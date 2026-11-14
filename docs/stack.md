@@ -103,3 +103,10 @@
 - **要用户批准的执行**：工具返回 `ToolOutcome.Suspended(Pause.Approval(执行者名, 给用户看的摘要, 数据))`，并 `SessionHooks.addApproval` 登记同名 `ApprovalHandler`：用户批准后由它接着执行（`always` 表示用户选了以后不再问）。
 - **事件**：`SessionHooks.addListener` 订阅 `SessionEvent`：`Settled`（回到空闲/最终失败/被停止，`toUser` 表示用户在等；最终失败无论谁在等都该通知用户）、`NeedsUser`（提问、等批准）、`Deleted`。未读由通知领域实现 `UnreadSource` 后 `setUnread` 接上。
 - **时间线**：`Sessions.timeline(id)` 给出界面与 `session_read` 共用的投影（`TimelineItem`，来信的 `source` 就是 USER/TRIGGER/ISSUE/DELEGATION/EVENT 标签）。
+
+## 通知与推送（notifications，#870）
+- **配置**：`[push]` 必填：`vapid_subject`（`mailto:` 或 `https://` 开头）；`vapid_key_file` 可选，默认数据目录下的 `vapid_private.pem`（PKCS#8 PEM，与现有文件同一格式，迁移时原样复制即可，已订阅的设备不用重订；没有就生成，权限 600；读不出来报错、不覆盖）。
+- **发通知**：`Notifications.notifyIn(Notice(标题, 正文, Target))` 在调用方的写事务里写（看板交给用户、触发器告警等与自己的改动同一事务提交），提交后才广播主题 `notifications` 并推送；`notify` 自己开事务。`Target`：`Session(id)`（点开去会话页、打开即已读、随会话删除）、`Page(前端路由)`（如请用户审核的 issue 页 `/issues/<号>`，Service Worker 据此加「通过/打回」）、`Inbox`（系统通知，点开看通知页）。
+- **组装**：`Notifications.layer`（要 `Database`、`ChangeBus`、`OutboundHttp`、`PushSettings`、`GeneralSettings`）；`SessionLink.attach` 在 `Sessions.start` 之前调用：登记 `notify_user` 工具（名字在 `SessionLink.toolNames`，汇进 `ToolCatalog`）、会话事件订阅（规则在纯函数 `SessionRules.wanted`）、会话未读；`NotificationsHttp.endpoints` 交给 HTTP 服务。
+- **推送载荷**（Service Worker 契约）：`{"title","body","url","badge"}`，`url` 没有时是 `/notifications`，`badge` 是发出那一刻的未读数；标题、正文按字截到 120 / 600。
+- **测试**：`CryptoSpec`（RFC 8291 例子逐字节、VAPID 签名验签、openssl 私钥互通）、`NotificationsSpec`（事务、逐设备重试与订阅清理、已读、会话事件、HTTP）。现有私钥的验收：`sbt "notifications/Test/runMain muliao.notifications.VapidKeyCheck <私钥文件>"`（先复制再读），公钥与 `openssl pkey -pubout` 对照。

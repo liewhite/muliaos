@@ -113,8 +113,9 @@ object TestEnv:
     def approved(payload: Json, always: Boolean, ctx: RunContext): IO[ToolFailure, ToolOutcome] =
       p.approvals.update(_ :+ always).as(ToolOutcome.text(s"批准后执行了，always=$always"))
 
-  val toolCatalog: ToolCatalog = ToolCatalog.fixed(
-    (List("echo", "keep_secret", "block", "approve_me") ++ Sessions.toolNames).map(ToolInfo(_, Access.Write))
+  /** `more`：下游领域测试时一并登记的工具名。 */
+  def toolCatalog(more: List[String] = Nil): ToolCatalog = ToolCatalog.fixed(
+    (List("echo", "keep_secret", "block", "approve_me") ++ Sessions.toolNames ++ more).map(ToolInfo(_, Access.Write))
   )
 
   val modelCheck: ModelCheck = new ModelCheck:
@@ -124,16 +125,23 @@ object TestEnv:
   type Env = Sessions & SessionHooks & Agents & Database & AgentHooks & ChangeBus & Files
 
   /** 在 `d` 上起一套环境（同一个 `d` 起第二套就是模拟重启）。 */
-  def layer(d: Dirs, models: FakeModels, settings: SessionSettings = SessionSettings()): ZLayer[Any, AppError, Env] =
+  /** `more` / `moreTools`：下游领域测试时一并执行的迁移、一并登记的工具名。 */
+  def layer(
+      d: Dirs,
+      models: FakeModels,
+      settings: SessionSettings = SessionSettings(),
+      more: List[muliao.platform.db.Migrations] = Nil,
+      moreTools: List[String] = Nil
+  ): ZLayer[Any, AppError, Env] =
     val paths = ResourcePaths(d.assets, d.workspaces, d.data.resolve("resources"), Nil)
     ZLayer.make[Env](
       ZLayer.succeed(paths),
-      Database.layer(Database.Settings(d.data.resolve("t.db")), List(muliao.resources.Module.migrations, muliao.sessions.Module.migrations)),
+      Database.layer(Database.Settings(d.data.resolve("t.db")), List(muliao.resources.Module.migrations, muliao.sessions.Module.migrations) ++ more),
       ChangeBus.layer,
       AssetStore.layer(AssetStore.Settings(paths.assets, paths.lastGoodAccess, 100.millis)),
       ZLayer.succeed(ResourcesSettings(writableDirs = Nil)),
       ZLayer.succeed(VaultSettings(vaultKey)),
-      ZLayer.succeed(toolCatalog),
+      ZLayer.succeed(toolCatalog(moreTools)),
       ZLayer.succeed(modelCheck),
       AgentHooks.layer,
       AccessEditor.layer,

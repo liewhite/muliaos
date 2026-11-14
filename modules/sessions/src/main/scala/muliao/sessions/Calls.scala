@@ -144,8 +144,8 @@ private[sessions] trait CallsPart:
         ) *> info(i.id).map(_.userWaiting).flatMap { waiting =>
           p match
             case Pause.AskUser(qs) =>
-              hooks.emit(SessionEvent.NeedsUser(i.id, i.agent, s"有 ${qs.size} 个问题等你回答", waiting))
+              hooks.emit(SessionEvent.NeedsUser(i.id, i.agent, UserNeed.Answers(qs.size), waiting))
             case Pause.Approval(_, summary, _) =>
-              hooks.emit(SessionEvent.NeedsUser(i.id, i.agent, s"等你批准：$summary", waiting))
+              hooks.emit(SessionEvent.NeedsUser(i.id, i.agent, UserNeed.Approval(summary), waiting))
             case _: Pause.AwaitThread => ZIO.unit
         }
