@@ -25,7 +25,9 @@ trait AssetStore:
   /** 生效的权限规则。 */
   def access: IO[AppError, AccessState]
 
-  /** 原子地写一个资源文件（先写同目录的隐藏临时文件再改名），自动建父目录。不做内容校验：校验见 [[muliao.resources.guard.AssetGuard]]。 */
+  /** 原子地写一个资源文件（先写同目录的隐藏临时文件再改名），自动建父目录；覆盖已有文件时沿用原文件的权限位，新文件 `privateFile` 时只有主人可读写。
+    * 不做内容校验：校验见 [[muliao.resources.guard.AssetGuard]]。
+    */
   def write(path: Path, content: String, privateFile: Boolean = false): IO[AppError, Unit]
 
   /** 删除文件或整个目录（不存在不算错）。 */
@@ -117,7 +119,9 @@ object AssetStore:
         Files.createDirectories(path.getParent)
         val tmp = Files.createTempFile(path.getParent, s".${path.getFileName}.", ".tmp")
         try
-          if privateFile then Files.setPosixFilePermissions(tmp, PosixFilePermissions.fromString("rw-------")): Unit
+          // 覆盖已有文件时沿用它的权限（skill 脚本的可执行位不能因为改了内容就丢掉）
+          if Files.exists(path) then Files.setPosixFilePermissions(tmp, Files.getPosixFilePermissions(path)): Unit
+          else if privateFile then Files.setPosixFilePermissions(tmp, PosixFilePermissions.fromString("rw-------")): Unit
           Files.writeString(tmp, content)
           Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE): Unit
         finally Files.deleteIfExists(tmp): Unit

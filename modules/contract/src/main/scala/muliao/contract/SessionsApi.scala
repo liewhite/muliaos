@@ -59,7 +59,7 @@ final case class PendingView(
 ) derives JsonCodec, Schema
 
 /** 一次工具调用。
-  * @param display 结果怎么展示：Plain / Terminal / Code / Diff / JsonData / Markdown
+  * @param display 结果怎么展示：Plain / Terminal / Code / Diff / JsonData / Markdown / SharedFile（结果是 FileView 的 JSON）
   * @param state   pending / running / suspended / approved / approved-always / done
   */
 final case class CallView(

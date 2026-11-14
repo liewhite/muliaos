@@ -130,7 +130,7 @@ lazy val models    = domain("models", exec)                      // 模型接入
     )
   )
 lazy val sessions  = domain("sessions", resources, models)       // 会话与运行
-lazy val workspace = domain("workspace", sessions, exec)         // 文件、命令、后台任务、页面
+lazy val workspace = domain("workspace", sessions % "compile->compile;test->test", exec)         // 文件、命令、后台任务、页面
 lazy val notifications = domain("notifications", sessions % "compile->compile;test->test")                 // 通知与推送
 lazy val board     = domain("board", sessions, notifications)           // issue 看板
 lazy val triggers  = domain("triggers", sessions, workspace, notifications) // 触发器

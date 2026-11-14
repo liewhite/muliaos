@@ -30,6 +30,8 @@ enum Display:
   case JsonData
   /** Markdown 文本 */
   case Markdown
+  /** 发给用户的文件：结果是附件的 JSON（id、name、mediaType、size），界面显示成附件 */
+  case SharedFile
 
 /** 标在参数字段上：值是敏感的（如 secret），保存与展示调用参数时打码。 */
 final class sensitive extends StaticAnnotation
