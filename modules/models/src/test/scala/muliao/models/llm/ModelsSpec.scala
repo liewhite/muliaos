@@ -275,6 +275,9 @@ object ModelsSpec extends ZIOSpecDefault:
           after  <- started.get
           reqs   <- seen.get
         yield assertTrue(
+          models.problem("p:any").isEmpty,
+          models.problem("q:any").exists(_.contains("没有配置服务商 q")),
+          models.problem("nocolon").exists(_.contains("<服务商>:<模型名>")),
           before == 1,
           after == 2,
           finished(r1).toolCalls.size == 1,

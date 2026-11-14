@@ -19,7 +19,7 @@ object ModelsHttpSpec extends ZIOSpecDefault:
   val models: Models = new Models:
     val defaultModel                                   = ModelRef("claude", "opus")
     val providers                                      = Chunk("claude", "openai")
-    def check(model: ModelRef)                         = ZIO.unit
+    def problem(model: String)                         = None
     def request(model: ModelRef, req: ModelRequest)    = ZStream.empty: ZStream[Any, AppError, ReplyEvent]
     def listModels(provider: String)                   =
       if provider == "claude" then ZIO.succeed(Chunk("opus", "sonnet")) else ZIO.fail(AppError.invalid(s"没有配置服务商 $provider"))

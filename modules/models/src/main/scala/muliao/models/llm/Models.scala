@@ -58,8 +58,10 @@ trait Models:
   /** 配置了的服务商名。 */
   def providers: Chunk[String]
 
-  /** 这个模型的服务商是否配置了（建 agent、改模型时校验）。 */
-  def check(model: ModelRef): IO[AppError, Unit]
+  /** 模型写法（`<服务商>:<模型名>`）能不能用：不能用时给出原因（写法不对、服务商没配置）。建 agent、改模型时校验，
+    * 组装时包成资源领域的 `ModelCheck`。
+    */
+  def problem(model: String): Option[String]
 
   /** 请求一次。占用服务商的一个并发名额直到流结束；最后一个事件是 [[ReplyEvent.Finished]]。图片在这里按服务商限制整理。 */
   def request(model: ModelRef, req: ModelRequest): ZStream[Any, AppError, ReplyEvent]
@@ -86,7 +88,11 @@ object Models:
     private def provider(name: String): IO[AppError, ProviderSettings] =
       ZIO.fromOption(settings.providers.get(name)).orElseFail(AppError.invalid(s"没有配置服务商 $name（已配置：${providers.mkString("、")}）"))
 
-    def check(model: ModelRef): IO[AppError, Unit] = provider(model.provider).unit
+    def problem(model: String): Option[String] =
+      ModelRef.parse(model).left.toOption.orElse {
+        val p = model.takeWhile(_ != ':')
+        Option.unless(settings.providers.contains(p))(s"没有配置服务商 $p（已配置：${providers.mkString("、")}）")
+      }
 
     private def base(p: ProviderSettings) = p.baseUrl.stripSuffix("/")
 
