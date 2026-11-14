@@ -100,8 +100,11 @@ final class TranscriptView:
     val display = Display.of(c.display)
     val result  = c.result
     def rendered: Modifier[HtmlElement] = display match
-      case Display.Terminal =>
+      case Display.Terminal if argString(c.args, "command").isDefined =>
         terminal(argString(c.args, "command"), result.map(_.text), result.exists(_.isError))
+      case Display.Terminal =>
+        // 没有命令参数的（skill 脚本）：参数按字段，输出进终端框
+        Seq(argFields(c.args), result.map(r => terminal(None, Some(r.text), r.isError)))
       case Display.Code =>
         Seq(titled(argString(c.args, "path")), result.map(r => pre(cls := Ui.CodeBlock, r.text)))
       case Display.Diff =>
