@@ -31,6 +31,7 @@ val V = new {
   val flyway     = "13.12.2"
   val tomlj      = "2.2.0"
   val laminar    = "18.0.0-M5"
+  val snakeyaml  = "3.2"
 }
 
 lazy val commonJvm = Seq(
@@ -109,7 +110,8 @@ def domain(name: String, deps: ClasspathDep[ProjectReference]*): Project =
     .dependsOn((Seq[ClasspathDep[ProjectReference]](platform, toolkit) ++ deps)*)
     .settings(commonJvm)
 
-lazy val resources = domain("resources")                         // 资源、agent 与权限
+lazy val resources = domain("resources", exec)                   // 资源、agent 与权限（exec：可写范围算成写沙箱）
+  .settings(libraryDependencies += "org.snakeyaml" % "snakeyaml-engine" % V.snakeyaml)
 lazy val models    = domain("models", exec)                      // 模型接入、MCP、外部服务
 lazy val sessions  = domain("sessions", resources, models)       // 会话与运行
 lazy val workspace = domain("workspace", sessions, exec)         // 文件、命令、后台任务、页面

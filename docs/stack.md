@@ -40,7 +40,7 @@
 第 0 层  contract
 第 1 层  platform                    web（前端，只依赖 contract）
 第 2 层  toolkit   exec
-第 3 层  resources   models
+第 3 层  resources   models          （两者都依赖 exec）
 第 4 层  sessions
 第 5 层  workspace   notifications
 第 6 层  board   triggers
@@ -53,7 +53,7 @@
 | platform | 配置、数据库与迁移、错误模型、日志、出站 HTTP 与系统代理、退避重试、「数据变了」总线、HTTP 服务骨架（登录、SSE、OpenAPI、静态前端）、单实例锁；不含领域词汇 | contract |
 | toolkit | 给 agent 的工具的共同契约：`Tool`、`ToolSpec`、参数 schema 生成、失败分类 | platform |
 | exec | 以某身份起命令：进程组、写沙箱、secret 注入与打码、限时读完输出 | platform |
-| resources | 资源、agent 与权限 | — |
+| resources | 资源、agent 与权限 | exec（可写范围直接算成写沙箱 `Sandbox.Confined`） |
 | models | 模型接入、MCP、外部服务 | exec |
 | sessions | 会话与运行 | resources、models |
 | workspace | 文件、命令、后台任务、skill 脚本、页面 | sessions、exec |
@@ -78,3 +78,11 @@
 - **接口**：在 contract 里基于 `Api.base`/`Api.secure` 声明，服务端用 `Endpoints.secured(auth)` / `.public` 接上逻辑，交给 `HttpServer.serve` 的 `domainEndpoints`。
 - **工具**：`Tool[Ctx, In](名字, 说明, Access, Scheduling, Display)((in, ctx) => ...)`，参数类型 `In` 派生 zio-schema，字段说明用 `@description`，敏感字段标 `@sensitive`。
 - **命令**：`Exec.run(spec, timeout)` / `Exec.start(spec)`；沙箱 `Sandbox.Confined(可写, 私有)` 只收 `RealPath`（`RealPath.resolve` 解析出的真实路径），可写范围由调用方按权限算好。
+
+## 资源、agent 与权限（resources，#866）
+- 资源目录的文件格式与布局与现有 `~/.muliao/assets` 兼容（agent 目录名就是 agent 名；`platform/access.toml` 里 `[agents.<编号>]`；secret 是 Fernet 密文，主密钥在配置 `[vault] key`）。SKILL.md 的 frontmatter 用 snakeyaml-engine 解析。
+- agent 的身份（编号、名字、归档、默认、改名/删除进度）在库里（表 `agent`），可编辑配置在 `agent.toml`。改名先记库再挪目录，删除先标「正在删」再清理；两者中途重启由 `Agents.resumePending` 接着做（组装入口起动时调用）。
+- 资源目录每 2 秒按指纹（路径、大小、纳秒修改时间、inode）轮询，变了才重新解析并广播主题 `assets`；平台自己写文件后立即刷新。
+- access.toml 写坏时沿用上一份有效的（副本在数据目录 `resources/access.last-good.toml`，重启后仍有效），平台经 `AccessEditor` 改它会被拒绝直到修好；平台写回 access.toml 时按固定格式重排（角色、agent 按名字排序，`[agents.<编号>] # 名字`），手写的注释不保留。
+- 组装时要提供：`ModelCheck`（模型领域：默认模型、模型写法能不能跑）、`ToolCatalog`（全部内置工具的名字与类别，从各工具的 `spec` 汇总）、`ResourcePaths.privatePaths`（配置文件、备份、推送私钥）、各领域的 `AgentHook`（忙碌判断与删除清理，登记到 `AgentHooks`）。
+- 验收脚本：`sbt "resources/Test/runMain muliao.resources.RealAssetsCheck <资源目录副本> <agent TSV> <主密钥文件>"`，只读副本，不打印 secret 值。
