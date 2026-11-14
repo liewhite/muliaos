@@ -31,6 +31,11 @@ trait OutboundHttp:
   /** 发请求，响应体按流读（模型流式输出等）。只有 2xx 算成功；响应体在 scope 结束时释放。 */
   def open(req: Request): ZIO[Scope, AppError, Response]
 
+  /** 发请求，任何状态码都交回（调用方按对方的契约自己解读状态码与错误体，如跟随重定向、区分「目标抓不到」）；只有连接层面的
+    * 失败算暂时不可用。响应体按流读，在 scope 结束时释放。
+    */
+  def exchange(req: Request): ZIO[Scope, AppError, Response]
+
 object OutboundHttp:
 
   def send(req: Request): ZIO[OutboundHttp, AppError, Response] = ZIO.serviceWithZIO(_.send(req))
@@ -82,10 +87,11 @@ object OutboundHttp:
     private def transport(req: Request)(e: Throwable): AppError =
       AppError.Unavailable(s"连不上 ${req.url.host.getOrElse("?")}：${Option(e.getMessage).getOrElse(e.getClass.getSimpleName)}", Some(e))
 
+    def exchange(req: Request): ZIO[Scope, AppError, Response] =
+      prepare(req).flatMap((c, r) => c(r).mapError(transport(r)))
+
     def open(req: Request): ZIO[Scope, AppError, Response] =
-      prepare(req).flatMap { (c, r) =>
-        c(r).mapError(transport(r)).flatMap(classify)
-      }
+      exchange(req).flatMap(classify)
 
     def send(req: Request): IO[AppError, Response] =
       ZIO

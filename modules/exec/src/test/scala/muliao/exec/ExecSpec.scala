@@ -147,5 +147,22 @@ object ExecSpec extends ZIOSpecDefault:
         _   <- ZIO.sleep(100.millis)
         live <- alive(pid)
       yield assertTrue(!live)
+    } @@ withLiveClock,
+    test("对话式命令：按行收发，标准错误打码，scope 结束整组结束") {
+      val secrets = Chunk(SecretEnv("TOKEN", "s3cr3t-value"))
+      for
+        dir <- tempDir
+        out <- ZIO.scoped {
+                 for
+                   c     <- Exec.attach(shell("""echo "err $TOKEN" >&2; while read l; do echo "got:$l"; done""", dir, secrets = secrets))
+                   _     <- c.send("one") *> c.send("两")
+                   lines <- c.stdout.take(2).runCollect
+                   err   <- c.stderr.take(1).runCollect
+                 yield (c.pid, lines, err)
+               }
+        (pid, lines, err) = out
+        _    <- ZIO.sleep(100.millis)
+        live <- alive(pid)
+      yield assertTrue(lines == Chunk("got:one", "got:两"), err == Chunk("err [secret:TOKEN]"), !live)
     } @@ withLiveClock
   ) @@ timeout(60.seconds)

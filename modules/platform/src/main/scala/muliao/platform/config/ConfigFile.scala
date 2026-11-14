@@ -29,6 +29,10 @@ final class ConfigFile private (val path: Path, tables: Map[String, Json.Obj]):
         else ZIO.fail(AppError.invalid(s"配置文件 $path 有未知的键：${unknown.mkString("、")}"))
       }
 
+  /** 可选的段（配了才有的功能，如网页工具、语音转写）：文件里没有这一段时为 `None`，有就按 [[section]] 解码与校验。 */
+  def optionalSection[A](s: ConfigSection[A]): IO[AppError, Option[A]] =
+    if tables.contains(s.key) then section(s).map(Some(_)) else ZIO.none
+
 object ConfigFile:
 
   /** 解析 TOML。`sections` 是全部已声明的顶层段名，出现别的顶层键即报错。 */

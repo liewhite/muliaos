@@ -32,6 +32,12 @@ val V = new {
   val tomlj      = "2.2.0"
   val laminar    = "18.0.0-M5"
   val snakeyaml  = "3.2"
+  val mcp        = "2.2.0"
+  val twelvemonkeys = "3.15.3"
+  val metadataExtractor = "2.22.0"
+  val jsoup      = "1.24.1"
+  val readability4j = "1.0.8"
+  val flexmark   = "0.64.8"
 }
 
 lazy val commonJvm = Seq(
@@ -113,6 +119,16 @@ def domain(name: String, deps: ClasspathDep[ProjectReference]*): Project =
 lazy val resources = domain("resources", exec)                   // 资源、agent 与权限（exec：可写范围算成写沙箱）
   .settings(libraryDependencies += "org.snakeyaml" % "snakeyaml-engine" % V.snakeyaml)
 lazy val models    = domain("models", exec)                      // 模型接入、MCP、外部服务
+  .settings(
+    libraryDependencies ++= Seq(
+      "io.modelcontextprotocol.sdk" % "mcp"                          % V.mcp,               // MCP 客户端（官方 SDK）
+      "com.twelvemonkeys.imageio"   % "imageio-webp"                 % V.twelvemonkeys,     // 读 WebP
+      "com.drewnoakes"              % "metadata-extractor"           % V.metadataExtractor, // 照片 EXIF 方向
+      "org.jsoup"                   % "jsoup"                        % V.jsoup,             // 直连抓取：解析 HTML
+      "net.dankito.readability4j"   % "readability4j"                % V.readability4j,     // 直连抓取：提取正文
+      "com.vladsch.flexmark"        % "flexmark-html2md-converter"   % V.flexmark           // 直连抓取：正文转 Markdown
+    )
+  )
 lazy val sessions  = domain("sessions", resources, models)       // 会话与运行
 lazy val workspace = domain("workspace", sessions, exec)         // 文件、命令、后台任务、页面
 lazy val notifications = domain("notifications", sessions)                 // 通知与推送

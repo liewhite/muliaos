@@ -44,6 +44,27 @@ trait RunningCommand:
 /** 前台执行的结果。 */
 final case class Finished(exitCode: Int, output: String, timedOut: Boolean)
 
+/** 走标准输入输出对话的命令（如本地 MCP server）：标准输出是协议数据，按行原样交出；标准错误是给人看的日志，已打码。 */
+trait AttachedCommand:
+  def pid: Long
+
+  /** 写一行到标准输入（自动加换行并立即刷出）。进程已退出或关了输入时失败（暂时不可用）。 */
+  def send(line: String): IO[AppError, Unit]
+
+  /** 关闭标准输入（许多程序以此为退出信号）。 */
+  def closeInput: UIO[Unit]
+
+  /** 标准输出的行（未打码）。只能读一次。 */
+  def stdout: ZStream[Any, Nothing, String]
+
+  /** 标准错误的行（已打码）。只能读一次。 */
+  def stderr: ZStream[Any, Nothing, String]
+
+  def exitCode: UIO[Int]
+
+  /** 结束整个进程组：先 TERM，等一会儿还在就 KILL。 */
+  def kill: UIO[Unit]
+
 object Exec:
   /** 主进程退出后最多再等多久读完输出。 */
   val DrainGrace: Duration = 2.seconds
@@ -66,18 +87,11 @@ object Exec:
   /** 起命令；scope 结束时主进程还没退出就结束整组。 */
   def start(spec: CommandSpec): ZIO[Scope, AppError, RunningCommand] =
     val masker = Masker(spec.secrets)
-    val all    = argv(spec)
     for
-      process <- Command(all.head, all.tail*)
-                   .workingDirectory(spec.cwd.toFile)
-                   .env(spec.env ++ spec.secrets.map(s => s.name -> s.value))
-                   .redirectErrorStream(true)
-                   .stdin(ProcessInput.fromUTF8String(""))
-                   .run
-                   .mapError(e => AppError.internal(s"起命令失败：${e.getMessage}", e))
-      pid    <- process.pid.orElseSucceed(-1L)
-      exit   <- process.exitCode.map(_.code).orElseSucceed(-1).forkDaemon
-      queue  <- Queue.bounded[Take[Nothing, String]](256)
+      process <- launch(spec, mergeStderr = true, ProcessInput.fromUTF8String(""))
+      pid     <- process.pid.orElseSucceed(-1L)
+      exit    <- process.exitCode.map(_.code).orElseSucceed(-1).forkDaemon
+      queue   <- Queue.bounded[Take[Nothing, String]](256)
       reader <- process.stdout.stream
                   .via(ZPipeline.utf8Decode)
                   .orElse(ZStream.empty)
@@ -93,6 +107,27 @@ object Exec:
       running = Live(pid, queue, exit)
       _ <- ZIO.addFinalizer(exit.poll.flatMap(done => ZIO.when(done.isEmpty)(running.kill)))
     yield running
+
+  /** 起一条走标准输入输出对话的命令（同样自成进程组、进写沙箱、注入 secret）；scope 结束时关输入并结束整组。 */
+  def attach(spec: CommandSpec): ZIO[Scope, AppError, AttachedCommand] =
+    for
+      process <- launch(spec, mergeStderr = false, ProcessInput.Pipe)
+      pid     <- process.pid.orElseSucceed(-1L)
+      exit    <- process.exitCode.map(_.code).orElseSucceed(-1).forkDaemon
+      lock    <- Semaphore.make(1)
+      attached = Attached(pid, process, exit, lock, Masker(spec.secrets))
+      _       <- ZIO.addFinalizer(attached.closeInput *> exit.poll.flatMap(done => ZIO.when(done.isEmpty)(attached.kill)))
+    yield attached
+
+  private def launch(spec: CommandSpec, mergeStderr: Boolean, stdin: ProcessInput): IO[AppError, zio.process.Process] =
+    val all = argv(spec)
+    Command(all.head, all.tail*)
+      .workingDirectory(spec.cwd.toFile)
+      .env(spec.env ++ spec.secrets.map(s => s.name -> s.value))
+      .redirectErrorStream(mergeStderr)
+      .stdin(stdin)
+      .run
+      .mapError(e => AppError.internal(s"起命令失败：${e.getMessage}", e))
 
   /** 前台执行到结束或超时（超时结束整组），收齐输出。 */
   def run(spec: CommandSpec, timeout: Duration): IO[AppError, Finished] =
@@ -111,18 +146,43 @@ object Exec:
       extends RunningCommand:
     val output: ZStream[Any, Nothing, String] = ZStream.fromQueue(queue).flattenTake
     def exitCode: UIO[Int]                    = exit.join
+    def kill: UIO[Unit]                       = killGroup(pid, exit)
 
-    def kill: UIO[Unit] =
-      signal("TERM") *> exit.join.timeout(KillGrace).flatMap {
-        case Some(_) => signal("KILL") // 主进程走了，组里可能还有别的
-        case None    => signal("KILL") *> exit.join.unit
+  private final case class Attached(
+      pid: Long,
+      process: zio.process.Process,
+      exit: Fiber[Nothing, Int],
+      lock: Semaphore,
+      masker: Masker
+  ) extends AttachedCommand:
+    private val input = process.getOutputStream
+
+    def send(line: String): IO[AppError, Unit] =
+      lock
+        .withPermit(ZIO.attemptBlocking {
+          input.write((line + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8))
+          input.flush()
+        })
+        .mapError(e => AppError.Unavailable(s"写不进命令的标准输入：${e.getMessage}", Some(e)))
+
+    def closeInput: UIO[Unit] = lock.withPermit(ZIO.attemptBlocking(input.close()).ignore)
+
+    def stdout: ZStream[Any, Nothing, String] = process.stdout.linesStream.orElse(ZStream.empty)
+    def stderr: ZStream[Any, Nothing, String] = process.stderr.linesStream.orElse(ZStream.empty).map(masker.mask)
+    def exitCode: UIO[Int]                    = exit.join
+    def kill: UIO[Unit]                       = killGroup(pid, exit)
+
+  private def killGroup(pid: Long, exit: Fiber[Nothing, Int]): UIO[Unit] =
+    signal(pid, "TERM") *> exit.join.timeout(KillGrace).flatMap {
+      case Some(_) => signal(pid, "KILL") // 主进程走了，组里可能还有别的
+      case None    => signal(pid, "KILL") *> exit.join.unit
+    }
+
+  // 先按进程组发；组还没建好（极早期）就发给进程本身
+  private def signal(pid: Long, sig: String): UIO[Unit] =
+    ZIO
+      .attemptBlocking {
+        val group = ProcessBuilder("/bin/kill", s"-$sig", "--", s"-$pid").start().waitFor()
+        if group != 0 then ProcessBuilder("/bin/kill", s"-$sig", pid.toString).start().waitFor(): Unit
       }
-
-    // 先按进程组发；组还没建好（极早期）就发给进程本身
-    private def signal(sig: String): UIO[Unit] =
-      ZIO
-        .attemptBlocking {
-          val group = ProcessBuilder("/bin/kill", s"-$sig", "--", s"-$pid").start().waitFor()
-          if group != 0 then ProcessBuilder("/bin/kill", s"-$sig", pid.toString).start().waitFor(): Unit
-        }
-        .ignore
+      .ignore
