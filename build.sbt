@@ -144,6 +144,7 @@ lazy val domains = Seq(resources, models, sessions, workspace, notifications, bo
 lazy val app = project
   .in(file("modules/app"))
   .dependsOn(domains.map(p => p: ClasspathDep[ProjectReference])*)
+  .dependsOn(sessions % "test->test") // 集成测试用假模型
   .settings(commonJvm)
   .settings(
     Compile / mainClass := Some("muliao.app.Main"),

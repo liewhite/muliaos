@@ -140,3 +140,11 @@
 - **数据**（表 `trigger_def`、`trigger_fault`）：`kind` + `config`（`TriggerConfig` 的 JSON，键名驼峰：`cron`、`at`、`command`、`secrets`、`debounceSeconds`）、`precheck`（`PrecheckSpec` 的 JSON：`command`、`fireWhen`、`secrets`），读出时一次解析成 `Mode` / `Precheck`，读不懂报内部错误（不自动停用）。`next_at` 为空的启用中的定时、一次性，扫描时按「现在」补上（迁移可以不填）；已结束的一次性 `finished_at` 非空，名字只在没结束的之间唯一。迁移进来的一律 `enabled = 0`（#864 红线）。
 - **触发只有一个出口** `Core.fire`：agent 能不能接活（归档：定时跳过、一次性推送用户没做、流式事件丢弃）→ 防重叠（正在跑前置检查的靠内存集合；上次开的会话不空闲就跳过，定时计入 `skipped`，挡路会话在等待时通知用户一次）→ 前置检查（`bash` 开 pipefail，事件行从标准输入喂入）→ 在一个事务里经 `Sessions.deliverIn` 开会话并记下这次触发。
 - **测试**：`ModelSpec`（纯函数）、`ScheduleSpec`（测试时钟：定时、防重叠、停机补一次、停用不补、一次性、归档）、`CommandSpec`（真实进程：前置检查各模式与失败/超时、常驻流防抖与排队、退避重启与故障、工具、HTTP）。用测试时钟拨时间的测试把资源目录轮询调大（`TestEnv.layer(assetPoll = 1.hour)`），否则拨一次时钟要跑成千上万次轮询。
+
+## 组装入口（app，#874）
+- **配置**：`AppConfig.load` 一次读出全部段（可选段 `[web]`、`[transcription]` 没配就是 None，对应工具和接口不提供）；未知的段、段里未知的键启动即报错。数据目录下的位置：`workspaces/<agent 编号>`、`files/`（附件）、`resources/`（上一份有效的 access.toml）、`backups/`、`vapid_private.pem`；配置文件、备份、推送私钥是平台私有文件。
+- **装配**：`Assembly.layer(cfg, models)` 用 `ZLayer.make` 装全部领域（少了哪个依赖编译期报错）；`models` 默认真实接入，测试换假模型。
+- **内置工具目录**：唯一来源是实际接进会话领域的工具（名字与类别取自各工具的 `spec`）。`Assembly.boot` 在各领域都接好后核对：重名、该有没接上的、多出来的都拒绝启动，核对过才定下目录（`Assembly.Catalog`，定下前读它是组装顺序错误）。MCP 工具按运行连接，不在目录里。
+- **启动顺序**（`Assembly.boot`）：单实例锁（`Main`，在打开数据库之前）→ 装配（迁移、全局记忆、资源目录轮询）→ 通知/看板/历史接到会话领域，接上 agent 管理与网页工具 → 核对工具 → 接着删没删完的 agent → 会话续跑 → 收尾上次的后台任务 → 触发器 → HTTP。关停是相反顺序（scope 后进先出）：HTTP 与实时连接 → 触发器与常驻命令 → 后台任务（结束并标被中断）→ 会话。
+- **集成测试**：`AppSpec`（真配置文件、全部领域、真 HTTP，假模型）：工具核对、配置报错、接口描述、经 HTTP 与工具走一遍各领域，单实例，关停后同一份数据重启接着用。
+- **本地起服务与真实模型验收**：见上文「工具链与开发」；`dev-data/` 下放配置（从现有配置取服务商密钥生成，不打印）。
