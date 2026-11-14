@@ -52,6 +52,11 @@ enum CallState(val label: String):
   case ApprovedAlways extends CallState("approved-always")
   case Done      extends CallState("done")
 
+  /** 驱动接下来要执行它。 */
+  def runnable: Boolean = this match
+    case Pending | Approved | ApprovedAlways => true
+    case Running | Suspended | Done          => false
+
 object CallState:
   def parse(s: String): CallState = values.find(_.label == s).getOrElse(throw IllegalStateException(s"未知的调用状态 $s"))
 

@@ -159,6 +159,7 @@ private[sessions] trait ControlPart:
       open <- db.read(Repo.openDelegationsTo(id))
       _    <- ZIO.foreachDiscard(open)(d => finishDelegation(d.id, i, Outcome.Failed("这个 thread 被删除了")))
       _    <- db.write(Repo.orphanThreads(id) *> Repo.deleteSession(id) *> changed)
+      _    <- waitCache.update(_.filterNot(_._2.sessionId == id))
       _    <- live.done(id)
       _    <- hooks.emit(SessionEvent.Deleted(id, i.agent, i.origin))
     yield ()

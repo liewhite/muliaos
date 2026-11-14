@@ -94,3 +94,12 @@
 - access.toml 写坏时沿用上一份有效的（副本在数据目录 `resources/access.last-good.toml`，重启后仍有效），平台经 `AccessEditor` 改它会被拒绝直到修好；平台写回 access.toml 时按固定格式重排（角色、agent 按名字排序，`[agents.<编号>] # 名字`），手写的注释不保留。
 - 组装时要提供：`ModelCheck`（模型领域：默认模型、模型写法能不能跑）、`ToolCatalog`（全部内置工具的名字与类别，从各工具的 `spec` 汇总）、`ResourcePaths.privatePaths`（配置文件、备份、推送私钥）、各领域的 `AgentHook`（忙碌判断与删除清理，登记到 `AgentHooks`）。
 - 验收脚本：`sbt "resources/Test/runMain muliao.resources.RealAssetsCheck <资源目录副本> <agent TSV> <主密钥文件>"`，只读副本，不打印 secret 值。
+
+## 会话领域的接法（#868，给下游领域）
+- **给 agent 的工具**：`Tool[RunContext, In]`（`muliao.sessions.RunContext`：agent、会话、运行、调用编号、来源、工作目录、本次运行的资源快照、用户在不在等），组装时 `SessionHooks.addTools` 接进去；`Sessions.start` 要在全部工具接好之后调用（启动续跑要用）。工具名同时汇进资源领域的 `ToolCatalog`。
+- **投信**：一律经 `Sessions.deliver(Address, Letter)`：触发器用 `Address.Fresh(agent, Origin.Trigger(名), 标题)`，看板用 `Address.IssueOf(agent, issue, 标题)`（每个 issue + agent 一个会话），事件用 `Source.Event(种类)`；投不进以 `AppError` 说明原因。「回答交给谁」由信里的 `replyTo` 定（用户在等写 `ReplyTo.User`）。
+- **工作状态**：`Sessions.states(ids)` 是全系统唯一的判断（running / waiting / idle），看板停滞、触发器防重叠、界面都用它。
+- **异步工作**（后台任务等）：开始时 `Sessions.openWait(会话, 种类, 编号, 说明, 心跳)`，结束时 `closeWait(种类, 编号, Some(事件信))`；再 `SessionHooks.addWorkKind` 登记这个种类的 `status`（心跳检查里的一句现状）与 `cancel`（会话被停止/删除时放弃它）。
+- **要用户批准的执行**：工具返回 `ToolOutcome.Suspended(Pause.Approval(执行者名, 给用户看的摘要, 数据))`，并 `SessionHooks.addApproval` 登记同名 `ApprovalHandler`：用户批准后由它接着执行（`always` 表示用户选了以后不再问）。
+- **事件**：`SessionHooks.addListener` 订阅 `SessionEvent`：`Settled`（回到空闲/最终失败/被停止，`toUser` 表示用户在等；最终失败无论谁在等都该通知用户）、`NeedsUser`（提问、等批准）、`Deleted`。未读由通知领域实现 `UnreadSource` 后 `setUnread` 接上。
+- **时间线**：`Sessions.timeline(id)` 给出界面与 `session_read` 共用的投影（`TimelineItem`，来信的 `source` 就是 USER/TRIGGER/ISSUE/DELEGATION/EVENT 标签）。

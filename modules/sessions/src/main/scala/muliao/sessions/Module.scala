@@ -1,10 +1,25 @@
 package muliao.sessions
 
 import muliao.platform.DomainModule
+import muliao.platform.config.ConfigSection
 
-/** 会话与运行：消息、运行循环（请求模型 → 执行工具）、每步落库与续跑、压缩、委派 thread、等待与心跳、提问与审批。
+/** 会话与运行：来信、运行驱动（请求模型 → 执行工具，每步落库、重启续跑）、挂起（提问、等批准、等别的 agent）、委派与 thread、
+  * 异步工作的等待与心跳、定时唤醒、停止、删除、上下文压缩、时间线投影、实时展示、附件存储、用量记账。
   *
+  * 给别的领域用的接口：
+  *   - [[Sessions]]：投信 `deliver`（各来源统一入口，投不进说明原因）、工作状态 `states`（全系统唯一判断）、`stop`、
+  *     异步工作 `openWait` / `closeWait`（如后台任务）、时间线 `timeline`（界面与 `session_read` 共用）；
+  *   - [[SessionHooks]]：组装时往本领域接东西——各领域给 agent 的工具（上下文 [[RunContext]]）、[[SessionListener]]（订阅
+  *     [[SessionEvent]]：回到空闲/最终失败/被停止、等用户、删除）、[[WorkKind]]（异步工作的取消与状态）、[[ApprovalHandler]]
+  *     （批准后接着执行）、[[UnreadSource]]（未读）；
+  *   - 工具挂起时交出 [[Pause]]（提问、等批准）；
+  *   - [[Files]]：附件按内容存一份；
+  *   - [[SessionsHttp]]：界面的会话、附件、用量接口与会话页实时事件（SSE）。
+  *
+  * 内部按主题分在 `*Part` 里，都是 [[Engine]] 的一部分；下一步做什么由纯函数 [[Plan.next]] 从库里的现状算出。
   * 本领域自己的表结构迁移放在 `resources/db/sessions/`。
   */
 object Module extends DomainModule:
   val name = "sessions"
+
+  val sections: List[ConfigSection[?]] = List(SessionSettings.section)

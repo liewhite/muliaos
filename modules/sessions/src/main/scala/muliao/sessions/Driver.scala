@@ -47,23 +47,22 @@ private[sessions] trait DriverPart:
 
   private def loop(id: SessionId, slot: Slot, kit: ZIO[Scope, AppError, Kit], ran: Ref[Boolean], rejects: Ref[Map[String, Int]]): ZIO[Scope, AppError, Unit] =
     for
-      run    <- db.read(Repo.lastRun(id))
+      last   <- db.read(Repo.lastRun(id))
+      run     = last.collect { case r if r.state == RunState.Running.label || r.state == RunState.Suspended.label => ActiveRun(r.id, r.state == RunState.Suspended.label) }
       open   <- db.read(Repo.openCalls(id)).flatMap(Decode.calls)
       queued <- db.read(Repo.queued(id)).map(_.nonEmpty)
-      next    = Plan.next(run.map(r => RunState.parse(r.state)), open, queued)
-      again <- next match
-                 case Next.Rest  => settleIfDone(id, ran).as(false)
-                 case Next.Pause => ZIO.foreachDiscard(run)(r => suspend(id, r)).as(false)
-                 case Next.Start => start(id, kit).as(true)
-                 case Next.Request =>
-                   val r = run.get.id
-                   (resume(id, run.get) *> kit.flatMap(k => request(k, r, slot))).catchAll(e => failRun(id, r, e.message)).as(true)
-                 case Next.Execute(cs) =>
-                   val r = run.get.id
-                   (resume(id, run.get) *> kit.flatMap(k => execute(k, r, cs, rejects, slot))).catchAll(e => failRun(id, r, e.message)).as(true)
-                 case Next.Decline(cs) => decline(id, cs).as(true)
-      _ <- ran.set(true).when(next != Next.Rest && next != Next.Pause)
-      _ <- loop(id, slot, kit, ran, rejects).when(again)
+      next    = Plan.next(run, open, queued)
+      _ <- next match
+             case Next.Rest => settleIfDone(id, ran)
+             case Next.Pause(r) => suspend(id, r)
+             case Next.Start => ran.set(true) *> start(id, kit) *> loop(id, slot, kit, ran, rejects)
+             case Next.Request(r) =>
+               ran.set(true) *> (resume(id, r) *> kit.flatMap(k => request(k, r.id, slot))).catchAll(e => failRun(id, r.id, e.message)) *>
+                 loop(id, slot, kit, ran, rejects)
+             case Next.Execute(r, cs) =>
+               ran.set(true) *> (resume(id, r) *> kit.flatMap(k => execute(k, r.id, cs, rejects, slot))).catchAll(e => failRun(id, r.id, e.message)) *>
+                 loop(id, slot, kit, ran, rejects)
+             case Next.Decline(_, cs) => decline(id, cs) *> loop(id, slot, kit, ran, rejects)
     yield ()
 
   // ---- 准备 ----
@@ -142,14 +141,11 @@ private[sessions] trait DriverPart:
     }
 
   /** 挂起后接着跑：运行状态改回运行中。 */
-  private def resume(id: SessionId, run: RunRow): IO[AppError, Unit] =
-    db.write(Repo.setRunState(run.id, RunState.Running.label, None, None) *> changed).when(run.state == RunState.Suspended.label).unit *>
-      live.publish(id, LiveEvent.Changed).when(run.state == RunState.Suspended.label).unit
+  private def resume(id: SessionId, run: ActiveRun): IO[AppError, Unit] =
+    (db.write(Repo.setRunState(run.id, RunState.Running.label, None, None) *> changed) *> live.publish(id, LiveEvent.Changed)).when(run.suspended).unit
 
-  private def suspend(id: SessionId, run: RunRow): IO[AppError, Unit] =
-    (db.write(Repo.setRunState(run.id, RunState.Suspended.label, None, None) *> changed) *> live.publish(id, LiveEvent.Changed))
-      .when(run.state == RunState.Running.label)
-      .unit
+  private def suspend(id: SessionId, run: ActiveRun): IO[AppError, Unit] =
+    (db.write(Repo.setRunState(run.id, RunState.Suspended.label, None, None) *> changed) *> live.publish(id, LiveEvent.Changed)).unless(run.suspended).unit
 
   // ---- 请求模型 ----
 

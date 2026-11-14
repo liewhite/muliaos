@@ -312,6 +312,35 @@ object SessionsSpec extends ZIOSpecDefault:
         )
       }
     },
+    test("带回报的委派：心跳检查投回发起方，停下发起方时 thread 一并停下") {
+      fresh { req =>
+        val last = lastUserText(req)
+        if isAgent(req, "bob") then Script.Hang(List(text("bob 在做")))
+        else if last.startsWith("[检查]") then Script.Say(List(text("…")))
+        else if last == "派" then Script.Say(List(call("d1", "delegate_task", """{"agent":"bob","task":"长活","thread":"long","report_back":true,"heartbeat_seconds":1}""")))
+        else Script.Say(List(text("派出去了")))
+      } { (_, _, _) =>
+        for
+          alice <- agent("alice")
+          _     <- agent("bob")
+          id    <- userSession(alice, "派")
+          tl    <- eventually("收到检查")(timeline(id))(_.exists(i => i.checkIn && i.text.exists(_.contains("thread 现在运行中"))))
+          _     <- eventually("回到等待")(stateOf(id))(_ == WorkState.Waiting)
+          th    <- sessions.flatMap(_.list(None, None, None, 50)).map(_.items.find(_.originRef.contains("long")).get.id)
+          d     <- sessions.flatMap(_.detail(id))
+          _     <- sessions.flatMap(_.stop(id))
+          s1    <- stateOf(id)
+          s2    <- idle(th)
+          d2    <- sessions.flatMap(_.detail(id))
+        yield assertTrue(
+          d.waits.map(_.kind) == List("delegation"),
+          d.waits.head.heartbeatSeconds.contains(1),
+          s1 == WorkState.Idle,
+          s2 == WorkState.Idle,
+          d2.waits.isEmpty
+        )
+      }
+    },
     test("wake_me：到点作为事件投回，期间等待中") {
       fresh { req =>
         val last = lastUserText(req)

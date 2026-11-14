@@ -74,8 +74,8 @@ final case class Letter(
 /** 来信寄往哪里。 */
 enum Address:
   case To(session: SessionId)
-  /** 新开一个会话（用户新建、触发器） */
-  case Fresh(agent: AgentId, origin: Origin, title: String)
+  /** 新开一个会话（用户新建、触发器）；issue 会话与 thread 由下面两种按键找或开 */
+  case Fresh(agent: AgentId, origin: Origin.User.type | Origin.Trigger, title: String)
   /** 某 agent 处理某 issue 的会话：有就续写，没有就新开 */
   case IssueOf(agent: AgentId, issue: IssueId, title: String)
   /** 发起会话下某 agent 的某个 thread：有就续聊，没有就新开 */
@@ -116,7 +116,11 @@ final case class Question(
 final case class QuestionOption(label: String, description: String) derives JsonCodec
 
 /** 工具调用挂起时在等什么。只有这几种：工具返回 [[muliao.toolkit.ToolOutcome.Suspended]] 时交出其中之一。 */
-sealed trait Pause extends Suspension derives JsonCodec
+sealed trait Pause extends Suspension derives JsonCodec:
+  /** 用户发来新信时当作没答复（等用户的提问与批准）；等别的 agent 回答的不算。 */
+  def declinable: Boolean = this match
+    case _: Pause.AskUser | _: Pause.Approval => true
+    case _: Pause.AwaitThread                 => false
 
 object Pause:
   /** 等用户回答选择题（只在用户在等时可用）。 */

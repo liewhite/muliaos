@@ -73,12 +73,19 @@ private[sessions] trait WaitsPart:
       ws <- waitCache.get.map(_.values.toList)
       bs <- beats.get
       _ <- ZIO.foreachDiscard(ws.filter(_.dueAt.exists(_ <= t)))(w =>
-             closeWait(w.kind, w.ref, Some(Letter(Source.Event("wake"), s"[唤醒] ${w.label}")))
+             guarded(w)(closeWait(w.kind, w.ref, Some(Letter(Source.Event("wake"), s"[唤醒] ${w.label}"))).unit)
            )
       _ <- ZIO.foreachDiscard(ws.filter(w => w.dueAt.isEmpty && w.heartbeatSeconds.exists(h => t - bs.getOrElse(w.id, t) >= h * 1000L)))(w =>
-             beats.update(_.updated(w.id, t)) *> checkIn(w)
+             beats.update(_.updated(w.id, t)) *> guarded(w)(checkIn(w))
            )
     yield ()
+
+  /** 一项等待投不进（会话没了、agent 停用了）：记错误，这次运行期间不再调度它（库里的记录留着，重启后再试），免得每秒刷日志。 */
+  private def guarded(w: WaitRow)(effect: IO[AppError, Unit]): UIO[Unit] =
+    effect.catchAll(e =>
+      ZIO.logError(s"等待 ${w.id}（${w.kind} ${w.ref}，会话 ${w.sessionId.value}）投递失败，暂停调度到重启：${e.message}") *>
+        waitCache.update(_ - w.id)
+    )
 
   /** 心跳检查：投一条「还在进行」的检查（不推送）；已有检查在排队就不重复投。 */
   private def checkIn(w: WaitRow): IO[AppError, Unit] =
