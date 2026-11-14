@@ -32,7 +32,7 @@
 - 常用：`sbt test`（全部测试，含 Scala.js 的契约测试，要 node）、`sbt app/compile`、`sbt --client <命令>`（常驻 sbt 服务，反复编译快很多）。
 - 本地起服务：`sbt "export app/Runtime/fullClasspath"` 拿到类路径，`java --enable-native-access=ALL-UNNAMED -cp <类路径> muliao.app.Main serve <配置文件>`；配置与数据放在 worktree 的 `dev-data/`（已 gitignore），端口别用 1080。导出接口描述：`muliao.app.Main openapi`。
 - 编译选项开了 `-Werror`、`-Wunused:imports`、`-Wvalue-discard`：丢弃的值（尤其没跑的 ZIO）编译即报错。
-- 依赖说明：quill 4.9.0 依赖 zio-json 0.10（只用于 Postgres），build.sbt 里放行被 1.x 取代；它还把 scalafmt、scala 2.13 编译器带进了运行时类路径，打包（#877）时看能否排除。
+- 依赖说明：quill 4.9.0 依赖 zio-json 0.10（只用于 Postgres），build.sbt 里放行被 1.x 取代；它还把 scalafmt、scala 2.13 编译器带进了运行时类路径，打包时没有排除（quill 运行时可能用，理由见 build.sbt 的 app 段）。
 
 ## 模块与依赖方向
 按层排列，每个模块只依赖更低层的模块（具体见下表）：
@@ -155,3 +155,10 @@
 - **对应关系**：旧消息按段拆成新时间线（`Transcript`）：助手消息 → 回复（签名、OpenAI 输出项等协议数据放进 `Seal`，续聊时原样回传）+ 工具调用行；用户消息里运行上下文那段 → 上下文条目，信件文字（连同紧跟的附件段）→ 来信（来源按旧版标记），工具结果 → 对应调用的结果；失败、被停止、没结束的运行各记一条提示。迁移后每个调用都有结果（旧版缺的补说明）、运行都已结束、收件箱与等待为空，所以新版启动时不续跑、不执行任何东西。
 - **不搬**：触发器一律停用；排队中的信、进行中的异步工作、等批准、唤醒；看板的「请 agent 表态」动态（新版只记在 `issue_nudge`）。旧版早期状态 todo / waiting 在历史动态里按 in_progress / blocked 记。同一 agent 同一 issue 有多个会话的，只保留最近的为 issue 会话，其余记成用户会话。
 - **验收**：迁移后起服务（无 ERROR、续跑 0 个会话），逐个读全部会话详情与时间线、全部 issue、各 agent 后台任务与各列表接口，（`modules/migrate/verify.sh <配置> <端口>`），并在 Claude、OpenAI 两种协议的旧会话里各续聊一轮。
+
+## 打包与部署（#877）
+- **位置**（与 Rust 版完全分开）：主目录 `~/.muliao-scala`（`config.toml`、`data/`、`assets/`、`muliao.log`、`launchd.log`、`app/`、`codesign/`、`build/`），launchd 服务 `com.muliao.scala`，端口 1081。脚本都在 `deploy/`，路径可用 `MULIAO_HOME`、`MULIAO_LABEL`、`MULIAO_PORT` 改（演练用），说明在 `deploy/lib.sh` 开头。
+- **单文件程序**：`deploy/build.sh <版本> <输出>`：Vite 构建前端 → `sbt app/assembly` 打 fat jar（前端作为 `web/` 资源，清单写版本号与 `Enable-Native-Access`）→ jdeps 算模块、jlink 裁 JRE → JRE 与 jar 打成 tar.gz 编进启动器 `deploy/launcher.c` 的 Mach-O 段。启动器第一次运行把载荷解到程序旁边的 `.muliao-<载荷编号>/`，再以子进程起 java、转发终止信号、带回退出码（不 exec，保持签名身份）。版本号 = 版本目录名 `<时间>-<commit>`，`muliao version` 打印它。
+- **签名**：rcodesign 用 `~/.muliao-scala/codesign/` 下固定的自签证书、固定标识 `muliao-scala` 签名；程序路径固定为 `app/current/muliao`（真目录，换版本是整目录复制），「完全磁盘访问」授权一次后换版本不丢。
+- **流程**：第一次：`deploy/install.sh` → 在服务外（agent 里经 `ssh -F /dev/null -i ~/.ssh/id_rsa localhost`）跑 `deploy/service.sh install` 写 plist 并加载 → `deploy/selfcheck.sh`。之后每次：`deploy/install.sh [ref]`（在 `build/src` 检出、打包、签名、放进 `app/<时间>-<commit>/` 并复制成 `app/current`，留最近 3 版）→ `deploy/activate.sh --restart-only`（重启并等健康）→ `deploy/selfcheck.sh <commit>`。退回上一版：`deploy/activate.sh --previous`；换成指定版本：`deploy/activate.sh <版本目录>`。从本服务自己的命令里跑 activate 会自动脱离到后台，输出在 `deploy.log`。
+- **注意**：两个版本的进程名都是 `muliao`，不要用 `pkill -x muliao` 之类按名字杀进程；按 `launchctl print gui/$(id -u)/com.muliao.scala` 的 pid 操作。
