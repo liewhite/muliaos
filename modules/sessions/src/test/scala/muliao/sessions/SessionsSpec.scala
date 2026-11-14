@@ -196,7 +196,11 @@ object SessionsSpec extends ZIOSpecDefault:
           _   <- idle(id3)
           tl3 <- timeline(id3)
           threads <- sessions.flatMap(_.list(None, None, None, 50)).map(_.items.filter(_.origin == "thread"))
+          byOrigin <- sessions.flatMap(_.list(None, None, None, 50, List("thread"))).map(_.items)
+          d1      <- sessions.flatMap(_.detail(id1))
         yield assertTrue(
+          byOrigin.map(_.id).toSet == threads.map(_.id).toSet,
+          d1.threads.map(_.originRef.get) == List("t1"),
           tl2.exists(i => i.source.contains("EVENT") && i.text.exists(_.contains("bob 答：任务二"))),
           tl3.flatMap(_.parts.flatMap(_.call)).head.result.map(_.text).contains("bob 答：任务三"),
           tl3.last.parts.head.text.contains("alice 转述：bob 答：任务三"),

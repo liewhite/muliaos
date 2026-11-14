@@ -108,9 +108,17 @@ final case class TimelineItem(
 
 final case class QueuedView(id: Long, source: String, text: String, files: List[FileView], checkIn: Boolean, at: Long) derives JsonCodec, Schema
 
-/** 进行中的异步工作。`kind`：job / delegation / wake ...。 */
-final case class WaitItem(id: Long, kind: String, ref: String, label: String, heartbeatSeconds: Option[Int], dueAt: Option[Long], createdAt: Long)
-    derives JsonCodec, Schema
+/** 进行中的异步工作。`kind`：job（`ref` 是任务号）/ delegation（`ref` 是委派编号，`thread` 是做它的 thread 会话）/ wake ...。 */
+final case class WaitItem(
+    id: Long,
+    kind: String,
+    ref: String,
+    label: String,
+    heartbeatSeconds: Option[Int],
+    dueAt: Option[Long],
+    createdAt: Long,
+    thread: Option[SessionId] = None
+) derives JsonCodec, Schema
 
 final case class PendingCall(entry: Long, call: String, name: String, pending: PendingView) derives JsonCodec, Schema
 
@@ -127,7 +135,9 @@ final case class SessionDetail(
     /** 当前上下文大小（最近一次请求的输入 token） */
     contextTokens: Long,
     compactionThreshold: Long,
-    usage: UsageView
+    usage: UsageView,
+    /** 这个会话开出的 thread（委派），按开出的先后 */
+    threads: List[SessionSummary] = Nil
 ) derives JsonCodec, Schema
 
 /** 答复挂起的调用：提问给 `answers`（每题一个），批准给 `approved`（与 `always`）。 */
@@ -161,12 +171,18 @@ object SessionsApi:
   /** 一个会话下的接口（实时事件 `GET /api/sessions/{id}/live` 是 SSE，声明在服务端）。 */
   val one = sessions.in(path[SessionId]("id"))
 
-  val list: Endpoint[Option[String], (Option[AgentId], Option[String], Option[Long], Option[Int]), ApiError, SessionPage, Any] =
+  val list: Endpoint[Option[String], (Option[AgentId], List[String], Option[String], Option[Long], Option[Int]), ApiError, SessionPage, Any] =
     sessions.get
-      .in(query[Option[AgentId]]("agent").and(query[Option[String]]("q")).and(query[Option[Long]]("before")).and(query[Option[Int]]("limit")))
+      .in(
+        query[Option[AgentId]]("agent")
+          .and(query[List[String]]("origin"))
+          .and(query[Option[String]]("q"))
+          .and(query[Option[Long]]("before"))
+          .and(query[Option[Int]]("limit"))
+      )
       .out(jsonBody[SessionPage])
       .name("listSessions")
-      .description("会话列表：按最近活动倒序，运行中/等待中的置顶（第一页）。`agent` 筛选；`q` 搜来信、回复与工具调用参数（不搜工具结果）。")
+      .description("会话列表：按最近活动倒序，运行中/等待中的置顶（第一页）。`agent` 筛选；`origin` 只要这些来源（可重复：user / trigger / issue / thread）；`q` 搜来信、回复与工具调用参数（不搜工具结果）。")
 
   val create: Endpoint[Option[String], NewSession, ApiError, Created, Any] =
     sessions.post.in(jsonBody[NewSession]).out(jsonBody[Created]).name("createSession").description("新建会话并发出第一条消息。")

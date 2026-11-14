@@ -37,13 +37,13 @@ object Endpoints:
 /** HTTP 服务骨架：登录、实时刷新（SSE）、OpenAPI、静态前端、统一错误体、gzip。各领域的接口由组装入口传进来。 */
 object HttpServer:
 
-  /** 实时刷新：每条事件的 data 是 [[muliao.contract.Change]] 的 JSON；每 25 秒一条注释保持连接。 */
+  /** 实时刷新：`change` 事件的 data 是 [[muliao.contract.Change]] 的 JSON；连接帧（ready、ping）见 [[Sse]]。 */
   val events: Endpoint[Option[String], Unit, ApiError, ZStream[Any, Throwable, Byte], ZioStreams] =
     Api.secure.get
       .in("events")
       .out(streamTextBody(ZioStreams)(CodecFormat.TextEventStream(), Some(StandardCharsets.UTF_8)))
       .name("events")
-      .description("「数据变了」的实时推送（SSE）。事件 data 为 {\"topic\": ...}，收到后重新拉取对应数据。")
+      .description("「数据变了」的实时推送（SSE）。`change` 事件的 data 为 {\"topic\": ...}，收到后重新拉取对应数据；`ready`（订阅建好）与每 25 秒的 `ping` 见服务端 Sse。")
 
   val openApiEndpoint: PublicEndpoint[Unit, ApiError, String, Any] =
     Api.base.get.in("openapi.json").out(stringJsonBody).name("openapi")
@@ -62,9 +62,7 @@ object HttpServer:
     val logout = AuthApi.logout.secured(auth)(_ => _ => ZIO.succeed(auth.logoutCookie))
     val session = AuthApi.session.secured(auth)(p => _ => ZIO.succeed(AuthSession(p.expiresAt.getEpochSecond)))
     val sse: ApiEndpoint = events.zServerSecurityLogic(auth.authenticate).serverLogic[Any] { _ => _ =>
-      val changes = ZStream.unwrapScoped(bus.subscribe).map(c => ServerSentEvent(data = Some(zio.json.EncoderOps(c).toJson), eventType = Some("change")))
-      val pings   = ZStream.tick(25.seconds).drop(1).as(ServerSentEvent(data = None, eventType = None, id = None, retry = None))
-      ZIO.succeed(ZioServerSentEvents.serialiseSSEToBytes(changes.merge(pings)))
+      ZIO.succeed(Sse.frames(bus.subscribe.map(_.map(c => ServerSentEvent(data = Some(zio.json.EncoderOps(c).toJson), eventType = Some("change"))))))
     }
     List(login, logout, session, sse)
 

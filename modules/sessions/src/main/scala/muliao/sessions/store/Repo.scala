@@ -135,17 +135,32 @@ private[sessions] object Repo:
   def threadsOf(parent: SessionId): Read[List[SessionRow]] =
     Sql.run(sessions.filter(s => s.parentId.exists(_ == lift(parent))).sortBy(_.createdAt)).orInternal
 
-  /** 会话列表：按最近活动倒序。`agent` 筛选，`text`（不分大小写的子串）搜来信、回复与工具调用参数。 */
-  def listSessions(agent: Option[AgentId], text: Option[String], before: Long, limit: Int): Read[List[SessionRow]] =
+  /** 会话列表：按最近活动倒序。`agent` 筛选，`origins` 只要这些来源（空是不限），`text`（不分大小写的子串）搜来信、回复与工具调用参数。 */
+  def listSessions(agent: Option[AgentId], origins: List[String], text: Option[String], before: Long, limit: Int): Read[List[SessionRow]] =
+    val anyOrigin = origins.isEmpty
+    val os        = if anyOrigin then List("") else origins
     (agent, text) match
       case (None, None) =>
-        Sql.run(sessions.filter(_.updatedAt < lift(before)).sortBy(_.updatedAt)(using Ord.desc).take(lift(limit))).orInternal
+        Sql.run(
+          sessions
+            .filter(s => s.updatedAt < lift(before) && (lift(anyOrigin) || liftQuery(os).contains(s.origin)))
+            .sortBy(_.updatedAt)(using Ord.desc)
+            .take(lift(limit))
+        ).orInternal
       case (Some(a), None) =>
-        Sql.run(sessions.filter(s => s.updatedAt < lift(before) && s.agentId == lift(a)).sortBy(_.updatedAt)(using Ord.desc).take(lift(limit))).orInternal
+        Sql.run(
+          sessions
+            .filter(s => s.updatedAt < lift(before) && s.agentId == lift(a) && (lift(anyOrigin) || liftQuery(os).contains(s.origin)))
+            .sortBy(_.updatedAt)(using Ord.desc)
+            .take(lift(limit))
+        ).orInternal
       case (None, Some(p)) =>
         Sql.run(
           sessions
-            .filter(s => s.updatedAt < lift(before) && entries.filter(e => e.sessionId == s.id && sql"instr(lower(${e.search}), lower(${lift(p)})) > 0".asCondition).nonEmpty)
+            .filter(s =>
+              s.updatedAt < lift(before) && (lift(anyOrigin) || liftQuery(os).contains(s.origin)) &&
+                entries.filter(e => e.sessionId == s.id && sql"instr(lower(${e.search}), lower(${lift(p)})) > 0".asCondition).nonEmpty
+            )
             .sortBy(_.updatedAt)(using Ord.desc)
             .take(lift(limit))
         ).orInternal
@@ -153,7 +168,7 @@ private[sessions] object Repo:
         Sql.run(
           sessions
             .filter(s =>
-              s.updatedAt < lift(before) && s.agentId == lift(a) &&
+              s.updatedAt < lift(before) && s.agentId == lift(a) && (lift(anyOrigin) || liftQuery(os).contains(s.origin)) &&
                 entries.filter(e => e.sessionId == s.id && sql"instr(lower(${e.search}), lower(${lift(p)})) > 0".asCondition).nonEmpty
             )
             .sortBy(_.updatedAt)(using Ord.desc)
@@ -350,6 +365,9 @@ private[sessions] object Repo:
 
   def delegation(id: Long): Read[Option[DelegationRow]] =
     Sql.run(delegations.filter(_.id == lift(id))).map(_.headOption).orInternal
+
+  def delegationsOf(ids: List[Long]): Read[List[DelegationRow]] =
+    Sql.run(delegations.filter(d => liftQuery(ids).contains(d.id))).orInternal
 
   def openDelegationsTo(thread: SessionId): Read[List[DelegationRow]] =
     Sql.run(delegations.filter(d => d.threadId == lift(thread) && !d.done)).orInternal

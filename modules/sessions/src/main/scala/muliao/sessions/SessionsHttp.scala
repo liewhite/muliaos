@@ -3,7 +3,7 @@ package muliao.sessions
 import muliao.contract.*
 import muliao.models.llm.Growth
 import muliao.platform.AppError
-import muliao.platform.server.{ApiEndpoint, Auth, Endpoints}
+import muliao.platform.server.{ApiEndpoint, Auth, Endpoints, Sse}
 import muliao.resources.agents.Agents
 import sttp.capabilities.zio.ZioStreams
 import sttp.model.sse.ServerSentEvent
@@ -20,7 +20,7 @@ import java.nio.charset.StandardCharsets
 final case class SessionsHttp(sessions: Sessions, files: Files, agents: Agents, hooks: SessionHooks):
   import Endpoints.*
 
-  /** 会话页的实时事件（SSE）：先给正在生成的部分，再给之后的事件；每 25 秒一条注释保持连接。 */
+  /** 会话页的实时事件（SSE）：先给正在生成的部分，再给之后的事件；连接帧（ready、ping）见 [[Sse]]。 */
   val liveEndpoint: Endpoint[Option[String], SessionId, ApiError, ZStream[Any, Throwable, Byte], ZioStreams] =
     SessionsApi.one.get
       .in("live")
@@ -45,12 +45,10 @@ final case class SessionsHttp(sessions: Sessions, files: Files, agents: Agents, 
   private def live(auth: Auth): ApiEndpoint =
     liveEndpoint.zServerSecurityLogic(auth.authenticate).serverLogic[Any] { _ => id =>
       (sessions.info(id) *> display).mapError(AppError.toApi).map { d =>
-        val events = ZStream.unwrapScoped(sessions.subscribe(id).map { (snap, stream) =>
-          ZStream.fromIterable(snap.map(ps => LiveView("snapshot", parts = ps.toList.map(Timeline.part(_, Map.empty, d))))) ++ stream.map(view(_, d))
+        Sse.frames(sessions.subscribe(id).map { (snap, stream) =>
+          (ZStream.fromIterable(snap.map(ps => LiveView("snapshot", parts = ps.toList.map(Timeline.part(_, Map.empty, d))))) ++ stream.map(view(_, d)))
+            .map(v => ServerSentEvent(data = Some(v.toJson), eventType = Some("live")))
         })
-        val sse   = events.map(v => ServerSentEvent(data = Some(v.toJson), eventType = Some("live")))
-        val pings = ZStream.tick(25.seconds).drop(1).as(ServerSentEvent(data = None, eventType = None, id = None, retry = None))
-        ZioServerSentEvents.serialiseSSEToBytes(sse.merge(pings))
       }
     }
 
@@ -108,7 +106,7 @@ final case class SessionsHttp(sessions: Sessions, files: Files, agents: Agents, 
 
   def endpoints(auth: Auth): List[ApiEndpoint] =
     List(
-      SessionsApi.list.secured(auth)(_ => (agent, q, before, limit) => sessions.list(agent, q, before, limit.getOrElse(50))),
+      SessionsApi.list.secured(auth)(_ => (agent, origins, q, before, limit) => sessions.list(agent, q, before, limit.getOrElse(50), origins)),
       SessionsApi.create.secured(auth)(_ => create),
       SessionsApi.get.secured(auth)(_ => sessions.detail),
       SessionsApi.timeline.secured(auth)(_ => sessions.timeline),
