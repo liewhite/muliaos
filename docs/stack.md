@@ -116,3 +116,12 @@
 - **以 agent 身份起命令**：一律经 `AgentExec.command(agent, program, secrets, SecretUse)` 得到 `CommandSpec`（工作目录、写沙箱、secret 注入），再 `Exec.run/start`；输出可经 `annotate` 补写沙箱拦截说明。触发器的前置检查与常驻命令用它，不自己算可写范围。
 - **文件读写**：`FileAccess` 按可写范围检查（平台私有文件对非 admin 读写都不行），资源目录里的文件经 `AssetGuard` + `AssetStore.write`；`WriteMode.Overwrite` 要求本次运行读过（读过的指纹按运行记在内存里），`Patch` 不要求。`AssetStore.write` 覆盖已有文件时沿用原权限位（skill 脚本不丢可执行位）。
 - **后台任务**：输出在工作目录 `jobs/<编号>.log`；关停时结束并标被中断，结局下次启动补交（表 `job` 的 `reported`）。
+
+## 看板（board，#871）
+- **组装**：`Board.layer`（要 `Database`、`ChangeBus`、`Sessions`、`Notifications`、`Agents`、`GeneralSettings`）；`BoardLink.attach` 在 `Sessions.start` 之前调用：登记 6 个 issue 工具（名字在 `BoardTools.toolNames`，汇进 `ToolCatalog`）、会话事件订阅、删除 agent 时的清理（`AgentHook`）；`BoardHttp.endpoints` 交给 HTTP 服务（接口声明在 contract 的 `BoardApi`）。改动后广播主题 `issues`。
+- **投递与事务**：每次改动在同一个写事务里写 issue、记动态、投信（会话领域的 `Sessions.deliverIn`，提交后会话才开始跑），不会出现「改了没投」或「投了没改」。投不进（agent 已归档等）只记一条「没能投给」的动态，改动照常提交。谁收信由纯函数 `Rules.recipients` 定：in_progress、指派给 agent、上游都结束 → 投给它（它在这个 issue 自己的会话里做的不投回）；否则只有用户的评论投给 owner。上游的「结束与否」变了时，在每个下游记一条动态并按同一规则投递，所以下游在最后一个上游结束时收到第一封信。
+- **停滞与请表态**：停滞在读的时候算（`Rules.stalled`：该有人处理、它的 issue 会话空闲或还没有，状态取 `Sessions.states`）。issue 会话做完一段工作（会话事件 `Settled` 且回答完）后如果 issue 还该它处理，投一封请表态的信；表 `issue_nudge` 记下已请过，下次有动态投给它时清掉，所以不会反复催。会话最终失败只记一条动态，不重投。
+- **审核**：`approve` / `sendBack` 只对指派给用户、还没结束的 issue 有效（否则 409）；打回给最近把指派改成用户的 agent（时间线里找），没有就给 owner。agent 把 issue 交给用户时（`Rules.handedToUser`）在同一事务里发通知，点开 `/issues/<号>`，正文取它刚写的评论。
+- **时间线**：表 `issue_event` 只增不改，`actor` 是 `user` / `system` / agent 编号，`session_id` 是发生在哪个会话，`activity` 是 `Activity` 的 JSON。工作历史（#873）的「对 issue 的操作」从这里按时间、agent 取。
+- **工具参数里的枚举**：Scala 3 enum 加 `@caseName("in_progress")` 并派生 zio-schema，JSON Schema 里就是带 `enum` 的字符串（`ToolArgs` 取 `@caseName`），解码也认它。
+- **测试**：`RulesSpec`（规则纯函数）、`BoardSpec`（真库、真会话与通知领域、假模型：投递规则、依赖放行、停滞与请表态、审核与冲突、会话失败、叫停、开始、删除、删 agent、工具、HTTP）。

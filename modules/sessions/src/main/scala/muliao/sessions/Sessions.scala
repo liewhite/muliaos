@@ -4,7 +4,7 @@ import muliao.contract.*
 import muliao.models.llm.Models
 import muliao.models.mcp.McpConnector
 import muliao.platform.{AppError, GeneralSettings}
-import muliao.platform.db.Database
+import muliao.platform.db.{Database, Tx}
 import muliao.platform.events.ChangeBus
 import muliao.resources.{AgentHook, AgentHooks, ResourcePaths, Resources}
 import muliao.resources.agents.Agents
@@ -26,6 +26,14 @@ trait Sessions:
 
   /** 投一封信，投不进时以领域错误说明原因。`dedupe`：同样键的信已在排队就不投（返回 None）。 */
   def deliver(to: Address, letter: Letter, dedupe: Option[String] = None): IO[AppError, Option[Delivered]]
+
+  /** 在调用方的写事务里投信（看板：与 issue 的改动同一事务提交，提交后才开始跑）。投不进以领域错误说明原因，此时本函数还没写任何东西，
+    * 调用方可以接住错误、照常提交自己的改动。不带附件。
+    */
+  def deliverIn(to: Address, letter: Letter, dedupe: Option[String] = None): Tx[Option[Delivered]]
+
+  /** 这些 issue 的 issue 会话（每个 issue + agent 一个）。 */
+  def issueSessions(issues: List[IssueId]): IO[AppError, List[IssueSession]]
 
   def info(id: SessionId): IO[AppError, SessionInfo]
   def states(ids: List[SessionId]): IO[AppError, Map[SessionId, WorkState]]
@@ -88,6 +96,14 @@ object Sessions:
     def start: IO[AppError, Unit] = e.startup
 
     def deliver(to: Address, letter: Letter, dedupe: Option[String]) = e.deliver(to, letter, dedupe)
+    def deliverIn(to: Address, letter: Letter, dedupe: Option[String]) = e.deliverIn(to, letter, dedupe)
+
+    def issueSessions(issues: List[IssueId]): IO[AppError, List[IssueSession]] =
+      if issues.isEmpty then ZIO.succeed(Nil)
+      else
+        db.read(Repo.issueSessions(issues.map(_.value.toString))).map(_.flatMap { r =>
+          r.originRef.flatMap(_.toLongOption).map(i => IssueSession(IssueId.wrap(i), r.agentId, r.id))
+        })
     def info(id: SessionId)                                          = e.info(id)
     def states(ids: List[SessionId])                                 = e.states(ids)
     def state(id: SessionId)                                         = e.state(id)

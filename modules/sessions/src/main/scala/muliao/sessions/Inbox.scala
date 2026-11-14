@@ -23,6 +23,16 @@ private[sessions] trait InboxPart:
       _      <- ZIO.foreachDiscard(result)(d => kick(d.session))
     yield result
 
+  /** 在调用方的写事务里投信（看板：与 issue 的改动同一事务提交）；提交后才开始跑。不带附件。 */
+  def deliverIn(to: Address, letter: Letter, dedupe: Option[String]): Tx[Option[Delivered]] =
+    for
+      agent  <- agentOf(to)
+      _      <- ZIO.foreachDiscard(agent)(agents.requireActive)
+      t      <- now
+      result <- deliverTx(to, letter, dedupe, t)
+      _      <- ZIO.foreachDiscard(result)(d => afterCommit(kick(d.session)))
+    yield result
+
   private def agentOf(to: Address): IO[AppError, Option[AgentId]] = to match
     case Address.To(id)              => info(id).map(i => Some(i.agent))
     case Address.Fresh(a, _, _)      => ZIO.some(a)

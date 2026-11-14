@@ -81,6 +81,9 @@ enum Address:
   /** 发起会话下某 agent 的某个 thread：有就续聊，没有就新开 */
   case ThreadOf(requester: SessionId, agent: AgentId, name: ThreadName)
 
+/** 某 agent 处理某 issue 的会话。 */
+final case class IssueSession(issue: IssueId, agent: AgentId, session: SessionId)
+
 /** 投递成功：投进了哪个会话、是不是新开的。 */
 final case class Delivered(session: SessionId, created: Boolean)
 

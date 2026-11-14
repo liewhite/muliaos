@@ -3,7 +3,7 @@ package muliao.toolkit
 import zio.Chunk
 import zio.json.ast.Json
 import zio.schema.{Schema, StandardType}
-import zio.schema.annotation.{description, fieldDefaultValue}
+import zio.schema.annotation.{caseName, description, fieldDefaultValue}
 import zio.schema.codec.JsonCodec
 
 /** 工具参数：从参数类型的 zio-schema 生成解码器、JSON Schema 与敏感字段表。 */
@@ -70,10 +70,14 @@ object ToolArgs:
       case s: Schema.Set[?]               => obj("type" -> Json.Str("array"), "items" -> toJson(s.elementSchema, None), "uniqueItems" -> Json.Bool(true))
       case m: Schema.Map[?, ?]            => obj("type" -> Json.Str("object"), "additionalProperties" -> toJson(m.valueSchema, None))
       case e: Schema.Enum[?] if e.cases.forall(c => isSingleton(c.schema)) =>
-        withDescription(obj("type" -> Json.Str("string"), "enum" -> Json.Arr(e.cases.map(c => Json.Str(c.id)))), descriptionOf(e.annotations))
+        withDescription(obj("type" -> Json.Str("string"), "enum" -> Json.Arr(e.cases.map(c => Json.Str(caseLabel(c))))), descriptionOf(e.annotations))
       case Schema.Primitive(t, _) => primitive(t)
       case _                      => obj()
     withDescription(body, desc)
+
+  /** 枚举值在 JSON 里的写法：有 `@caseName` 用它（解码也认它），否则用名字。 */
+  private def caseLabel(c: Schema.Case[?, ?]): String =
+    c.annotations.collectFirst { case caseName(n) => n }.getOrElse(c.id)
 
   private def isSingleton(s: Schema[?]): Boolean = unwrap(s) match
     case r: Schema.Record[?] => r.fields.isEmpty

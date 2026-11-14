@@ -123,6 +123,10 @@ private[sessions] object Repo:
       .map(_.headOption)
       .orInternal
 
+  /** 这些 issue（`origin_ref` 是 issue 号）的全部 issue 会话。 */
+  def issueSessions(refs: List[String]): Read[List[SessionRow]] =
+    Sql.run(sessions.filter(s => s.origin == "issue" && s.originRef.exists(r => liftQuery(refs).contains(r)))).orInternal
+
   def thread(parent: SessionId, agent: AgentId, name: String): Read[Option[SessionRow]] =
     Sql.run(
       sessions.filter(s => s.parentId.exists(_ == lift(parent)) && s.agentId == lift(agent) && s.origin == "thread" && s.originRef.exists(_ == lift(name)))
