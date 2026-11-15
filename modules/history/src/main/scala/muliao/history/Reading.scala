@@ -1,6 +1,6 @@
 package muliao.history
 
-import muliao.contract.{EntryView, PartView, SourceKind, SourceView, TimelineItem}
+import muliao.contract.{EntryView, PartView, SourceView, TimelineItem}
 
 import java.time.{Instant, ZoneId}
 import java.time.format.DateTimeFormatter
@@ -32,7 +32,8 @@ object Reading:
         case EntryView.Notice(kind, text) => List(ReadItem(s"NOTICE ${kind.label}", None, t.startedAt, text, clippable = false))
         case EntryView.Letter(source, text, fs, _) =>
           val files = if fs.isEmpty then "" else "\n附件：" + fs.map(f => s"${f.name}（${f.mediaType}，${f.size} 字节）").mkString("，")
-          List(ReadItem(source.kind.label, detail(source), t.startedAt, text + files, clippable = source.kind == SourceKind.Event))
+          val (label, detail) = Reading.source(source)
+          List(ReadItem(label, detail, t.startedAt, text + files, clippable = source.isInstanceOf[SourceView.Event]))
         case EntryView.Reply(parts, _, _, interrupted) =>
           val cut = if interrupted then List(ReadItem("NOTICE Interrupted", None, t.finishedAt, "这条回复生成到一半被打断，上面是已生成的部分", clippable = false)) else Nil
           parts.flatMap {
@@ -48,13 +49,13 @@ object Reading:
           } ++ cut
     }
 
-  /** 来信来源的补充：触发器名、issue 号、委派方、事件种类。 */
-  private def detail(s: SourceView): Option[String] = s match
-    case SourceView.User                => None
-    case SourceView.Trigger(n)          => Some(n.value)
-    case SourceView.Issue(i)            => Some(s"#${i.value}")
-    case SourceView.Delegation(from, a) => Some(s"${a.value}，会话 ${from.value}")
-    case SourceView.Event(k)            => Some(k.label)
+  /** 来信的标签与补充：触发器名、issue 号、委派方、事件种类。 */
+  def source(s: SourceView): (String, Option[String]) = s match
+    case SourceView.User                => ("USER", None)
+    case SourceView.Trigger(n)          => ("TRIGGER", Some(n.value))
+    case SourceView.Issue(i)            => ("ISSUE", Some(s"#${i.value}"))
+    case SourceView.Delegation(from, a) => ("DELEGATION", Some(s"${a.value}，会话 ${from.value}"))
+    case SourceView.Event(k)            => ("EVENT", Some(k.label))
 
   /** 一条的写法：编号、时间、标签，正文另起一行；可截断的超过 `clip` 字（0 不截）时截断并说明。 */
   def render(n: Int, i: ReadItem, clip: Int, zone: ZoneId): String =

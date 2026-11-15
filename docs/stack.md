@@ -102,11 +102,11 @@
 - **agent 显示名**：`Agents.names(编号)` 一次查出（含已删除的，查不到显示编号）；不逐个 `get`。
 - **工作状态**：`Sessions.states(ids)` 是全系统唯一的判断（running / waiting / idle），看板停滞、触发器防重叠、界面都用它。
 - **会话等的后台任务**：开始时 `Sessions.openJobWait(会话, 任务号, 说明, 心跳)`，结束时 `closeJobWait(任务号, Some(事件信))`；`SessionPorts.jobs` 是必填的 `JobControl`（工作区的 `Workspace.jobControl`：心跳检查里的一句现状、会话被停止时结束任务）。等待项是 ADT `WaitRef = Job | Wake | Delegation`，唤醒与委派由会话领域自己处理。
-- **状态与种类**：跨领域、存库、走接口的状态与种类都是 `Labeled` 枚举（contract 的 `Labels` 给出解析、JSON、tapir、zio-schema 编解码，`Sql` 自动按 `label` 存取，当工具参数时 JSON Schema 列出全部 label），不写字符串比较；带分支字段的接口数据（时间线条目、回复段、实时事件、挂起说明、等待项）是 JSON 里 `kind` 为分支名的 ADT。
+- **状态与种类**：跨领域、存库、走接口的状态与种类都是 `Labeled` 枚举（contract 的 `Labels` 给出解析、JSON、tapir、zio-schema 编解码，`Sql` 自动按 `label` 存取，当工具参数时 JSON Schema 列出全部 label），不写字符串比较；带分支字段的接口数据（时间线条目、来信来源、回复段、实时事件、挂起说明、等待项）是 JSON 里 `kind` 为分支名的 ADT。
 - **要用户批准的执行**：工具返回 `ToolOutcome.Suspended(Pause.Approval(给用户看的摘要, 数据))`，工具本身用 `Approvable(工具)(批准后怎么做)` 包起来：用户批准后会话领域按调用的工具名找回它接着执行（`always` 表示用户选了以后不再问）。
 - **工具调用的状态**：`CallStatus = Pending | Running | Suspended(挂起说明) | Approved(批准说明, always) | Done(结果)`，各步带着自己的数据和时间；库里仍是平铺的列，写入只经 `CallTx.save(调用, 状态)`，读出经 `Decode.call` 还原。
 - **事件**：`Contribution.listener` 订阅 `SessionEvent`（提交后按贡献的顺序同步逐个调用）：`Settled`（回到空闲/最终失败/被停止，`toUser` 表示用户在等；最终失败无论谁在等都该通知用户）、`NeedsUser`（提问、等批准）、`Deleted`。未读是必填的 `SessionPorts.unread`（通知领域的 `SessionLink.unread`）。
-- **时间线**：`Sessions.timeline(id)` 给出界面与 `session_read` 共用的投影（`TimelineItem`，来信的 `source` 就是 USER/TRIGGER/ISSUE/DELEGATION/EVENT 标签）。
+- **时间线**：`Sessions.timeline(id)` 给出界面与 `session_read` 共用的投影（`TimelineItem`，来信的 `source` 是 ADT `SourceView`：触发器名、issue 号、发起会话等都带在类型里，前端不拆字符串；session_read 的 USER/TRIGGER/… 标签由 history 的 `Reading.source` 给出）。存库的 `Source` 与接口的 `SourceView` 分开：两边 JSON 写法不同（库里是 zio-json 默认的外包对象），分开就不用迁移，`Source.view` 穷尽映射。
 
 ## 通知与推送（notifications，#870）
 - **配置**：`[push]` 必填：`vapid_subject`（`mailto:` 或 `https://` 开头）；`vapid_key_file` 可选，默认数据目录下的 `vapid_private.pem`（PKCS#8 PEM，与现有文件同一格式，迁移时原样复制即可，已订阅的设备不用重订；没有就生成，权限 600；读不出来报错、不覆盖）。

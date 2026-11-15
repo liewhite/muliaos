@@ -267,7 +267,7 @@ object TestEnv:
         case EntryView.Notice(_, x)          => Some(x)
         case _: EntryView.Reply              => None
       def source: Option[String] = t.entry match
-        case EntryView.Letter(s, _, _, _) => Some(s.kind.label)
+        case EntryView.Letter(s, _, _, _) => Some(s.productPrefix.toUpperCase)
         case _                            => None
       def files: List[FileView] = t.entry match
         case EntryView.Letter(_, _, fs, _) => fs

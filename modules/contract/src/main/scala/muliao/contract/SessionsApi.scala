@@ -183,17 +183,7 @@ object PartView:
 
 final case class UsageView(input: Long, output: Long, cacheRead: Long, cacheWrite: Long) derives JsonCodec, Schema
 
-/** 来信的来源种类（也是 `session_read` 里的标签）。 */
-enum SourceKind(val label: String) extends Labeled:
-  case User       extends SourceKind("USER")
-  case Trigger    extends SourceKind("TRIGGER")
-  case Issue      extends SourceKind("ISSUE")
-  case Delegation extends SourceKind("DELEGATION")
-  case Event      extends SourceKind("EVENT")
-
-object SourceKind extends Labels[SourceKind]("来信来源", SourceKind.values)
-
-/** 平台事件的种类（只用于展示）。 */
+/** 平台事件的种类。写法存在库里的来信中，不能改（改了旧来信解不出来）。 */
 enum EventKind(val label: String) extends Labeled:
   /** 约的唤醒到点 */
   case Wake       extends EventKind("wake")
@@ -216,13 +206,6 @@ enum SourceView derives JsonCodec:
   case Delegation(from: SessionId, agent: AgentName)
   /** 平台事件：后台任务结束、委派回报、唤醒、心跳检查 */
   case Event(event: EventKind)
-
-  def kind: SourceKind = this match
-    case User             => SourceKind.User
-    case Trigger(_)       => SourceKind.Trigger
-    case Issue(_)         => SourceKind.Issue
-    case Delegation(_, _) => SourceKind.Delegation
-    case Event(_)         => SourceKind.Event
 
 object SourceView:
   given Schema[SourceView] =
