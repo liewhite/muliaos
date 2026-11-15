@@ -1,7 +1,7 @@
 package muliao.history
 
 import muliao.board.IssueActivity
-import muliao.contract.AgentId
+import muliao.contract.{AgentId, Origin}
 import muliao.sessions.*
 
 import java.time.{Instant, LocalDate, ZoneId}

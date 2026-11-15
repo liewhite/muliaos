@@ -102,7 +102,7 @@ object TestEnv:
 
   /** 这个 agent 由触发器开出的会话（旧的在前）。 */
   def triggerSessions(agent: AgentId): ZIO[SessionConsole, AppError, List[SessionSummary]] =
-    ZIO.serviceWithZIO[SessionConsole](_.list(Some(agent), None, None, 200)).map(_.items.filter(_.origin == OriginKind.Trigger).sortBy(_.createdAt))
+    ZIO.serviceWithZIO[SessionConsole](_.list(Some(agent), None, None, 200)).map(_.items.filter(_.origin.kind == OriginKind.Trigger).sortBy(_.createdAt))
 
   def eventually[R, A](what: String)(get: ZIO[R, AppError, A])(ok: A => Boolean): ZIO[R, AppError, A] =
     Live.live(S.eventually(what)(get)(ok))

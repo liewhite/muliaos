@@ -66,6 +66,28 @@ enum OriginKind(val label: String) extends Labeled:
 
 object OriginKind extends Labels[OriginKind]("会话来源", OriginKind.values)
 
+/** 会话的来源：谁开的。JSON 里 `kind` 是分支名。库里按种类、引用、发起会话三列存（见 sessions 的 SessionInfo）。 */
+@jsonDiscriminator("kind")
+enum Origin derives JsonCodec:
+  /** 用户在界面上新建 */
+  case User
+  case Trigger(name: TriggerName)
+  /** 某 agent 处理某 issue 的专属会话（每个 issue + agent 一个） */
+  case Issue(id: IssueId)
+  /** 委派开出的 thread：挂在发起会话下（发起会话删了就是 None），同名续聊 */
+  case Thread(parent: Option[SessionId], name: ThreadName)
+
+  def kind: OriginKind = this match
+    case User         => OriginKind.User
+    case Trigger(_)   => OriginKind.Trigger
+    case Issue(_)     => OriginKind.Issue
+    case Thread(_, _) => OriginKind.Thread
+
+object Origin:
+  given Schema[Origin] =
+    import Tagged.config
+    Schema.derived
+
 /** 界面怎么展示一次工具调用：种类由工具声明，要用到的参数（命令、路径、委派对象）由后端从参数里取好，前端不按字段名去挖。
   * 参数还没生成完或解不开时是 [[Plain]]。JSON 里 `kind` 是分支名。
   */
@@ -97,18 +119,13 @@ object Display:
 
 // ---- 会话列表 ----
 
-/** 会话列表里的一行。
-  * @param originRef 触发器名 / issue 号 / thread 名
-  * @param parent    thread 的发起会话
-  */
+/** 会话列表里的一行。 */
 final case class SessionSummary(
     id: SessionId,
     agent: AgentId,
     agentName: String,
     title: String,
-    origin: OriginKind,
-    originRef: Option[String],
-    parent: Option[SessionId],
+    origin: Origin,
     state: WorkState,
     unread: Boolean,
     createdAt: Long,

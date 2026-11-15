@@ -22,7 +22,7 @@ final case class TranscriptCtx(
 ):
   /** 委派调用开出（或续写）的 thread。 */
   def threadOf(c: CallView): Option[SessionSummary] = c.display match
-    case Display.Delegate(agent, thread) => threads.find(t => t.originRef.contains(thread.value) && t.agentName == agent.value)
+    case Display.Delegate(agent, thread) => threads.find(t => t.origin == Origin.Thread(Some(session), thread) && t.agentName == agent.value)
     case _                               => None
 
 /** 会话时间线怎么画。展开状态按条目的键记在页面里：数据刷新、条目重画都不会把展开的收起来。 */
@@ -148,7 +148,9 @@ final class TranscriptView:
     Ui.appLink(Route.session(t.id).url)(
       cls := "flex items-center gap-2 self-start rounded-lg px-2 py-1 text-sm hover:bg-surface-hover",
       Icon("GitBranch", "size-3.5 shrink-0 text-muted"),
-      span(cls := "truncate font-medium", t.originRef.getOrElse("thread")),
+      span(cls := "truncate font-medium", t.origin match
+        case Origin.Thread(_, name) => name.value
+        case _                      => "thread"),
       span(cls := "truncate text-muted", t.agentName),
       Option.when(t.unread)(span(cls := "size-2 shrink-0 rounded-full bg-accent", aria.label := "未读")),
       span(cls := "ml-auto shrink-0 text-xs text-muted", Ui.formatTime(t.updatedAt))

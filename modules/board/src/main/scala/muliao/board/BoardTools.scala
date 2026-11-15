@@ -3,7 +3,7 @@ package muliao.board
 import muliao.contract.*
 import muliao.platform.AppError
 import muliao.resources.agents.Agents
-import muliao.sessions.{Origin, RunContext}
+import muliao.sessions.RunContext
 import muliao.toolkit.*
 import zio.*
 import zio.json.*

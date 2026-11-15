@@ -26,12 +26,25 @@ final case class SessionInfo(
 private[sessions] object SessionInfo:
   def decode(r: SessionRow): IO[AppError, SessionInfo] =
     for
-      origin  <- ZIO.fromEither(Origin.of(r.origin, r.originRef, r.parentId)).mapError(e => AppError.Internal(s"会话 ${r.id.value} 的来源记录坏了：$e"))
+      origin  <- ZIO.fromEither(origin(r)).mapError(e => AppError.Internal(s"会话 ${r.id.value} 的来源记录坏了：$e"))
       pending <- Decode.replyTos(r.pendingReply)
     yield SessionInfo(r.id, r.agentId, origin, r.title, pending, r.createdAt, r.updatedAt)
 
+  /** 从库里的种类、引用（触发器名 / issue 号 / thread 名）、发起会话还原来源。 */
+  private def origin(r: SessionRow): Either[String, Origin] = (r.origin, r.originRef) match
+    case (OriginKind.User, _)          => Right(Origin.User)
+    case (OriginKind.Trigger, Some(n)) => TriggerName.make(n).map(Origin.Trigger(_))
+    case (OriginKind.Issue, Some(n))   => n.toLongOption.flatMap(i => IssueId.make(i).toOption).map(Origin.Issue(_)).toRight(s"issue 号 $n")
+    case (OriginKind.Thread, Some(n))  => ThreadName.make(n).map(Origin.Thread(r.parentId, _))
+    case (k, None)                     => Left(s"${k.label} 没有引用")
+
   def row(id: SessionId, agent: AgentId, origin: Origin, title: String, now: Long): SessionRow =
-    SessionRow(id, agent, origin.kind, origin.ref, origin.parentId, title, "[]", now, now)
+    val (ref, parent) = origin match
+      case Origin.User         => (None, None)
+      case Origin.Trigger(n)   => (Some(n.value), None)
+      case Origin.Issue(i)     => (Some(i.value.toString), None)
+      case Origin.Thread(p, n) => (Some(n.value), p)
+    SessionRow(id, agent, origin.kind, ref, parent, title, "[]", now, now)
 
 /** 本领域各部分共用的底子：库、「数据变了」广播、实时事件、接进来的东西、配置，以及读会话基本信息。 */
 private[sessions] final case class Kernel(db: Database, bus: ChangeBus, live: LiveHub, ports: Ports, settings: SessionSettings, general: GeneralSettings):

@@ -100,11 +100,11 @@ object LiveReply:
 /** 会话页。 */
 object SessionView:
   /** issue 会话的页头标题：指回它的 issue，显示编号、标题、当前状态。 */
-  private def issueTitle(n: Long, fallback: String): HtmlElement =
-    val issue = Remote(BoardApi.get)(IssueId.wrap(n))
-    Ui.appLink(Route.issue(IssueId.wrap(n)).url)(
+  private def issueTitle(n: IssueId, fallback: String): HtmlElement =
+    val issue = Remote(BoardApi.get)(n)
+    Ui.appLink(Route.issue(n).url)(
       cls := "flex min-w-0 items-center gap-1.5 hover:text-accent",
-      child <-- issue.map(l => span(cls := "min-w-0 truncate", l.data.fold(fallback)(d => s"#$n ${d.summary.title}"))),
+      child <-- issue.map(l => span(cls := "min-w-0 truncate", l.data.fold(fallback)(d => s"#${n.value} ${d.summary.title}"))),
       child.maybe <-- issue.map(_.data.map(d => span(cls := "shrink-0 text-xs font-normal text-muted", d.summary.status.shown))),
       child.maybe <-- issue.map {
         case Load.Failed(m) => Some(span(cls := "shrink-0 text-xs font-normal text-danger", m))
@@ -198,7 +198,9 @@ object SessionView:
       .map((active, threads) => TranscriptCtx(id, active, threads, answer))
 
     val summary = detail.map(_.data.map(_.summary))
-    val parent  = summary.map(_.flatMap(_.parent))
+    val parent  = summary.map(_.flatMap(_.origin match
+      case Origin.Thread(p, _) => p
+      case _                   => None))
     // 返回：thread 回发起会话，其余回列表（来源页优先，见 Router.back）
     val backTo  = parent.map(_.fold(Route.home)(p => Route.session(p)))
     val backNow = Var[Route](Route.home)
@@ -237,9 +239,11 @@ object SessionView:
 
     Ui.page(
       title = child <-- summary.map {
-        case Some(s) if s.origin == OriginKind.Issue => s.originRef.flatMap(_.toLongOption).fold[HtmlElement](span(s.title))(n => issueTitle(n, s.title))
-        case Some(s)                        => span(s.title)
-        case None                           => span("会话")
+        case Some(s) =>
+          s.origin match
+            case Origin.Issue(n) => issueTitle(n, s.title)
+            case _               => span(s.title)
+        case None => span("会话")
       },
       backTo = Some(() => backNow.now()),
       actions = Seq(
@@ -289,13 +293,14 @@ object SessionView:
             span(cls := "text-xs text-muted", child.text <-- d.map(x => Ui.formatTime(x.summary.createdAt)))
           ),
           child.maybe <-- d.map(x =>
-            x.summary.parent.map(p =>
-              Ui.appLink(Route.session(p).url, withFrom = false)(
-                cls := "flex items-center justify-center gap-1 text-xs text-accent",
-                Icon("CornerLeftUp", "size-3.5"),
-                s"来自上级会话的 thread「${x.summary.originRef.getOrElse("")}」"
-              )
-            )
+            x.summary.origin match
+              case Origin.Thread(Some(p), name) =>
+                Some(Ui.appLink(Route.session(p).url, withFrom = false)(
+                  cls := "flex items-center justify-center gap-1 text-xs text-accent",
+                  Icon("CornerLeftUp", "size-3.5"),
+                  s"来自上级会话的 thread「${name.value}」"
+                ))
+              case _ => None
           ),
           Ui.loading(timeline) { t =>
             div(

@@ -1,5 +1,6 @@
 package muliao.sessions
 
+import muliao.contract.Origin
 import muliao.resources.{ResourcePrompt, RunResources}
 
 import java.nio.file.Path

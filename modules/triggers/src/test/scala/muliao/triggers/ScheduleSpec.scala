@@ -49,7 +49,7 @@ object ScheduleSpec extends ZIOSpecDefault:
           t.nextAt.contains(minute(1)),
           v1.nextAt.contains(minute(2)),
           v1.lastSession.contains(s1.head.id),
-          s2.forall(s => s.originRef.contains("tick") && s.title == "tick"),
+          s2.forall(s => s.origin == Origin.Trigger(TriggerName.wrap("tick")) && s.title == "tick"),
           tl.toString.contains("整点报时")
         )
       ))

@@ -64,7 +64,7 @@ object SessionList:
             div(
               cls := "mt-1 flex flex-wrap gap-1.5",
               children <-- s.combineWith(models).map { (x, ms) =>
-                (Option.when(withAgent)(x.agentName).toList ++ Option.when(withAgent)(ms.get(x.agent)).flatten.toList ++ List(originTag(x.origin)))
+                (Option.when(withAgent)(x.agentName).toList ++ Option.when(withAgent)(ms.get(x.agent)).flatten.toList ++ List(originTag(x.origin.kind)))
                   .map(t => Ui.chip(t, soft = false)(cls := "chip--secondary")) ++
                   (x.state match
                     case WorkState.Running => List(Ui.chip("运行中", Tone.Accent)())

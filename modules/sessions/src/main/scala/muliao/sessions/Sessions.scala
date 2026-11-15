@@ -216,9 +216,9 @@ object Sessions:
         st     <- workStates.states(rows.map(_.id))
         unread <- ports.unread.flatMap(_.unread(rows.map(_.id)))
         ns     <- agents.names(rows.map(_.agentId))
-      yield rows.map(r =>
-        SessionSummary(r.id, r.agentId, ns(r.agentId), r.title, r.origin, r.originRef, r.parentId,
-          st.getOrElse(r.id, WorkState.Idle), unread(r.id), r.createdAt, r.updatedAt)
+        infos  <- ZIO.foreach(rows)(SessionInfo.decode)
+      yield infos.map(i =>
+        SessionSummary(i.id, i.agent, ns(i.agent), i.title, i.origin, st.getOrElse(i.id, WorkState.Idle), unread(i.id), i.createdAt, i.updatedAt)
       )
 
     def list(agent: Option[AgentId], q: Option[String], before: Option[Long], limit: Int, origins: List[OriginKind]): IO[AppError, SessionPage] =

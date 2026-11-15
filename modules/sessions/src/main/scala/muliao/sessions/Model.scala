@@ -13,43 +13,6 @@ type DelegationId = DelegationId.Type
 object WaitId extends LongId
 type WaitId = WaitId.Type
 
-/** 会话的来源：谁开的。 */
-enum Origin:
-  /** 用户在界面上新建 */
-  case User
-  case Trigger(name: TriggerName)
-  /** 某 agent 处理某 issue 的专属会话（每个 issue + agent 一个） */
-  case Issue(id: IssueId)
-  /** 委派开出的 thread：挂在发起会话下（发起会话删了就是 None），同名续聊 */
-  case Thread(parent: Option[SessionId], name: ThreadName)
-
-  def kind: OriginKind = this match
-    case User         => OriginKind.User
-    case Trigger(_)   => OriginKind.Trigger
-    case Issue(_)     => OriginKind.Issue
-    case Thread(_, _) => OriginKind.Thread
-
-  /** 存库的引用：触发器名 / issue 号 / thread 名。 */
-  def ref: Option[String] = this match
-    case User         => None
-    case Trigger(n)   => Some(n.value)
-    case Issue(i)     => Some(i.value.toString)
-    case Thread(_, n) => Some(n.value)
-
-  /** thread 的发起会话。 */
-  def parentId: Option[SessionId] = this match
-    case Thread(p, _) => p
-    case _            => None
-
-object Origin:
-  /** 从库里的种类与引用还原。 */
-  def of(kind: OriginKind, ref: Option[String], parent: Option[SessionId]): Either[String, Origin] = (kind, ref) match
-    case (OriginKind.User, _)          => Right(User)
-    case (OriginKind.Trigger, Some(n)) => TriggerName.make(n).map(Trigger(_))
-    case (OriginKind.Issue, Some(n))   => n.toLongOption.flatMap(i => IssueId.make(i).toOption).map(Issue(_)).toRight(s"issue 号 $n")
-    case (OriginKind.Thread, Some(n))  => ThreadName.make(n).map(Thread(parent, _))
-    case (k, None)                     => Left(s"${k.label} 没有引用")
-
 /** 来信的来源。用户能给任何会话写信，其他来源只能续写自己开出的会话（见 [[Source.mayWrite]]）。 */
 enum Source derives JsonCodec:
   case User
