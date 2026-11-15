@@ -187,6 +187,25 @@ object TestEnv:
   /** 测试工具。 */
   def probeContribution(p: Probe): Contribution = Contribution(tools(p))
 
+  /** 直接调用工具用的上下文（不经模型）。 */
+  def context(agent: AgentId, run: Long = 1L, session: String = "direct"): ZIO[Resources & ResourcePaths, AppError, RunContext] =
+    for
+      res <- ZIO.serviceWithZIO[Resources](_.forRun(agent))
+      dir <- ZIO.serviceWithZIO[ResourcePaths](_.ensureWorkspace(agent))
+    yield RunContext(agent, res.agent.name, SessionId.wrap(session), RunId.wrap(run), CallId.wrap("c"), Origin.User, dir, res, userWaiting = true)
+
+  /** 工具结果的文字：成功时是内容（图片写成 `[image:类型]`），其余带 `[rejected]` 等前缀。 */
+  def outcome(r: Either[ToolFailure, ToolOutcome[Pause]]): String = r match
+    case Right(ToolOutcome.Completed(cs)) =>
+      cs.map {
+        case ToolContent.Text(t)     => t
+        case ToolContent.Image(m, _) => s"[image:$m]"
+      }.mkString
+    case Right(ToolOutcome.Suspended(s))     => s"[suspended:$s]"
+    case Left(ToolFailure.Rejected(m))       => s"[rejected] $m"
+    case Left(ToolFailure.Unavailable(m, _)) => s"[unavailable] $m"
+    case Left(ToolFailure.Aborted(m, _))     => s"[aborted] $m"
+
   /** 启动以来的全部会话事件。 */
   def recordEvents: URIO[EventLog, Ref[List[SessionEvent]]] = ZIO.serviceWith[EventLog](_.events)
 

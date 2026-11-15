@@ -2,17 +2,16 @@ package muliao.sessions
 
 import muliao.contract.*
 import muliao.models.llm.*
-import muliao.models.mcp.{Launch, McpConnector, McpServerSpec, McpTransport, SecretLookup}
+import muliao.models.mcp.{Launch, McpConnector, McpServerSpec, SecretLookup}
 import muliao.platform.{AppError, Retry}
 import muliao.platform.db.Tx
 import muliao.resources.{ResourcePaths, Resources, RunResources}
-import muliao.resources.tree.McpTransport as AssetTransport
 import muliao.resources.vault.{SecretUse, Vault}
 import muliao.sessions.store.*
 import muliao.toolkit.{Tool, ToolSpec}
 import zio.*
 
-import java.nio.file.{Files as JFiles, Path}
+import java.nio.file.Path
 
 /** 一次运行要的全部东西：运行开始（驱动 fiber 起来）时准备一次。 */
 private[sessions] final case class Kit(
@@ -55,8 +54,7 @@ private[sessions] final case class Requests(
       r     <- resources.forRun(i.agent)
       model <- ZIO.fromEither(ModelRef.parse(r.profile.model)).mapError(AppError.invalid)
       _     <- ZIO.foreachDiscard(models.problem(model.toString))(p => ZIO.fail(AppError.invalid(s"agent 的模型 $model 用不了：$p")))
-      ws     = paths.workspace(i.agent)
-      _     <- ZIO.attemptBlocking(JFiles.createDirectories(ws)).mapError(e => AppError.internal(s"建不了工作目录 $ws：${e.getMessage}", e))
+      ws    <- paths.ensureWorkspace(i.agent)
       builtin <- ports.tools.map(_.filter(t => r.tools(t.spec.name)))
       conn    <- connectMcp(i, r, ws)
       names    = builtin.map(_.spec.name).toSet
@@ -76,12 +74,7 @@ private[sessions] final case class Requests(
 
   /** 连上它能用、启用了的 MCP server（连接随驱动 fiber 结束而断开）。 */
   private def connectMcp(i: SessionInfo, r: RunResources, ws: Path): ZIO[Scope, AppError, McpTools] =
-    val specs = Chunk.fromIterable(r.mcps.filter(_.config.enabled).map { m =>
-      val t = m.config.transport match
-        case AssetTransport.Stdio(c, args, env) => McpTransport.Stdio(c, Chunk.fromIterable(args), env)
-        case AssetTransport.Http(url, headers)  => McpTransport.Http(url, headers)
-      McpServerSpec(m.name, t)
-    })
+    val specs = Chunk.fromIterable(r.mcps.filter(_.config.enabled).map(m => McpServerSpec(m.name, m.config.transport)))
     if specs.isEmpty then ZIO.succeed(McpTools(Nil, Nil))
     else
       val lookup = new SecretLookup:

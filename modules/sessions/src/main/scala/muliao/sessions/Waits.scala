@@ -64,9 +64,9 @@ private[sessions] object Wait:
     WaitRow(WaitId.wrap(0L), session, key.kind, key.ref, label, heartbeat.map(_.toSeconds.toInt.max(1)), due, t)
 
 /** 异步工作的登记与结局交回：后台任务、带回报的委派、定时唤醒。结局作为事件投回发起会话。
-  * 进行中的等待在内存里有一份（[[cached]]），供 [[WaitClock]] 每秒看一遍，不必每秒查库。
+  * 库是唯一的记录：[[WaitClock]] 每秒查一遍全部（进行中的等待只有几条，一次查询不到 0.1 毫秒，#892 实测）。
   */
-private[sessions] final class Waits(kernel: Kernel, mailbox: Mailbox, doorbell: Doorbell, cache: Ref[Map[WaitId, Wait]]):
+private[sessions] final class Waits(kernel: Kernel, mailbox: Mailbox, doorbell: Doorbell):
   import kernel.*
 
   def open(session: SessionId, ref: WaitRef, label: String, heartbeat: Option[Duration]): IO[AppError, WaitId] =
@@ -77,8 +77,6 @@ private[sessions] final class Waits(kernel: Kernel, mailbox: Mailbox, doorbell: 
     for
       _  <- Repo.session(session).someOrFail(AppError.notFound(s"会话 ${session.value} 不存在"))
       id <- Repo.insertWait(row)
-      w   = Wait(id, session, ref, label, row.heartbeatSeconds, t)
-      _  <- afterCommit(cache.update(_.updated(id, w)))
       _  <- touched(session, t)
     yield id
 
@@ -97,12 +95,11 @@ private[sessions] final class Waits(kernel: Kernel, mailbox: Mailbox, doorbell: 
         for
           _ <- Repo.deleteWait(w.id)
           _ <- ZIO.foreachDiscard(letter)(l => mailbox.deliverTx(Address.To(w.sessionId), l, None, t))
-          _ <- afterCommit(forget(List(w.id)))
           _ <- touched(w.sessionId, t)
         yield Some(w.sessionId)
     }
 
-  /** 在写事务里删掉一个会话的全部等待（停止时），返回删掉的。提交后由调用方 [[forget]] 并放弃这些工作。 */
+  /** 在写事务里删掉一个会话的全部等待（停止时），返回删掉的。提交后由调用方放弃这些工作。 */
   def dropTx(session: SessionId): Tx[List[Wait]] =
     for
       rows <- Repo.waitsOf(session)
@@ -110,18 +107,11 @@ private[sessions] final class Waits(kernel: Kernel, mailbox: Mailbox, doorbell: 
       _    <- ZIO.foreachDiscard(rows)(r => Repo.deleteWait(r.id))
     yield ws
 
-  /** 不再调度这些等待（已删掉，或投递失败暂停到重启）。 */
-  def forget(ids: List[WaitId]): UIO[Unit] = cache.update(_ -- ids)
-
-  def forgetSession(session: SessionId): UIO[Unit] = cache.update(_.filterNot(_._2.session == session))
-
   def list(session: SessionId): IO[AppError, List[Wait]] = db.read(Repo.waitsOf(session)).flatMap(ZIO.foreach(_)(decodeTx))
 
-  def cached: UIO[List[Wait]] = cache.get.map(_.values.toList)
-
-  /** 从库里载入全部等待（启动时）。 */
-  def load: IO[AppError, List[Wait]] =
-    db.read(Repo.allWaits).flatMap(ZIO.foreach(_)(decodeTx)).tap(all => cache.set(all.map(w => w.id -> w).toMap))
+  /** 全部进行中的等待；记录坏了的单独列出（编号与原因），不挡别的。 */
+  def all: IO[AppError, List[Either[(WaitId, String), Wait]]] =
+    db.read(Repo.allWaits).map(_.map(r => Wait.decode(r).left.map(r.id -> _)))
 
   private def decodeTx(r: WaitRow): IO[AppError, Wait] = ZIO.fromEither(Wait.decode(r)).mapError(AppError.Internal(_))
 
@@ -137,7 +127,7 @@ private[sessions] final class Waits(kernel: Kernel, mailbox: Mailbox, doorbell: 
       old <- db.read(Repo.waitByKey(key.kind, key.ref))
       _ <- db.write(
              for
-               _ <- ZIO.foreachDiscard(old)(w => Repo.deleteWait(w.id) *> afterCommit(forget(List(w.id))))
+               _ <- ZIO.foreachDiscard(old)(w => Repo.deleteWait(w.id))
                _ <- ZIO.foreachDiscard(at)(due => openTx(session, WaitRef.Wake(due), note, None, t))
                _ <- touched(session, t)
              yield ()
@@ -149,12 +139,4 @@ private[sessions] final class Waits(kernel: Kernel, mailbox: Mailbox, doorbell: 
       case None => if old.isDefined then "已取消唤醒。" else "本来就没有约唤醒。"
 
 private[sessions] object Waits:
-  val layer: URLayer[Kernel & Mailbox & Doorbell, Waits] =
-    ZLayer(
-      for
-        k     <- ZIO.service[Kernel]
-        m     <- ZIO.service[Mailbox]
-        d     <- ZIO.service[Doorbell]
-        cache <- Ref.make(Map.empty[WaitId, Wait])
-      yield Waits(k, m, d, cache)
-    )
+  val layer: URLayer[Kernel & Mailbox & Doorbell, Waits] = ZLayer.fromFunction(Waits(_, _, _))

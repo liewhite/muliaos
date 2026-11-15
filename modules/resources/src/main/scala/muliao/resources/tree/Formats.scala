@@ -1,6 +1,8 @@
 package muliao.resources.tree
 
 import muliao.contract.Thinking
+import muliao.toolkit.McpTransport
+import zio.Chunk
 import org.snakeyaml.engine.v2.api.{Load, LoadSettings}
 import zio.json.*
 import zio.json.ast.Json
@@ -109,7 +111,7 @@ object Formats:
                          command <- str(fields, "command").flatMap(_.filter(_.nonEmpty).toRight("stdio 必须有 command"))
                          args    <- strList(fields, "args")
                          env     <- strMap(fields, "env")
-                       yield McpTransport.Stdio(command, args, env)
+                       yield McpTransport.Stdio(command, Chunk.fromIterable(args), env)
                      case Some(Json.Str("http")) =>
                        for
                          _       <- forbid(fields, "http", "command", "args", "env")

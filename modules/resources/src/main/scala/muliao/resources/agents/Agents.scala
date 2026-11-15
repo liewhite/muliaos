@@ -214,7 +214,7 @@ object Agents:
           profile = AgentProfile(req.description.trim, model, req.thinking, req.group.map(_.trim).filter(_.nonEmpty))
           _ <- store.write(AssetPath.AgentFile(name), Formats.renderAgent(profile))
           _ <- store.write(AssetPath.PrivateMemory(name), "")
-          _ <- ZIO.attemptBlocking(Files.createDirectories(paths.workspace(id))).mapError(e => AppError.internal("建工作目录失败", e))
+          _ <- paths.ensureWorkspace(id)
           record = AgentRecord(id, name, AgentRecord.keyOf(name.value), AgentState.Active, false, None, t, t)
           _ <- db.write(AgentRepo.insert(record) *> publish).tapError(_ => store.delete(dir(name)).ignoreLogged)
           grants = AgentGrants(req.roles.distinct, allow, deny)

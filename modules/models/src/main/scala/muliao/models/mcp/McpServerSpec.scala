@@ -1,15 +1,8 @@
 package muliao.models.mcp
 
 import muliao.platform.AppError
+import muliao.toolkit.{McpTransport, VaultRef}
 import zio.*
-
-/** 一个 MCP server 的连接方式。值（命令参数、环境变量、地址、请求头）里可以有 `${vault:KEY}`，连接时代入 secret。 */
-enum McpTransport:
-  /** 本地进程，走标准输入输出。经平台执行层起：自成进程组、进使用者的写沙箱，连接断开时整组结束。 */
-  case Stdio(command: String, args: Chunk[String], env: Map[String, String])
-
-  /** 远端 HTTP（Streamable HTTP）。 */
-  case Http(url: String, headers: Map[String, String])
 
 /** @param name 名字，也是它的工具名前缀（`<name>_<工具名>`） */
 final case class McpServerSpec(name: String, transport: McpTransport)
@@ -36,16 +29,11 @@ object Filled:
 
 /** `${vault:KEY}` 模板。 */
 object VaultTemplate:
-  private val Pattern = """\$\{vault:([A-Za-z0-9_.-]+)\}""".r
-
-  /** 文本里引用的 secret 名。 */
-  def keys(text: String): Set[String] = Pattern.findAllMatchIn(text).map(_.group(1)).toSet
-
   /** 代入：换掉每个 `${vault:KEY}`，并交回用到的明文。 */
   def fill(text: String, lookup: SecretLookup): IO[AppError, Filled[String]] =
-    ZIO.foreach(keys(text).toList)(k => lookup.reveal(k).map(k -> _)).map { pairs =>
+    ZIO.foreach(VaultRef.keys(text).toList)(k => lookup.reveal(k).map(k -> _)).map { pairs =>
       val values = pairs.toMap
-      Filled(Pattern.replaceAllIn(text, m => java.util.regex.Matcher.quoteReplacement(values(m.group(1)))), Revealed(values))
+      Filled(VaultRef.Pattern.replaceAllIn(text, m => java.util.regex.Matcher.quoteReplacement(values(m.group(1)))), Revealed(values))
     }
 
   /** 把整份连接方式里的模板都代入。 */

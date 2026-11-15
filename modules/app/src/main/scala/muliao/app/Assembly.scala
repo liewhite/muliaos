@@ -62,7 +62,7 @@ object Assembly:
   final case class Optional(web: Option[Web], transcriber: Option[Transcriber])
 
   type Services = Database & ChangeBus & Auth & ToolCatalog & AssetStore & AccessEditor & AssetGuard & ModelCheck & Agents & Resources & Vault &
-    ResourcePaths & Models & Optional & Files & Sessions & SessionConsole & Workspace.Services & Notifications & Board & History & Triggers &
+    ResourcePaths & AgentExec & Models & Optional & Files & Sessions & SessionConsole & Workspace.Services & Notifications & Board & History & Triggers &
     ServerSettings & GeneralSettings
 
   /** 装配全部领域。`models`：模型接入（测试里换成假模型）。 */
@@ -86,6 +86,7 @@ object Assembly:
       Resources.layer,
       Vault.layer,
       AssetGuard.layer,
+      AgentExec.layer,
       // 模型接入与外部服务
       models,
       McpConnector.layer,

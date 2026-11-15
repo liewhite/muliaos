@@ -4,7 +4,7 @@ import muliao.contract.*
 import muliao.platform.AppError
 import muliao.platform.db.Database
 import muliao.platform.events.ChangeBus
-import muliao.resources.ResourcePaths
+import muliao.resources.{AgentExec, ResourcePaths}
 import muliao.resources.tree.Owner
 import muliao.resources.vault.{Actor, Vault}
 import muliao.sessions.{Answer, CallKey, Files, SessionConsole, Sessions}

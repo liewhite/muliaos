@@ -1,6 +1,6 @@
 package muliao.resources.access
 
-import muliao.contract.{AgentId, AgentName, RoleName}
+import muliao.contract.{AgentId, AgentName, Labeled, Labels, RoleName}
 import muliao.resources.tree.TomlFile
 
 /** 一个角色：一组允许与禁止规则。 */
@@ -90,11 +90,12 @@ object AccessConfig:
     (roleBlocks ++ agentBlocks).mkString("", "\n\n", "\n")
 
 /** 内置角色：base 人人都有（全部非管理类工具、全局记忆），admin 拥有一切（全部工具、能用能改全部资源）。 */
-enum BuiltinRole(val name: String, val description: String):
+enum BuiltinRole(val name: String, val description: String) extends Labeled:
   case Base  extends BuiltinRole("base", "每个 agent 都有：全部非管理类工具、全局记忆，加上这里列出的资源")
   case Admin extends BuiltinRole("admin", "全部工具，能用、能改全部资源")
 
+  def label: String       = name
   def roleName: RoleName = RoleName.wrap(name)
 
-object BuiltinRole:
-  def of(name: RoleName): Option[BuiltinRole] = values.find(_.name == name.value)
+object BuiltinRole extends Labels[BuiltinRole]("内置角色", BuiltinRole.values):
+  def of(name: RoleName): Option[BuiltinRole] = parse(name.value).toOption

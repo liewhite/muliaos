@@ -25,12 +25,14 @@ private[sessions] final case class Mailbox(kernel: Kernel, files: Files, agents:
       _      <- ZIO.foreachDiscard(result)(d => doorbell.ring(d.session))
     yield result
 
-  /** 在调用方的写事务里投信（看板：与 issue 的改动同一事务提交）；提交后才开始跑。不带附件。 */
-  def deliverIn(to: Address, letter: Letter, dedupe: Option[String]): Tx[Option[Delivered]] =
+  /** 在调用方的写事务里投一封只有文字的信（看板：与 issue 的改动同一事务提交）；提交后才开始跑。
+    * 只收来源与文字：附件要先核对存在（[[deliver]] 在事务外做），这里写不进来。
+    */
+  def deliverIn(to: Address, source: Source, text: String, dedupe: Option[String]): Tx[Option[Delivered]] =
     for
       _      <- requireActive(to)
       t      <- now
-      result <- deliverTx(to, letter, dedupe, t)
+      result <- deliverTx(to, Letter(source, text), dedupe, t)
       _      <- ZIO.foreachDiscard(result)(d => afterCommit(doorbell.ring(d.session)))
     yield result
 

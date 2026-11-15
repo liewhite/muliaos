@@ -4,7 +4,7 @@
 # 在 $MULIAO_HOME/build/src（常驻的仓库副本，保留 sbt 编译输出与 node_modules）检出要装的版本，用 build.sh 打成单文件，
 # 用固定证书签名，放进新目录 $APP/<时间>-<commit>/，再复制成 app/current（路径和签名固定，文件访问授权才不丢，见 lib.sh）。
 # 不重启服务：装完用 deploy/activate.sh --restart-only 重启，或 activate.sh <版本目录> 换版本并重启。保留最近 $KEEP_VERSIONS 个版本目录。
-# 仓库默认是本脚本所在仓库（实验阶段只在本地，没有远端），可用 MULIAO_REPO 指定别的（路径或 URL）。
+# 仓库默认是本脚本所在的本地仓库（装本地已有的提交，不去 GitHub 远端取），可用 MULIAO_REPO 指定别的（路径或 URL）。
 set -eu
 . "$(dirname "$0")/lib.sh"
 REF=${1:-main}

@@ -10,30 +10,27 @@ import muliao.platform.events.ChangeBus
 import muliao.resources.*
 import muliao.resources.access.AccessEditor
 import muliao.resources.agents.Agents
-import muliao.resources.guard.AssetGuard
 import muliao.resources.tree.AssetStore
 import muliao.resources.vault.Vault
 import muliao.sessions.{Files, LiveHub, SessionConsole, SessionPaths, SessionSettings, Sessions}
 import muliao.sessions.TestEnv as S
-import muliao.workspace.Workspace
-import muliao.workspace.TestEnv as W
 import zio.*
 import zio.test.Live
 
 import java.nio.file.{Files as JFiles, Path}
 
-/** 触发器领域的测试环境：真的库、资源目录、会话、工作区、通知与本领域，假的模型与推送服务。 */
+/** 触发器领域的测试环境：真的库、资源目录、会话、通知与本领域，假的模型与推送服务。 */
 object TestEnv:
 
   val noPush: PushGateway = new PushGateway:
     def send(device: Device, payload: Array[Byte]): IO[PushFailure, Unit] = ZIO.unit
 
-  val toolCatalog: ToolCatalog = S.toolCatalog(SessionLink.specs ++ Workspace.specs ++ Triggers.specs)
+  val toolCatalog: ToolCatalog = S.toolCatalog(SessionLink.specs ++ Triggers.specs)
 
   /** 测试用的节奏：重启、跑稳都很快。 */
   val quick: Tuning = Tuning(busyPoll = 100.millis, restartFirst = 50.millis, restartMax = 200.millis, stableAfter = 1.second)
 
-  type Env = Triggers & TriggersHttp & Notifications & Workspace.Services & Sessions & SessionConsole & Agents & Database & ChangeBus & S.EventLog &
+  type Env = Triggers & TriggersHttp & Notifications & AgentExec & Sessions & SessionConsole & Agents & Database & ChangeBus & S.EventLog &
     Files & Resources & AssetStore & ResourcePaths & Vault
 
   /** `assetPoll`：资源目录轮询间隔；用测试时钟拨时间的测试调大，免得拨一次要跑成千上万次轮询。 */
@@ -52,7 +49,6 @@ object TestEnv:
         List(
           muliao.resources.Module.migrations,
           muliao.sessions.Module.migrations,
-          muliao.workspace.Module.migrations,
           muliao.notifications.Module.migrations,
           muliao.triggers.Module.migrations
         )
@@ -67,7 +63,6 @@ object TestEnv:
       Agents.layer,
       Resources.layer,
       Vault.layer,
-      AssetGuard.layer,
       ZLayer.succeed[Models](models),
       ZLayer.succeed(S.noMcp),
       ZLayer.succeed(SessionSettings()),
@@ -76,8 +71,7 @@ object TestEnv:
       LiveHub.layer,
       Files.layer,
       Sessions.layer,
-      ZLayer.succeed(W.signer),
-      Workspace.layer,
+      AgentExec.layer,
       ZLayer.scoped(
         for
           db  <- ZIO.service[Database]
@@ -91,11 +85,11 @@ object TestEnv:
       ZLayer(Ref.make(List.empty[muliao.sessions.SessionEvent]).map(S.EventLog(_)))
     )
 
-  /** 接好测试工具并按组装入口的顺序启动：会话 → 收尾后台任务 → 触发器。 */
+  /** 接好测试工具并按组装入口的顺序启动：会话 → 触发器。 */
   def start(p: S.Probe): ZIO[Env, AppError, Unit] =
     for
       t <- Triggers.contribution
-      _ <- W.startWith(List(S.probeContribution(p), t))
+      _ <- S.start(p, List(t))
       _ <- ZIO.serviceWithZIO[Triggers](_.start)
     yield ()
 
@@ -134,4 +128,4 @@ object TestEnv:
     NewTrigger(name, agent, TriggerConfig.Stream(command, Nil, debounce), "处理事件", precheck = precheck)
 
   /** 不经工具直接用到的类型，免得测试文件逐个 import。 */
-  export muliao.sessions.TestEnv.{Script, dirs, fakeModels, probe, text, call, lastUserText, userTexts, agent}
+  export muliao.sessions.TestEnv.{Script, dirs, fakeModels, probe, text, call, lastUserText, userTexts, agent, context, outcome}

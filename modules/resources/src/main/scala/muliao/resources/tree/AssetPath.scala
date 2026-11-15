@@ -96,7 +96,7 @@ object AssetPath:
     if parts.isEmpty then Directory(None)
     else if parts.exists(_.startsWith(".")) then Hidden
     else
-      val owner = if parts.head == Owner.PlatformDir then Owner.Platform else Owner.Agent(AgentName.wrap(parts.head))
+      val owner = Owner.ofLabel(parts.head)
       (owner, parts.tail) match
         case (_, Nil)                                        => Directory(Some(owner))
         case (Owner.Platform, List("access.toml"))           => AccessFile
@@ -116,11 +116,7 @@ object AssetPath:
 
   /** 路径第一段对应的主人（资源目录根下的文件没有主人）。 */
   def ownerOf(relative: Path): Option[Owner] =
-    if relative.getNameCount < 2 then None
-    else
-      relative.getName(0).toString match
-        case Owner.PlatformDir => Some(Owner.Platform)
-        case n                 => Some(Owner.Agent(AgentName.wrap(n)))
+    Option.when(relative.getNameCount >= 2)(Owner.ofLabel(relative.getName(0).toString))
 
   /** 资源文件的规定位置（报错时提示用）。 */
   val layoutHint: String =

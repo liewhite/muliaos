@@ -82,15 +82,18 @@ object Remote:
     */
   def apply[I, O](e: Read[I, O])(in: I): Signal[Load[O]] = following(e)(Http.call(e)(in))
 
-  /** 同一个接口、请求自己组织（如连续翻页）：随 `e` 声明的主题重拉，`more` 发出时也重拉（如「显示更多」、手动刷新）。 */
+  /** 同一个接口、请求自己组织（如连续翻页）：挂上时拉（全站连接由外壳一直订阅着，换页不重连、没有 ready），
+    * 随 `e` 声明的主题重拉，`more` 发出时也重拉（如「显示更多」、手动刷新）。
+    */
   def following[A](e: Read[?, ?], more: EventStream[Unit] = EventStream.empty)(fetch: => Future[A]): Signal[Load[A]] =
     val topics = e.refreshTopics
-    triggered(EventStream.merge(Events.changes.filter(topics.contains).mapToUnit, Events.ready, Events.refreshNow.events, more))(fetch)
+    triggered(
+      EventStream.merge(EventStream.unit(emitOnce = true), Events.changes.filter(topics.contains).mapToUnit, Events.ready, Events.refreshNow.events, more)
+    )(fetch)
 
-  /** 只在挂上与 `more` 发出时拉（会话页按自己的实时事件重拉用它）。 */
-  def triggered[A](more: EventStream[Unit])(fetch: => Future[A]): Signal[Load[A]] =
-    EventStream
-      .merge(EventStream.unit(emitOnce = true), more.throttle(300))
+  /** 只在 `on` 发出时拉。会话页用它接自己的实时连接：那条连接随页面新开，连上时的 ready 就是第一次拉取，不再另拉。 */
+  def triggered[A](on: EventStream[Unit])(fetch: => Future[A]): Signal[Load[A]] =
+    on.throttle(300)
       .flatMapSwitch(_ => EventStream.fromFuture(fetch.transform(Success(_))))
       .scanLeft(Load.Pending: Load[A]) {
         case (_, Success(a))                      => Load.Loaded(a)

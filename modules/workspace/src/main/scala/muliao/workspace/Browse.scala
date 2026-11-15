@@ -51,8 +51,7 @@ object Browse:
       val rel = path.map(_.stripPrefix("/")).getOrElse("")
       for
         _    <- agents.get(agent)
-        root  = paths.workspace(agent)
-        _    <- ZIO.attemptBlocking(Files.createDirectories(root)).mapError(e => AppError.internal("建工作目录失败", e))
+        root <- paths.ensureWorkspace(agent)
         real <- inside(root, rel)
         out <- ZIO
                  .attemptBlocking {

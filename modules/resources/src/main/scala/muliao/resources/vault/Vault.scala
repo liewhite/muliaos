@@ -102,7 +102,7 @@ object Vault:
                            _ <- ZIO.when(owners.nonEmpty)(
                                   ZIO.fail(AppError.conflict(s"${owners.map(_.label).mkString("、")} 已有名为 $key 的 secret 文件（没加载：见资源问题），先处理它"))
                                 )
-                           owner = perms.fold(newOwner)(p => Owner.Agent(p.name))
+                           owner = perms.flatMap(_.name).fold(newOwner)(Owner.Agent(_))
                            next  = SecretFile(description.map(_.trim).getOrElse(""), fernet.encrypt(value, now), allowShell.getOrElse(true))
                            _ <- store.write(AssetPath.Secret(owner, key), Formats.renderSecret(next))
                          yield true

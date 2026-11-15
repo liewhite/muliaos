@@ -64,7 +64,6 @@ private[sessions] final case class Control(
                _     <- touched(id, t)
              yield Halted(ws, p, asked.size)
            )
-      _ <- waits.forget(h.waits.map(_.id))
       _ <- slot.partial.set(None)
       _ <- live.done(id)
       // 放弃等待中的工作：后台任务结束；委派的 thread 由下面逐层停下
@@ -166,7 +165,6 @@ private[sessions] final case class Control(
       // touch 对删掉的行无效，这里只借它发通知（列表去掉它，开着的会话页重拉得到「不存在」）
       t <- now
       _ <- db.write(Repo.orphanThreads(id) *> touched(id, t) *> Repo.deleteSession(id))
-      _ <- waits.forgetSession(id)
       _ <- live.done(id)
       _ <- ports.emit(SessionEvent.Deleted(id, i.agent, i.origin))
     yield ()

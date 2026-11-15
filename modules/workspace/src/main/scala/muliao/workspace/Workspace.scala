@@ -3,11 +3,10 @@ package muliao.workspace
 import muliao.contract.JobId
 import muliao.platform.db.Database
 import muliao.platform.events.ChangeBus
-import muliao.resources.{AgentHook, ResourcePaths, Resources}
+import muliao.resources.{AgentExec, AgentHook, ResourcePaths, Resources}
 import muliao.resources.agents.Agents
 import muliao.resources.guard.AssetGuard
 import muliao.resources.tree.AssetStore
-import muliao.resources.vault.Vault
 import muliao.sessions.{Contribution, Files, JobControl, Sessions}
 import muliao.toolkit.ToolSpec
 import muliao.workspace.jobs.Jobs
@@ -20,9 +19,9 @@ import zio.*
   * 以及后台任务的状态与取消（[[jobControl]]）。
   */
 object Workspace:
-  type Env = Database & ChangeBus & Sessions & Resources & AssetGuard & AssetStore & Vault & Agents & ResourcePaths & PageSigner
+  type Env = Database & ChangeBus & Sessions & Resources & AssetGuard & AssetStore & Agents & ResourcePaths & PageSigner & AgentExec
 
-  type Services = AgentExec & FileAccess & Jobs & ScriptGrants & Pages & Browse
+  type Services = FileAccess & Jobs & ScriptGrants & Pages & Browse
 
   /** 本领域工具的静态定义（组装时汇进全部内置工具目录）。 */
   val specs: List[ToolSpec] = FileTools.specs ++ ShellTools.specs ++ SkillRun.specs
@@ -56,7 +55,6 @@ object Workspace:
 
   val layer: ZLayer[Env, Nothing, Services] =
     ZLayer.makeSome[Env, Services](
-      AgentExec.layer,
       FileAccess.layer,
       Jobs.layer,
       ScriptGrants.layer,

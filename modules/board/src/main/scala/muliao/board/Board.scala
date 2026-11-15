@@ -139,7 +139,7 @@ object Board:
         r      <- render(List(issue), events)
         _ <- ZIO.foreachDiscard(targets) { a =>
                sessions
-                 .deliverIn(Address.IssueOf(a, issue.id, s"#${issue.id.value} ${issue.title}"), Letter(Source.Issue(issue.id), r.letter(issue, st.get, events)))
+                 .deliverIn(Address.IssueOf(a, issue.id, s"#${issue.id.value} ${issue.title}"), Source.Issue(issue.id), r.letter(issue, st.get, events))
                  .zipRight(Repo.clearNudge(issue.id, a))
                  .catchSome { case AppError.Domain(_, why) =>
                    record(issue.id, Actor.System(None), List(Activity.DeliveryFailed(a, why))).unit
@@ -420,7 +420,7 @@ object Board:
             asked <- Repo.nudged(id, agent)
             r     <- render(List(i), Nil)
             _ <- ZIO.when(Rules.worker(i, Rules.waitingOn(i, st.get)).contains(agent) && !asked) {
-                   sessions.deliverIn(Address.IssueOf(agent, id, s"#${id.value} ${i.title}"), Letter(Source.Issue(id), r.nudge(i))) *>
+                   sessions.deliverIn(Address.IssueOf(agent, id, s"#${id.value} ${i.title}"), Source.Issue(id), r.nudge(i)) *>
                      Repo.markNudged(id, agent)
                  }
           yield ()

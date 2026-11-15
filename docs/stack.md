@@ -45,24 +45,23 @@
 第 5 层  workspace   notifications
 第 6 层  board   triggers
 第 7 层  history
-第 8 层  app（组装入口）   migrate（迁移工具）
+第 8 层  app（组装入口）
 ```
 | 模块 | 内容 | 直接依赖（另外每个领域都依赖 platform、toolkit） |
 |---|---|---|
 | contract | 跨领域编号（`Newtype`/opaque type）、`ApiError`、`Change`、各领域的 tapir 接口声明 | — |
 | platform | 配置、数据库与迁移、错误模型、日志、出站 HTTP 与系统代理、退避重试、「数据变了」总线、HTTP 服务骨架（登录、SSE、OpenAPI、静态前端）、单实例锁；不含领域词汇 | contract |
-| toolkit | 给 agent 的工具的共同契约：`Tool`、`ToolSpec`、参数 schema 生成、失败分类 | platform |
+| toolkit | 给 agent 的工具的共同契约：`Tool`、`ToolSpec`、参数 schema 生成、失败分类；MCP 的连接方式 `McpTransport`（资源领域读出、模型领域连接，共用一份） | platform |
 | exec | 以某身份起命令：进程组、写沙箱、secret 注入与打码、限时读完输出 | platform |
-| resources | 资源、agent 与权限 | exec（可写范围直接算成写沙箱 `Sandbox.Confined`） |
+| resources | 资源、agent 与权限；以 agent 身份起命令的入口 `AgentExec` | exec（可写范围直接算成写沙箱 `Sandbox.Confined`） |
 | models | 模型接入、MCP、外部服务 | exec |
 | sessions | 会话与运行 | resources、models |
 | workspace | 文件、命令、后台任务、skill 脚本、页面 | sessions、exec |
 | notifications | 通知与推送 | sessions |
 | board | issue 看板 | sessions、notifications |
-| triggers | 触发器 | sessions、workspace、notifications |
+| triggers | 触发器 | sessions、notifications |
 | history | 工作历史、活动回顾、用量 | sessions、board |
 | app | 组装全部领域、程序入口 | 全部领域 |
-| migrate | 一次性数据迁移 | app（领域列表与组装入口同一份） |
 | web | 前端 | contract（JS） |
 
 - 依赖方向只在 `build.sbt` 的 `domain(...)` 参数里定义；sbt 模块依赖不能成环，反向 import 编译期就找不到类。要加一条依赖先在这里讲清理由。
@@ -118,7 +117,7 @@
 
 ## 工作区领域的接法（#869，给下游领域与组装入口）
 - **组装**：`Workspace.layer`（要 `PageSigner.fromSecret(server.cookieSecret)`）起全部服务；`Workspace.contribution` 给出 8 个工具（静态定义在 `Workspace.specs`）、skill 脚本的批准执行者 `skill_run`、agent 忙碌判断与删除清理；`Workspace.jobControl` 是会话等后台任务时的状态与取消。启动顺序：`Sessions.start` 之后调 `Jobs.recover`（上次没收尾的后台任务标为被中断、不盲杀，补交结局）。接口 `WorkspaceHttp(...).routes`，其中页面文件 `/site/<agent>/<page>/<签名>/<文件>` 不要登录，带隔离响应头（CSP sandbox、nosniff、允许跨源读取）。
-- **以 agent 身份起命令**：一律经 `AgentExec.command(agent, program, secrets, SecretUse)` 得到 `CommandSpec`（工作目录、写沙箱、secret 注入），再 `Exec.run/follow`；输出可经 `annotate` 补写沙箱拦截说明。触发器的前置检查与常驻命令用它，不自己算可写范围。
+- **以 agent 身份起命令**：一律经 `AgentExec.command(agent, program, secrets, SecretUse)` 得到 `CommandSpec`（工作目录、写沙箱、secret 注入），再 `Exec.run/follow`；输出可经 `annotate` 补写沙箱拦截说明。它在资源领域（#892），工作区的命令与后台任务、触发器的前置检查与常驻命令都用它，不自己算可写范围。agent 的工作目录只经 `ResourcePaths.ensureWorkspace` 建。
 - **文件读写**：`FileAccess` 按可写范围检查（平台私有文件对非 admin 读写都不行），每次写先经 `AssetGuard.check` 得到 `Vetted`（只有它能造）：`Plain` 是资源目录外的文件、照写，`Asset` 交给 `AssetStore.commit`；平台自己生成的资源文件用 `AssetStore.write(资源文件, 内容)`。读过的文本文件都记指纹；`WriteMode.Overwrite` 要求本次运行读过（读过的指纹按运行记在内存里），`Patch` 不要求。`AssetStore` 写文件覆盖已有文件时沿用原权限位（skill 脚本不丢可执行位）。
 - **后台任务**：输出在工作目录 `jobs/<编号>.log`；每个任务是 fork 在 `Jobs` layer 的（并行收尾的）scope 里的一个 fiber，`job_kill` 经它的 `stop` 结束（记被结束）；关停时 scope 中断它、进程由 `Exec.follow` 结束，标被中断，结局下次启动补交（表 `job` 的 `reported`）。
 
@@ -155,6 +154,7 @@
 - **本地起服务与真实模型验收**：见上文「工具链与开发」；`dev-data/` 下放配置（从现有配置取服务商密钥生成，不打印）。
 
 ## 数据迁移（migrate，#876）
+- **代码不在主构建里**（#892）：11-15 正式切换后迁移工具移出主构建，最后一版在 tag `migrate-final`。要再从 Rust 版迁移：`git worktree add ../muliao-migrate migrate-final`，在那里按下面的用法跑（写出的库是那一版的表结构，之后用当前版本启动时按各领域迁移自动升级）。
 - **用法**：`java -cp <migrate 类路径> muliao.migrate.Main ~/.muliao ~/.muliao-scala [--no-workspaces] [--port=1080]`（类路径 `sbt "export migrate/Runtime/fullClasspath"`）。新版主目录必须不存在或为空，不覆盖；`--no-workspaces` 只在开发试跑时用。不读工作目录约 15 秒，加工作目录（约 85G，APFS 克隆）另计。
 - **做法**：旧库在线备份成 `migration/source.db` 后只读快照；用各领域自己的迁移建库（与启动时一样），在一个事务里按行类型写入（列名 = 行字段名的蛇形）；附件、资源目录、工作目录 `cp -c -R -p` 克隆，推送私钥原样复制；资源目录里写死的 `~/.muliao/{assets,data,config.toml,muliao.log}` 换成新主目录的（触发器的提示、命令、前置检查也换，#878）；配置由旧配置生成（端口按 `--port`，默认 1081、权限 600、登录签名密钥新生成）；逐表条数（旧条数 / 写入 / 新库里）与没搬的、问题写进 `migration/report.md`。
 - **对应关系**：旧消息按段拆成新时间线（`Transcript`）：助手消息 → 回复（签名、OpenAI 输出项等协议数据放进 `Seal`，续聊时原样回传）+ 工具调用行；用户消息里运行上下文那段 → 上下文条目，信件文字（连同紧跟的附件段）→ 来信（来源按旧版标记），工具结果 → 对应调用的结果；失败、被停止、没结束的运行各记一条提示。迁移后每个调用都有结果（旧版缺的补说明）、运行都已结束、收件箱与等待为空，所以新版启动时不续跑、不执行任何东西。

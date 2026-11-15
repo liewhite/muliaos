@@ -1,14 +1,16 @@
 package muliao.resources.access
 
-import muliao.contract.AssetKind
+import muliao.contract.{AssetKind, Labeled, Labels}
 import muliao.platform.config.ConfigCodecs
 
 import java.nio.file.Path
 
 /** 对资源做什么：用（进 skill 索引、注入记忆、连 MCP、解析 secret、调用工具），或改（写它的文件）。 */
-enum Action(val label: String):
+enum Action(val label: String) extends Labeled:
   case Use   extends Action("use")
   case Write extends Action("write")
+
+object Action extends Labels[Action]("动作", Action.values)
 
 /** fnmatch 风格的名字通配：`*` 任意串、`?` 任一字符、`[...]` 字符集（`[!...]` 取反），其余按字面，区分大小写。 */
 final class Glob private (val text: String):
@@ -92,7 +94,7 @@ object Rule:
 
   private def parseAction(a: String): Either[String, Set[Action]] = a match
     case "*" => Right(Action.values.toSet)
-    case s   => Action.values.find(_.label == s).map(Set(_)).toRight(s"动作 `$s` 不认识，只能是 use、write 或 *")
+    case s   => Action.parse(s).map(Set(_)).left.map(_ => s"动作 `$s` 不认识，只能是 use、write 或 *")
 
   private def parseKinds(k: String, text: String): Either[String, Set[AssetKind]] = k match
     case "*" => Right(AssetKind.values.toSet)

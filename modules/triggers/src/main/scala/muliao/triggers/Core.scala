@@ -5,12 +5,11 @@ import muliao.notifications.{Notice, Notifications, Target}
 import muliao.platform.AppError
 import muliao.platform.db.{Database, Tx}
 import muliao.platform.events.ChangeBus
-import muliao.resources.ResourcePaths
+import muliao.resources.{AgentExec, ResourcePaths}
 import muliao.contract.AgentState
 import muliao.resources.agents.Agents
 import muliao.sessions.*
 import muliao.triggers.store.{FaultRow, Repo, TriggerRow}
-import muliao.workspace.AgentExec
 import zio.*
 import zio.json.*
 
@@ -122,9 +121,7 @@ private[triggers] final case class Core(
   // ---- 触发：唯一出口 ----
 
   /** 交给 agent 的信：处理说明，有事件就附在后面。 */
-  def letter(t: Trigger, event: Option[String]): Letter =
-    val text = event.fold(t.prompt)(e => s"${t.prompt}\n\n<event>\n$e\n</event>")
-    Letter(Source.Trigger(t.name), text)
+  def letter(t: Trigger, event: Option[String]): String = event.fold(t.prompt)(e => s"${t.prompt}\n\n<event>\n$e\n</event>")
 
   /** 触发一次：agent 能不能接活 → 防重叠 → 前置检查 → 开会话（记下触发与投信在同一事务）。 */
   def fire(t: Trigger, cause: Occasion): IO[AppError, Fired] =
@@ -205,7 +202,7 @@ private[triggers] final case class Core(
           _ <- ZIO.foreachDiscard(checkedAt)(v =>
                  ZIO.when(cur.updatedAt != v)(ZIO.fail(AppError.conflict("前置检查期间触发器被改了，这次结果作废")))
                )
-          d <- sessions.deliverIn(Address.Fresh(t.agent, Origin.Trigger(t.name), t.name.value), letter(cur, event))
+          d <- sessions.deliverIn(Address.Fresh(t.agent, Origin.Trigger(t.name), t.name.value), Source.Trigger(t.name), letter(cur, event))
           s <- ZIO.fromOption(d).orElseFail(AppError.Internal("投信没有结果"))
           _ <- Repo.save(encode(cur.copy(lastSession = Some(s.session), lastFiredAt = Some(at), skipped = 0, blockNotified = None,
                  baseline = baseline.orElse(cur.baseline))))

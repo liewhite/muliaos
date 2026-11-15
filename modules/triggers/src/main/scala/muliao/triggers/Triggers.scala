@@ -5,12 +5,11 @@ import muliao.notifications.Notifications
 import muliao.platform.{AppError, GeneralSettings}
 import muliao.platform.db.Database
 import muliao.platform.events.ChangeBus
-import muliao.resources.{AgentHook, ResourcePaths}
+import muliao.resources.{AgentExec, AgentHook, ResourcePaths}
 import muliao.resources.agents.Agents
 import muliao.sessions.{Contribution, Sessions}
 import muliao.toolkit.ToolSpec
 import muliao.triggers.store.Repo
-import muliao.workspace.AgentExec
 import zio.*
 
 import java.time.OffsetDateTime
@@ -81,28 +80,23 @@ object Triggers:
         health   <- Ref.make(Map.empty[TriggerId, Health])
         core      = Core(db, bus, sessions, agents, notes, exec, paths, general.timezone, settings, tuning, signal, inFlight, health)
         scope    <- ZIO.scope
-        started  <- Ref.make(false)
-      yield Live(core, scope, started)
+      yield Live(core, scope)
     )
 
   private final case class Revision(next: Trigger, restart: Boolean)
 
-  private final case class Live(core: Core, scope: Scope, started: Ref[Boolean]) extends Triggers:
+  private final case class Live(core: Core, scope: Scope) extends Triggers:
     import core.*
 
     override val zone: java.time.ZoneId = core.zone
 
     def start: UIO[Unit] =
-      started.getAndSet(true).flatMap {
-        case true => ZIO.unit
-        case false =>
-          for
-            streams <- Streams.make(core, scope)
-            _       <- DueRunner(core, scope).run.forkIn(scope)
-            _       <- streams.run.forkIn(scope)
-            _       <- ZIO.logInfo("触发器已启动")
-          yield ()
-      }
+      for
+        streams <- Streams.make(core, scope)
+        _       <- DueRunner(core, scope).run.forkIn(scope)
+        _       <- streams.run.forkIn(scope)
+        _       <- ZIO.logInfo("触发器已启动")
+      yield ()
 
     val kinds: List[TriggerKindView] = TriggerKind.values.toList.map(k => TriggerKindView(k, Kinds.description(k)))
 

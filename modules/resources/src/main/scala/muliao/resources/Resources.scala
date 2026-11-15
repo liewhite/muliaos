@@ -103,10 +103,7 @@ object Resources:
         de     <- ZIO.foreach(deny)(t => ZIO.fromEither(Rule.parse(t)).mapError(AppError.invalid))
         access <- store.access
         snap   <- store.snapshot
-        fakeId  = a.fold(AgentId.wrap("preview"))(_.id)
-        name    = a.fold(AgentName.wrap("\u0000preview"))(_.name)
-        config  = access.config.copy(agents = access.config.agents.updated(fakeId, AgentGrants(roles, al, de)))
-      yield compute(Permissions.of(fakeId, name, config), snap, access.broken)
+      yield compute(Permissions.from(a.map(_.name), AgentGrants(roles, al, de), access.config), snap, access.broken)
 
     private def compute(p: Permissions, snap: Snapshot, broken: Option[String]): Effective =
       val tools = catalog.tools.flatMap { t =>
@@ -157,7 +154,7 @@ object Resources:
 
     /** 没加载的文件告诉谁：它的主人；按规则能用这个资源的；没有归属或规则文件的问题告诉 admin。 */
     private def relevant(p: Permissions, problem: Problem): Boolean =
-      problem.owner.contains(Owner.Agent(p.name)) ||
+      p.name.exists(n => problem.owner.contains(Owner.Agent(n))) ||
         problem.subject.exists((k, n) => p.decide(Action.Use, k, n, problem.owner.getOrElse(Owner.Platform)).allowed) ||
         (p.isAdmin && (problem.subject.isEmpty || problem.owner.isEmpty))
 

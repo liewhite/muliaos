@@ -47,10 +47,11 @@ enum Decision:
 /** 一条规则与它的出处（哪个角色，或 agent 自己的）。 */
 final case class SourcedRule(rule: Rule, source: Source)
 
-/** 一个 agent 的最终权限：base + 各角色 + 自己的规则，deny 优先（但不拦它自己的资源）。 */
+/** 一个 agent 的最终权限：base + 各角色 + 自己的规则，deny 优先（但不拦它自己的资源）。
+  * `name` 为 None：还没建的 agent（界面预览角色与规则的效果），没有自己的资源。
+  */
 final case class Permissions(
-    agent: AgentId,
-    name: AgentName,
+    name: Option[AgentName],
     roles: List[RoleName],
     allow: List[SourcedRule],
     deny: List[SourcedRule]
@@ -59,7 +60,7 @@ final case class Permissions(
 
   /** 能否对某工具（`toolAccess` 是它的类别）或某资源（主人 `owner`）做 `action`。 */
   def decide(action: Action, kind: AssetKind, name: String, owner: Owner, toolAccess: Option[Access] = None): Decision =
-    if owner == Owner.Agent(this.name) && kind != AssetKind.Tool then Decision.Allowed(Grant.Ownership)
+    if this.name.exists(n => owner == Owner.Agent(n)) && kind != AssetKind.Tool then Decision.Allowed(Grant.Ownership)
     else if kind == AssetKind.Memory && name == Permissions.GlobalMemory && action == Action.Use then Decision.Allowed(Grant.GlobalMemory)
     else
       deny.find(_.rule.selects(action, kind, name)) match
@@ -80,12 +81,14 @@ final case class Permissions(
 object Permissions:
   val GlobalMemory = "global"
 
-  def of(agent: AgentId, name: AgentName, access: AccessConfig): Permissions =
-    val grants = access.grantsOf(agent)
+  /** 已有 agent 的权限：角色与规则取自 access.toml。 */
+  def of(agent: AgentId, name: AgentName, access: AccessConfig): Permissions = from(Some(name), access.grantsOf(agent), access)
+
+  /** 按给定的角色与规则算（`name` 见 [[Permissions]]）。 */
+  def from(name: Option[AgentName], grants: AgentGrants, access: AccessConfig): Permissions =
     val roles  = (BuiltinRole.Base.roleName :: grants.roles).distinct
     val roleRules = roles.flatMap(r => access.role(r).map(d => (r, d)))
     Permissions(
-      agent,
       name,
       roles,
       roleRules.flatMap((r, d) => d.allow.map(SourcedRule(_, Source.Role(r)))) ++ grants.allow.map(SourcedRule(_, Source.Own)),

@@ -11,9 +11,9 @@ import muliao.resources.agents.Agents
 import muliao.resources.guard.AssetGuard
 import muliao.resources.tree.AssetStore
 import muliao.resources.vault.Vault
-import muliao.sessions.{Contribution, Files, LiveHub, Origin, Pause, RunContext, SessionConsole, SessionPaths, SessionSettings, Sessions}
+import muliao.sessions.{Contribution, Files, LiveHub, Pause, RunContext, SessionConsole, SessionPaths, SessionSettings, Sessions}
 import muliao.sessions.TestEnv as S
-import muliao.toolkit.{ToolOutcome, ToolContent, ToolFailure}
+import muliao.toolkit.{ToolOutcome, ToolFailure}
 import muliao.workspace.pages.PageSigner
 import zio.*
 import zio.json.ast.Json
@@ -27,7 +27,7 @@ object TestEnv:
 
   val toolCatalog: ToolCatalog = S.toolCatalog(Workspace.specs)
 
-  type Env = Workspace.Services & Sessions & SessionConsole & Agents & Database & ChangeBus & Files & Resources & AssetStore & ResourcePaths &
+  type Env = Workspace.Services & AgentExec & Sessions & SessionConsole & Agents & Database & ChangeBus & Files & Resources & AssetStore & ResourcePaths &
     Vault & S.EventLog
 
   def layer(d: S.Dirs, models: S.FakeModels): ZLayer[Any, AppError, Env] =
@@ -58,6 +58,7 @@ object TestEnv:
       Files.layer,
       Sessions.layer,
       ZLayer.succeed(signer),
+      AgentExec.layer,
       Workspace.layer,
       ZLayer(Ref.make(List.empty[muliao.sessions.SessionEvent]).map(S.EventLog(_)))
     )
@@ -73,14 +74,7 @@ object TestEnv:
 
   val start: ZIO[Env, AppError, Unit] = startWith(Nil)
 
-  /** 直接调用工具用的上下文（不经模型）。 */
-  def context(agent: AgentId, run: Long = 1L, session: String = "direct"): ZIO[Resources & Agents & ResourcePaths, AppError, RunContext] =
-    for
-      res   <- ZIO.serviceWithZIO[Resources](_.forRun(agent))
-      paths <- ZIO.service[ResourcePaths]
-      dir    = paths.workspace(agent)
-      _     <- ZIO.attemptBlocking(JFiles.createDirectories(dir)).orDie
-    yield RunContext(agent, res.agent.name, SessionId.wrap(session), RunId.wrap(run), CallId.wrap("c"), Origin.User, dir, res, userWaiting = true)
+  export S.context
 
   /** 直接调用一个工具：成功时返回结果的文字（或 `[image:类型]`），失败时返回失败。 */
   def call(name: String, args: String, ctx: RunContext): ZIO[Env, Nothing, Either[ToolFailure, ToolOutcome[Pause]]] =
@@ -90,16 +84,7 @@ object TestEnv:
       tool.invoke(json, ctx).either
     }
 
-  def text(r: Either[ToolFailure, ToolOutcome[Pause]]): String = r match
-    case Right(ToolOutcome.Completed(cs)) =>
-      cs.map {
-        case ToolContent.Text(t)     => t
-        case ToolContent.Image(m, _) => s"[image:$m]"
-      }.mkString
-    case Right(ToolOutcome.Suspended(s))     => s"[suspended:$s]"
-    case Left(ToolFailure.Rejected(m))       => s"[rejected] $m"
-    case Left(ToolFailure.Unavailable(m, _)) => s"[unavailable] $m"
-    case Left(ToolFailure.Aborted(m, _))     => s"[aborted] $m"
+  def text(r: Either[ToolFailure, ToolOutcome[Pause]]): String = S.outcome(r)
 
   def write(p: Path, content: String): UIO[Path] =
     ZIO.attemptBlocking { JFiles.createDirectories(p.getParent); JFiles.writeString(p, content) }.orDie

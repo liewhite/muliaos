@@ -173,11 +173,11 @@ object CommandSpec extends ZIOSpecDefault:
         for
           a     <- agent("bot")
           b     <- agent("helper")
-          ctx   <- muliao.workspace.TestEnv.context(a)
+          ctx   <- context(a)
           tools <- Triggers.contribution.map(_.tools)
           call   = (name: String, args: String) =>
                      ZIO.succeed(tools.find(_.spec.name == name).get).flatMap(t =>
-                       t.invoke(zio.json.ast.Json.decoder.decodeJson(args).toOption.get, ctx).either.map(muliao.workspace.TestEnv.text)
+                       t.invoke(zio.json.ast.Json.decoder.decodeJson(args).toOption.get, ctx).either.map(outcome)
                      )
           kinds <- call("trigger_kinds", "{}")
           bad1  <- call("trigger_create", """{"name":"x","kind":"schedule","prompt":"p","config":{"cron":"* * *"}}""")

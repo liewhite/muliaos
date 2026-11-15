@@ -73,12 +73,8 @@ activate() {
   say "activated $1 as $APP/current ($(cat "$APP/current/COMMIT"))"
 }
 
-log_size() { if [ -f "$LOGFILE" ]; then wc -c < "$LOGFILE" | tr -d ' '; else echo 0; fi; }
-
-# 重启服务（SIGTERM，按自己的关停流程退出，最长 ExitTimeOut 秒）并等它健康：
-# 90 秒内 /api/auth/session 有回应（不带 cookie 是 401），之后 30 秒内进程没换（没在循环重启），新日志里没有 ERROR。
+# 重启服务（SIGTERM，按自己的关停流程退出，最长 ExitTimeOut 秒）并等它能应答：90 秒内 /api/auth/session 有回应（不带 cookie 是 401）。
 restart_and_wait() {
-  from=$(log_size)
   launchctl kickstart -k "$SVC" || { say "launchctl kickstart -k $SVC failed"; return 1; }
   code=000
   for _ in $(seq 1 45); do
@@ -87,15 +83,8 @@ restart_and_wait() {
     sleep 2
   done
   case $code in 200 | 401) ;; *) say "unhealthy: /api/auth/session on port $PORT answered $code within 90s"; return 1 ;; esac
-  pid=$(svc_pid)
-  sleep 30
-  pid2=$(svc_pid)
-  [ -n "$pid" ] && [ "$pid" = "$pid2" ] || { say "unhealthy: pid changed ${pid:-none} -> ${pid2:-none} (restarting?)"; return 1; }
-  size=$(log_size)
-  [ "$size" -ge "$from" ] || from=0 # 检查期间轮转过就从头看
-  errors=$(tail -c +"$((from + 1))" "$LOGFILE" | grep ' ERROR ' | head -5 | cut -c1-300)
-  [ -z "$errors" ] || { say "unhealthy: ERROR in log since restart:"; echo "$errors"; return 1; }
-  say "healthy: launcher pid $pid, java pid $(java_pid), /api/auth/session $code, no ERROR in log"
+  # 稳不稳（进程号不变、无 ERROR、不循环重启）由随后的 deploy/selfcheck.sh 查，这里只等到能应答
+  say "up: launcher pid $(svc_pid), java pid $(java_pid), /api/auth/session $code"
 }
 
 # 自己脱离调用者在后台重跑：从本服务里起的命令在重启时会被打断，所以另起会话（setsid）；输出追加到 $MULIAO_HOME/deploy.log。

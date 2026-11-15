@@ -7,7 +7,7 @@ import sttp.tapir.generic.auto.*
 import zio.json.*
 
 /** 接口错误的种类：决定 HTTP 状态码，前端据此决定怎么提示。 */
-enum ErrorKind(val status: StatusCode):
+enum ErrorKind(val status: StatusCode) extends Labeled:
   /** 请求不合法（参数、状态不允许）。 */
   case Invalid extends ErrorKind(StatusCode.BadRequest)
   case Unauthorized extends ErrorKind(StatusCode.Unauthorized)
@@ -22,13 +22,10 @@ enum ErrorKind(val status: StatusCode):
   case Unavailable extends ErrorKind(StatusCode.ServiceUnavailable)
   case Internal extends ErrorKind(StatusCode.InternalServerError)
 
-object ErrorKind:
-  given JsonCodec[ErrorKind] =
-    JsonCodec.string.transformOrFail(
-      s => values.find(_.toString == s).toRight(s"未知错误种类 $s"),
-      _.toString
-    )
-  given Schema[ErrorKind] = Schema.derivedEnumeration[ErrorKind].defaultStringBased
+  /** 接口里的写法就是 case 名（如 `NotFound`）。 */
+  def label: String = toString
+
+object ErrorKind extends Labels[ErrorKind]("错误种类", ErrorKind.values)
 
 /** 所有接口统一的错误体。 */
 final case class ApiError(kind: ErrorKind, message: String, retryAfterSeconds: Option[Long] = None)

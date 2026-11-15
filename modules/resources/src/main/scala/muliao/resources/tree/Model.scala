@@ -1,6 +1,7 @@
 package muliao.resources.tree
 
 import muliao.contract.{AgentName, AssetKind, SkillName, Thinking}
+import muliao.toolkit.McpTransport
 
 import java.nio.file.Path
 
@@ -16,6 +17,9 @@ enum Owner:
 object Owner:
   /** 资源目录下归平台的那个子目录名；agent 不能叫这个名字。 */
   val PlatformDir = "platform"
+
+  /** [[Owner.label]] 的反向：资源目录下的一级目录名对应的主人（不查 agent 是否存在）。 */
+  def ofLabel(label: String): Owner = if label == PlatformDir then Platform else Agent(AgentName.wrap(label))
 
 /** `agent.toml`：agent 的可编辑配置（名字、归档、权限不在这里）。 */
 final case class AgentProfile(description: String, model: String, thinking: Thinking, group: Option[String])
@@ -43,21 +47,10 @@ final case class SkillDoc(name: SkillName, owner: Owner, dir: Path, description:
 object SkillDoc:
   val Main = "SKILL.md"
 
-/** MCP server 的连接方式。字符串里可以写 `${vault:KEY}` 引用 secret。 */
-enum McpTransport:
-  case Stdio(command: String, args: List[String], env: Map[String, String])
-  case Http(url: String, headers: Map[String, String])
-
+/** 一个 MCP 资源文件：连接方式与是否启用。 */
 final case class McpConfig(transport: McpTransport, enabled: Boolean):
   /** 引用到的 secret 名。 */
-  def secretRefs: Set[String] =
-    val texts = transport match
-      case McpTransport.Stdio(c, args, env) => c :: args ++ env.values
-      case McpTransport.Http(url, headers)  => url :: headers.values.toList
-    texts.flatMap(t => McpConfig.VaultRef.findAllMatchIn(t).map(_.group(1))).toSet
-
-object McpConfig:
-  val VaultRef = """\$\{vault:([A-Za-z0-9_]+)\}""".r
+  def secretRefs: Set[String] = transport.secretRefs
 
 final case class McpDoc(name: String, owner: Owner, file: Path, config: McpConfig)
 

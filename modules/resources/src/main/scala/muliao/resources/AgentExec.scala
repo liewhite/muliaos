@@ -1,9 +1,8 @@
-package muliao.workspace
+package muliao.resources
 
 import muliao.contract.AgentId
 import muliao.exec.{CommandSpec, Program, RealPath, Sandbox, SecretEnv}
 import muliao.platform.AppError
-import muliao.resources.{ResourcePaths, Resources}
 import muliao.resources.vault.{SecretUse, Vault}
 import zio.*
 
@@ -18,9 +17,6 @@ final case class AgentCommand(spec: CommandSpec, scope: Sandbox.Confined)
 trait AgentExec:
   /** 算出命令规格：在 agent 的工作目录执行（不存在就建），写沙箱是它的可写范围，`secrets` 按用途检查权限后作为环境变量注入。 */
   def command(agent: AgentId, program: Program, secrets: List[String], use: SecretUse): IO[AppError, AgentCommand]
-
-  /** agent 的工作目录（不存在就建）。 */
-  def workspace(agent: AgentId): IO[AppError, Path]
 
   /** 命令输出里有写被拦下（Operation not permitted）且路径确实不在可写范围时，补一句被什么拦、找谁授权；没有就原样返回。 */
   def annotate(agent: AgentId, scope: Sandbox.Confined, output: String): UIO[String]
@@ -40,13 +36,9 @@ object AgentExec:
 
   final case class Live(resources: Resources, vault: Vault, paths: ResourcePaths) extends AgentExec:
 
-    def workspace(agent: AgentId): IO[AppError, Path] =
-      val dir = paths.workspace(agent)
-      ZIO.attemptBlocking(Files.createDirectories(dir)).mapError(e => AppError.internal(s"建工作目录 $dir 失败", e)).as(dir)
-
     def command(agent: AgentId, program: Program, secrets: List[String], use: SecretUse): IO[AppError, AgentCommand] =
       for
-        dir    <- workspace(agent)
+        dir    <- paths.ensureWorkspace(agent)
         scope  <- resources.writableScope(agent)
         values <- if secrets.isEmpty then ZIO.succeed(Map.empty[String, String]) else vault.reveal(agent, secrets.distinct, use)
         env     = Chunk.fromIterable(secrets.distinct.flatMap(k => values.get(k).map(SecretEnv(k, _))))

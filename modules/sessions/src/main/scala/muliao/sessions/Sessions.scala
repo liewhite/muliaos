@@ -32,9 +32,9 @@ trait Sessions:
   def deliver(to: Address, letter: Letter, dedupe: Option[String] = None): IO[AppError, Option[Delivered]]
 
   /** 在调用方的写事务里投信（看板：与 issue 的改动同一事务提交，提交后才开始跑）。投不进以领域错误说明原因，此时本函数还没写任何东西，
-    * 调用方可以接住错误、照常提交自己的改动。不带附件。
+    * 调用方可以接住错误、照常提交自己的改动。只有文字，不带附件。
     */
-  def deliverIn(to: Address, letter: Letter, dedupe: Option[String] = None): Tx[Option[Delivered]]
+  def deliverIn(to: Address, source: Source, text: String, dedupe: Option[String] = None): Tx[Option[Delivered]]
 
   /** 这些 issue 的 issue 会话（每个 issue + agent 一个）。 */
   def issueSessions(issues: List[IssueId]): IO[AppError, List[IssueSession]]
@@ -135,7 +135,7 @@ object Sessions:
     val agentHook: AgentHook = AgentHook("会话", control.agentCleanup, control.agentBusy)
 
     def deliver(to: Address, letter: Letter, dedupe: Option[String])   = mailbox.deliver(to, letter, dedupe)
-    def deliverIn(to: Address, letter: Letter, dedupe: Option[String]) = mailbox.deliverIn(to, letter, dedupe)
+    def deliverIn(to: Address, source: Source, text: String, dedupe: Option[String]) = mailbox.deliverIn(to, source, text, dedupe)
 
     def issueSessions(issues: List[IssueId]): IO[AppError, List[IssueSession]] =
       if issues.isEmpty then ZIO.succeed(Nil)

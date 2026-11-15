@@ -83,14 +83,15 @@ object SessionList:
     val text      = Var("")
     // 关键字输入停下 300ms 后才查（搜消息全文），空白等于不搜
     val keyword = text.signal.updates.debounce(300).map(_.trim).toSignal("")
-    // 一次多取一页：满了就在底下给「显示更多」；换分类、换关键字从第一页取
-    val count = Var(PageSize)
+    // 一次多取一页：满了就在底下给「显示更多」。显示到多少条记在它所属的查询上，换分类、换关键字自然从第一页取
     val query = filter.signal.combineWith(keyword).distinct
+    val shown = Var(Option.empty[((Filter, String), Int)])
+    def countOf(q: (Filter, String)): Int = shown.now().collect { case (`q`, n) => n }.getOrElse(PageSize)
     val models = AgentsData.list.map(_.flatMap(a => a.model.map(m => a.id -> modelName(m))).toMap)
     val sessions: Signal[Load[List[SessionSummary]]] =
-      query.flatMapSwitch { (f, k) =>
-        count.set(PageSize)
-        Remote.following(SessionsApi.list, count.signal.updates.mapToUnit)(fetch(f, k, count.now()))
+      query.flatMapSwitch { q =>
+        val more = shown.signal.updates.collect { case Some((`q`, _)) => () }
+        Remote.following(SessionsApi.list, more)(fetch(q._1, q._2, countOf(q)))
       }
     def isCollapsed(id: AgentId): Signal[Boolean] = collapsed.signal.map(_.split(',').contains(id.value))
     def toggle(id: AgentId): Unit = collapsed.update { c =>
@@ -151,8 +152,9 @@ object SessionList:
               )
             )
           },
-          child.maybe <-- data.map(l =>
-            Option.when(l.nonEmpty && l.size >= count.now())(Ui.btn(Variant.Secondary)("显示更多", onClick --> (_ => count.update(_ + PageSize))))
+          child.maybe <-- data.combineWith(query).map((l, f, k) =>
+            val q = (f, k)
+            Option.when(l.nonEmpty && l.size >= countOf(q))(Ui.btn(Variant.Secondary)("显示更多", onClick --> (_ => shown.set(Some(q -> (countOf(q) + PageSize))))))
           )
         )
       }

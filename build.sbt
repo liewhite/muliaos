@@ -135,7 +135,7 @@ lazy val sessions  = domain("sessions", resources, models)       // 会话与运
 lazy val workspace = domain("workspace", sessions % "compile->compile;test->test", exec)         // 文件、命令、后台任务、页面
 lazy val notifications = domain("notifications", sessions % "compile->compile;test->test")                 // 通知与推送
 lazy val board     = domain("board", sessions % "compile->compile;test->test", notifications) // issue 看板
-lazy val triggers  = domain("triggers", sessions % "compile->compile;test->test", workspace % "compile->compile;test->test", notifications) // 触发器
+lazy val triggers  = domain("triggers", sessions % "compile->compile;test->test", notifications) // 触发器
   .settings(libraryDependencies += "com.cronutils" % "cron-utils" % V.cronUtils)
 lazy val history   = domain("history", sessions % "compile->compile;test->test", board) // 工作历史与活动回顾
 
@@ -175,12 +175,6 @@ lazy val app = project
     }
   )
 
-// ---- 一次性迁移工具：读旧数据，写新数据目录 ----
-lazy val migrate = project
-  .in(file("modules/migrate"))
-  .dependsOn(app) // 领域列表等与组装入口同一份
-  .settings(commonJvm)
-
 // ---- 前端（Scala.js + Laminar），只依赖接口契约 ----
 // 由 modules/web 下的 Vite 驱动（@scala-js/vite-plugin-scalajs）：npm 依赖（Tailwind、HeroUI 样式、Markdown 等）由 Vite 打包。
 lazy val web = project
@@ -202,5 +196,5 @@ lazy val web = project
 
 lazy val root = project
   .in(file("."))
-  .aggregate((Seq[ProjectReference](contract.jvm, contract.js, platform, toolkit, exec, app, migrate, web) ++ domains.map(p => p: ProjectReference))*)
+  .aggregate((Seq[ProjectReference](contract.jvm, contract.js, platform, toolkit, exec, app, web) ++ domains.map(p => p: ProjectReference))*)
   .settings(publish / skip := true)

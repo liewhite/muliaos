@@ -61,6 +61,11 @@ final case class ResourcePaths(assets: Path, workspaces: Path, state: Path, priv
   def workspace(id: AgentId): Path = workspaces.resolve(id.value)
   def lastGoodAccess: Path         = state.resolve("access.last-good.toml")
 
+  /** agent 的工作目录，不存在就建（建 agent、跑命令、开运行、界面浏览都经这里）。 */
+  def ensureWorkspace(id: AgentId): IO[AppError, Path] =
+    val dir = workspace(id)
+    ZIO.attemptBlocking(java.nio.file.Files.createDirectories(dir)).mapError(e => AppError.internal(s"建工作目录 $dir 失败", e)).as(dir)
+
 /** 模型配置（由模型领域在组装时提供）：默认模型、某个模型写法能不能跑。 */
 trait ModelCheck:
   def defaultModel: String

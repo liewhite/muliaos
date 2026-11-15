@@ -11,6 +11,7 @@ import muliao.platform.config.ConfigSection
   *   - [[ResourcePrompt]]：给模型的记忆、skill 索引段落与每次运行的资源提醒；
   *   - [[guard.AssetGuard]]：写文件的入口校验，得到 `Vetted` 才能写（资源文件的格式、位置、重名、记忆长度、并发覆盖）；
   *   - [[vault.Vault]]：secret 的存与解（命令注入、skill 脚本、MCP）；
+  *   - [[AgentExec]]：以 agent 身份起命令的唯一入口（工作目录、写沙箱、secret），run_shell、skill_run、后台任务、触发器的前置检查与常驻命令都经它；
   *   - [[tree.AssetStore]]：资源目录快照与变化广播（主题 `assets`）；agent 变化广播主题 `agents`；
   *   - [[tools.AgentTools]]：list_agents、get_agent、create_agent、delete_agent、vault_set；
   *   - [[ResourcesHttp]]：界面的 agent、角色、AI 资源接口。
