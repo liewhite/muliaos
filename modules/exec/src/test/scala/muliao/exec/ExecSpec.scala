@@ -42,6 +42,12 @@ object ExecSpec extends ZIOSpecDefault:
         all.collect { case Line.Err(t) => t } == Chunk("oops")
       )
     },
+    test("输出里有不合法的 UTF-8 字节：换成 �，照常读完（不断管道、不被 SIGPIPE 杀掉）") {
+      for
+        dir <- tempDir
+        r   <- Exec.run(shell("""printf 'a\xe4\xb8\n'; head -c 300000 /dev/urandom; printf '\nok\n'""", dir), 20.seconds)
+      yield assertTrue(r.ending == Ending.Exited(0), r.output.startsWith("a\uFFFD"), r.output.endsWith("\nok"))
+    },
     test("命令不读标准输入就退出也不出错") {
       for
         dir  <- tempDir
@@ -182,7 +188,7 @@ object ExecSpec extends ZIOSpecDefault:
         box  = new Sandbox.Confined(Chunk(w), hidden = Chunk(hid), readOnly = Chunk(ro))
       yield assertTrue(box.permits(a), !box.permits(b), !box.permits(c), box.hides(c), !box.hides(b), !box.permits(out))
     },
-    test("被中断时还在跑的命令整组结束，中断在组结束后才完成") {
+    test("被中断时还在跑的命令整组结束") {
       for
         dir   <- tempDir
         pid   <- Promise.make[Nothing, Long]

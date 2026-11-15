@@ -107,7 +107,7 @@ object Exec:
         _       <- ZIO.addFinalizer(queue.shutdown)
         pump = (bytes: ZStream[Any, Any, Byte], as: String => Line) =>
                  bytes
-                   .via(ZPipeline.utf8Decode)
+                   .via(decode)
                    .orElse(ZStream.empty)
                    .via(masker.pipeline)
                    .via(ZPipeline.splitLines)
@@ -125,6 +125,17 @@ object Exec:
         code <- exit.join
       yield code
     )
+
+  // 不是合法 UTF-8 的字节换成 �（`utf8Decode` 遇到就失败，读的一路断掉、命令随后被 SIGPIPE 杀掉）
+  private def decode: ZPipeline[Any, java.nio.charset.CharacterCodingException, Byte, String] =
+    ZPipeline
+      .decodeCharsWithDecoder(
+        java.nio.charset.StandardCharsets.UTF_8
+          .newDecoder()
+          .onMalformedInput(java.nio.charset.CodingErrorAction.REPLACE)
+          .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPLACE)
+      )
+      >>> ZPipeline.mapChunks((cs: Chunk[Char]) => Chunk.single(String(cs.toArray)))
 
   // 写完就关；命令不读输入、先退出了时写不进去，不算错
   private def feed(process: zio.process.Process, lines: Chunk[String]): UIO[Unit] =
