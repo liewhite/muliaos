@@ -28,7 +28,7 @@ object IssuesPage:
   /** @param filters 地址里的筛选条件（改它就是改地址） */
   def view(filters: Signal[IssueQuery]): HtmlElement =
     val agents  = AgentsData.list
-    val loaded  = filters.flatMapSwitch(f => Remote(BoardApi.list)(f))
+    val loaded  = filters.distinct.flatMapSwitch(f => Remote(BoardApi.list)(f))
     val edits   = new EventBus[IssueQuery => IssueQuery]
     // 拖拽后先在本地挪动，接口成功、重新拉到的数据落下后以服务端为准；连着拖几张时每张各占一项
     val moves   = Var(Map.empty[IssueId, Move])

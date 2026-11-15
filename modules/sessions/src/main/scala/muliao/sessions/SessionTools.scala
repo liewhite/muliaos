@@ -33,18 +33,18 @@ private[sessions] object SessionTools:
   given Schema[AskUserIn] = DeriveSchema.gen[AskUserIn]
 
   final case class DelegateIn(
-      @description("目标 agent 名（list_agents 查）；可以是你自己：开一个新的你做旁支任务") agent: String,
+      @description("目标 agent 名（list_agents 查）；可以是你自己：开一个新的你做旁支任务") agent: AgentName,
       @description("自成一体的任务说明：对方只看得到这个 thread 里的内容") task: String,
-      @description("thread 名，如 weekly-report；同一个 agent 同名即续聊（带着之前的上下文），不相关的事用新名字") thread: String,
+      @description("thread 名，如 weekly-report；同一个 agent 同名即续聊（带着之前的上下文），不相关的事用新名字") thread: ThreadName,
       @fieldName("report_back") @description("true：回答作为事件交回你这里（期间你处于等待中）；false：回答直接推送给用户，不回给你") reportBack: Boolean = false,
       @fieldName("heartbeat_seconds") @description("仅 report_back：每隔多少秒给你投一条它在做什么的检查（不填不检查）") heartbeatSeconds: Option[Double] = None
   )
   given Schema[DelegateIn] = DeriveSchema.gen[DelegateIn]
 
   final case class AskAgentIn(
-      @description("目标 agent 名；可以是你自己") agent: String,
+      @description("目标 agent 名；可以是你自己") agent: AgentName,
       @description("自成一体的请求：对方只看得到这个 thread 里的内容") message: String,
-      @description("thread 名；同名续聊") thread: String
+      @description("thread 名；同名续聊") thread: ThreadName
   )
   given Schema[AskAgentIn] = DeriveSchema.gen[AskAgentIn]
 
@@ -52,8 +52,8 @@ private[sessions] object SessionTools:
   given Schema[NoArgs] = DeriveSchema.gen[NoArgs]
 
   final case class StopThreadIn(
-      @description("thread 名") thread: String,
-      @description("thread 的 agent；同名 thread 只有一个时可省略") agent: Option[String] = None
+      @description("thread 名") thread: ThreadName,
+      @description("thread 的 agent；同名 thread 只有一个时可省略") agent: Option[AgentName] = None
   )
   given Schema[StopThreadIn] = DeriveSchema.gen[StopThreadIn]
 
@@ -68,9 +68,6 @@ private[sessions] object SessionTools:
   private def fail(e: AppError): ToolFailure = ToolFailure.fromAppError(e)
   private def reject(m: String): ToolFailure = ToolFailure.Rejected(m)
 
-  /** 委派类调用在界面上对上它开出的 thread。 */
-  private def delegated(agent: String, thread: String): Display =
-    (for a <- AgentName.make(agent); t <- ThreadName.make(thread) yield Display.Delegate(a, t)).getOrElse(Display.Plain)
 
   val AskUserDef = ToolDef[RunContext, AskUserIn](
     "ask_user",
@@ -85,7 +82,7 @@ private[sessions] object SessionTools:
     "把一件事交给某个 agent 的 thread（以你这个会话为发起方），不等结果，立即返回。默认它的回答推送给用户、不回给你；report_back=true 时回答作为事件交回这里（期间你处于等待中，可配心跳检查）。要等它的回答才能继续时用 ask_agent。",
     Access.Write,
     Scheduling.Ordered,
-    in => delegated(in.agent, in.thread)
+    in => Display.Delegate(in.agent, in.thread)
   )
 
   val AskAgentDef = ToolDef[RunContext, AskAgentIn](
@@ -93,7 +90,7 @@ private[sessions] object SessionTools:
     "问某个 agent 并等它回答：交给它的 thread（同名续聊），它的最后一条回答就是这个调用的结果。期间这个会话处于等待中。不需要等结果时用 delegate_task。",
     Access.Write,
     Scheduling.Ordered,
-    in => delegated(in.agent, in.thread)
+    in => Display.Delegate(in.agent, in.thread)
   )
 
   val ListThreadsDef = ToolDef[RunContext, NoArgs](
@@ -138,13 +135,10 @@ private[sessions] object SessionTools:
           ))))
     }
 
-    def thread(name: String): IO[ToolFailure, ThreadName] =
-      ZIO.fromEither(ThreadName.make(name.trim)).mapError(_ => reject("thread 名不能为空。"))
-
     val delegateTask = DelegateTaskDef { (in, ctx) =>
+      val name = in.thread
       for
-        name   <- thread(in.thread)
-        target <- agents.resolve(in.agent).mapError(fail)
+        target <- agents.resolve(in.agent.value).mapError(fail)
         hb      = in.heartbeatSeconds.map(s => Duration.fromMillis((s * 1000).toLong.max(1000)))
         done    = (thread: SessionId, back: String) => s"已交给 ${target.name.value} 的 thread「${name.value}」（会话 ${thread.value}）。$back"
         text <- (if in.reportBack then delegations.track(ctx, target, name, in.task, TrackedMode.Report, hb).map(t => done(t.thread, "回答会作为事件交回这里。"))
@@ -153,9 +147,9 @@ private[sessions] object SessionTools:
     }
 
     val askAgent = AskAgentDef { (in, ctx) =>
+      val name = in.thread
       for
-        name   <- thread(in.thread)
-        target <- agents.resolve(in.agent).mapError(fail)
+        target <- agents.resolve(in.agent.value).mapError(fail)
         out    <- delegations.track(ctx, target, name, in.message, TrackedMode.Ask, None).mapError(fail)
       yield ToolOutcome.Suspended(Pause.AwaitThread(out.delegation, name, target.name))
     }
@@ -165,14 +159,13 @@ private[sessions] object SessionTools:
     }
 
     val stopThread = StopThreadDef { (in, ctx) =>
-      thread(in.thread).flatMap { name =>
-        (for
-          agent <- ZIO.foreach(in.agent)(agents.resolve)
-          row   <- delegations.findThread(ctx.session, name, agent)
-          st    <- states.state(row.id)
-          _     <- control.stop(row.id, byUser = false)
-        yield ToolOutcome.text(if st == WorkState.Idle then s"thread「${name.value}」本来就空闲。" else s"已停下 thread「${name.value}」。")).mapError(fail)
-      }
+      val name = in.thread
+      (for
+        agent <- ZIO.foreach(in.agent)(a => agents.resolve(a.value))
+        row   <- delegations.findThread(ctx.session, name, agent)
+        st    <- states.state(row.id)
+        _     <- control.stop(row.id, byUser = false)
+      yield ToolOutcome.text(if st == WorkState.Idle then s"thread「${name.value}」本来就空闲。" else s"已停下 thread「${name.value}」。")).mapError(fail)
     }
 
     val wakeMe = WakeMeDef { (in, ctx) =>

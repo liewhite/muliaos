@@ -314,6 +314,9 @@ final case class SessionQuery(
 /** 答复会话里 `entry` 那条回复中的调用 `call`。 */
 final case class CallAnswer(session: SessionId, entry: Long, call: CallId, answer: AnswerIn)
 
+/** 上传的一个附件：文件名、类型与内容。 */
+final case class Upload(name: String, mediaType: String, bytes: Array[Byte])
+
 /** [from, to)，epoch 毫秒。 */
 final case class TimeRange(from: Long, to: Long)
 
@@ -374,12 +377,13 @@ object SessionsApi:
       .name("answerCall")
       .description("回答 ask_user 的提问，或批准/拒绝等批准的调用。")
 
-  val upload: Endpoint[Option[String], (String, String, Array[Byte]), ApiError, FileView, Any] =
+  val upload: Endpoint[Option[String], Upload, ApiError, FileView, Any] =
     Api.secure.post
       .in("files")
       .in(query[String]("name"))
       .in(header[String]("Content-Type"))
       .in(byteArrayBody)
+      .mapInTo[Upload]
       .out(jsonBody[FileView])
       .name("uploadFile")
       .description("上传一个附件（请求体是文件内容），返回的 id 在发消息时引用。内容相同只存一份。")

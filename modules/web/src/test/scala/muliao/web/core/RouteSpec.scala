@@ -67,7 +67,9 @@ object RouteSpec extends ZIOSpecDefault:
         Http.href(SessionsApi.download)(FileId.wrap("a b")) == "/api/files/a%20b",
         Http.href(WorkspaceApi.workspaceFile)((AgentId.wrap("x"), "dir/f 1.txt")).startsWith("/api/agents/x/workspace/file?path=dir"),
         Http.href(SessionsApi.live.endpoint)(SessionId.wrap("s1")) == "/api/sessions/s1/live",
-        Http.href(Api.changes.endpoint)(()) == "/api/events"
+        Http.href(Api.changes.endpoint)(()) == "/api/events",
+        // 正文里的附件图片按这个前缀认（下载地址改了形状时这里要跟着改）
+        Markdown.FilesPath == "/api/files/"
       )
     }
   )

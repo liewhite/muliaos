@@ -39,7 +39,7 @@ object Endpoints:
 
   extension [I, O](e: Endpoint[Option[String], I, ApiError, O, ZioStreams])
     /** 需要登录的流式接口（SSE）：逻辑自己给出接口错误体。 */
-    def securedStream(logic: I => IO[ApiError, O]): Route =
+    private def securedStream(logic: I => IO[ApiError, O]): Route =
       auth => e.zServerSecurityLogic(auth.authenticate).serverLogic[Any](_ => logic)
 
   extension [I, E](f: Feed[I, E])

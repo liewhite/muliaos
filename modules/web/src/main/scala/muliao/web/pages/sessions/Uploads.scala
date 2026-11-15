@@ -71,7 +71,7 @@ final class Uploads:
     val key = next
     items.update(_ :+ Upload(key, file.name, State.Uploading))
     val mediaType = if file.`type`.isEmpty then "application/octet-stream" else file.`type`
-    Http.bytesOf(file).flatMap(bytes => Http.call(SessionsApi.upload)((file.name, mediaType, bytes))).onComplete { r =>
+    Http.bytesOf(file).flatMap(bytes => Http.call(SessionsApi.upload)(muliao.contract.Upload(file.name, mediaType, bytes))).onComplete { r =>
       val st = r match
         case Success(info) => State.Done(info)
         case TryFailure(e) => State.Failed(Http.messageOf(e))

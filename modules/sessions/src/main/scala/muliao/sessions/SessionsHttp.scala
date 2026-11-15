@@ -97,7 +97,7 @@ final case class SessionsHttp(sessions: Sessions, console: SessionConsole, files
       SessionsApi.read.secured(console.markRead),
       SessionsApi.delete.secured(console.delete),
       SessionsApi.answer.secured(answer),
-      SessionsApi.upload.secured((name, ct, bytes) => files.upload(name, ct, Chunk.fromArray(bytes)).map(Timeline.file)),
+      SessionsApi.upload.secured(u => files.upload(u.name, u.mediaType, Chunk.fromArray(u.bytes)).map(Timeline.file)),
       SessionsApi.download.secured(download),
       SessionsApi.blob.secured(blob),
       SessionsApi.usage.secured(r => console.usage(r.from, r.to))

@@ -37,10 +37,10 @@ object Live:
       stop = _ =>
         conn.foreach(_.close())
         conn = None
-    ).collect {
+    ).collectOpt {
       case Frame.Ready   => Some(Frame.Ready)
       case Frame.Data(j) => feed.codec.decoder.decodeJson(j).toOption.map(Frame.Data(_))
-    }.collect { case Some(f) => f }
+    }
 
   private final class Connection(url: String, eventName: String, fire: Frame[String] => Unit):
     private var source: Option[dom.EventSource] = None

@@ -8,7 +8,7 @@ import muliao.sessions.store.UploadRow
 object Timeline:
 
   /** 一次调用怎么展示：按工具名与参数原文（JSON）。 */
-  type Shows = (String, String) => Display
+  type Shows = (tool: String, args: String) => Display
 
   def file(u: UploadRow): FileView = FileView(u.id, u.name, u.mediaType, u.size)
 
