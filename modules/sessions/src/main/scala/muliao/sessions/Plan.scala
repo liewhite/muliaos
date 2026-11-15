@@ -1,6 +1,6 @@
 package muliao.sessions
 
-import muliao.contract.RunId
+import muliao.contract.{CallState, RunId}
 
 /** 进行中的运行：编号与状态。 */
 private[sessions] final case class ActiveRun(id: RunId, suspended: Boolean)

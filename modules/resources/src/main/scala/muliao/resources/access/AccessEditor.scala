@@ -1,6 +1,6 @@
 package muliao.resources.access
 
-import muliao.contract.{AgentId, AgentName}
+import muliao.contract.{AgentId, AgentName, AssetKind}
 import muliao.platform.AppError
 import muliao.platform.db.Database
 import muliao.resources.ToolCatalog
@@ -16,7 +16,7 @@ object AccessValidation:
     rule.selector match
       case Selector.Path(_) => true
       case Selector.Named(kinds, glob) =>
-        (kinds(Kind.Tool) && tools.exists(glob.matches)) ||
+        (kinds(AssetKind.Tool) && tools.exists(glob.matches)) ||
         snapshot.named.exists((k, n, _) => kinds(k) && glob.matches(n))
 
   /** `before` 为空表示原来没有这份文件或原来就是坏的。 */

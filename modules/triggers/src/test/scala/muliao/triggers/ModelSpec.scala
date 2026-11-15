@@ -21,25 +21,25 @@ object ModelSpec extends ZIOSpecDefault:
       )
     },
     test("配置按种类解读：只认这个种类的字段，缺的、多的都报；不带时区的时刻按服务器时区") {
-      val once = Mode.parse(Kind.Once, TriggerConfig(at = Some("2026-10-22T10:30")), shanghai)
-      val extra = Mode.parse(Kind.Schedule, TriggerConfig(cron = Some("* * * * *"), command = Some("x")), shanghai)
-      val missing = Mode.parse(Kind.Stream, TriggerConfig(), shanghai)
-      val stream = Mode.parse(Kind.Stream, TriggerConfig(command = Some("tail -f x"), debounceSeconds = Some(1.5)), shanghai)
+      val once = Mode.parse(TriggerKind.Once, TriggerConfig(at = Some("2026-10-22T10:30")), shanghai)
+      val extra = Mode.parse(TriggerKind.Schedule, TriggerConfig(cron = Some("* * * * *"), command = Some("x")), shanghai)
+      val missing = Mode.parse(TriggerKind.Stream, TriggerConfig(), shanghai)
+      val stream = Mode.parse(TriggerKind.Stream, TriggerConfig(command = Some("tail -f x"), debounceSeconds = Some(1.5)), shanghai)
       assertTrue(
         once == Right(Mode.Once(Instant.parse("2026-10-22T02:30:00Z"))),
         extra.left.exists(_.contains("不用 command")),
         missing.left.exists(_.contains("缺少 command")),
         stream == Right(Mode.Stream("tail -f x", Nil, 1500.millis)),
-        Kind.parse("cron").isLeft,
+        TriggerKind.parse("cron").isLeft,
         TriggerName.make("Daily_Report").isLeft,
         TriggerName.make("daily-report-2").isRight
       )
     },
     test("配置写回再读一样（库里存的就是它）") {
       val modes = List(
-        Mode.parse(Kind.Schedule, TriggerConfig(cron = Some("*/5 * * * *")), shanghai),
-        Mode.parse(Kind.Once, TriggerConfig(at = Some("2026-10-22T10:30+08:00")), shanghai),
-        Mode.parse(Kind.Stream, TriggerConfig(command = Some("c"), secrets = Some(List("K")), debounceSeconds = Some(2)), shanghai)
+        Mode.parse(TriggerKind.Schedule, TriggerConfig(cron = Some("*/5 * * * *")), shanghai),
+        Mode.parse(TriggerKind.Once, TriggerConfig(at = Some("2026-10-22T10:30+08:00")), shanghai),
+        Mode.parse(TriggerKind.Stream, TriggerConfig(command = Some("c"), secrets = Some(List("K")), debounceSeconds = Some(2)), shanghai)
       ).map(_.toOption.get)
       val again = modes.map(m => Mode.parse(m.kind, m.config(shanghai), shanghai).toOption.get)
       assertTrue(again.map(_.config(shanghai)) == modes.map(_.config(shanghai)))

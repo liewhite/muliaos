@@ -12,7 +12,7 @@ final case class AgentForm(
     description: String,
     group: String,
     model: String,
-    thinking: String,
+    thinking: Thinking,
     roles: List[String],
     allow: List[String],
     deny: List[String]
@@ -27,13 +27,13 @@ object AgentForm:
       d.summary.description.getOrElse(""),
       d.summary.group.getOrElse(""),
       d.summary.model.getOrElse(""),
-      d.thinking.getOrElse("default"),
+      d.thinking.getOrElse(Thinking.Default),
       d.roles,
       d.allow,
       d.deny
     )
 
-  def blank(defaults: AgentDefaults): AgentForm = AgentForm("", "", "", defaults.model, "default", Nil, Nil, Nil)
+  def blank(defaults: AgentDefaults): AgentForm = AgentForm("", "", "", defaults.model, Thinking.Default, Nil, Nil, Nil)
 
   def create(f: AgentForm): AgentCreate =
     AgentCreate(
@@ -61,13 +61,13 @@ object AgentForm:
     )
 
   /** 思考档位的显示名：「默认」什么都不传（按模型与服务端的默认）。 */
-  def thinkingLabel(t: String): String = t match
-    case "default" => "默认"
-    case "off"     => "关闭"
-    case other     => other
+  def thinkingLabel(t: Thinking): String = t match
+    case Thinking.Default => "默认"
+    case Thinking.Off     => "关闭"
+    case other            => other.label
 
   /** 各项配置。`agent` 为空是还没建的（预览权限时按它算「自己的资源」）。 */
-  def fields(agent: Option[AgentId], form: Var[AgentForm], thinkings: List[String]): Modifier[HtmlElement] =
+  def fields(agent: Option[AgentId], form: Var[AgentForm], thinkings: List[Thinking]): Modifier[HtmlElement] =
     def field(get: AgentForm => String, set: (AgentForm, String) => AgentForm): Var[String] =
       form.zoom(get)((f, v) => set(f, v))
     Seq(
@@ -89,7 +89,7 @@ object ModelInput:
     case Array(p)    => (p, "")
     case _           => ("", "")
 
-  def view(model: Signal[String], onModel: String => Unit, thinking: Signal[String], onThinking: String => Unit, thinkings: List[String]): HtmlElement =
+  def view(model: Signal[String], onModel: String => Unit, thinking: Signal[Thinking], onThinking: Thinking => Unit, thinkings: List[Thinking]): HtmlElement =
     val overview = Remote.once(Http.call(ModelsApi.overview)(()))
     val provider = model.map(split(_)._1).distinct
     val listed: Signal[Load[List[String]]] = provider.flatMapSwitch {
@@ -126,7 +126,7 @@ object ModelInput:
           placeholderText = "请选择",
           disabledIf = provider.map(_.isEmpty)
         ),
-        Fields.select[String](
+        Fields.select[Thinking](
           "思考",
           thinking.map(Some(_)),
           onThinking,

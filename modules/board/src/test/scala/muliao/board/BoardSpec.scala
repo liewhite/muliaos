@@ -189,7 +189,7 @@ object BoardSpec extends ZIOSpecDefault:
         yield assertTrue(
           ls1(1).contains("请表态"),
           sum1.stalled,
-          sum1.assigneeState.contains("idle"),
+          sum1.assigneeState.contains(WorkState.Idle),
           ls2(2).contains("动一动"),
           ls2(3).contains("请表态"),
           !sum2.stalled,

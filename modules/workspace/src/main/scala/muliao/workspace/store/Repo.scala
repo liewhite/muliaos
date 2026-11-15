@@ -1,7 +1,7 @@
 package muliao.workspace.store
 
 import io.getquill.*
-import muliao.contract.{AgentId, JobId, SessionId}
+import muliao.contract.{AgentId, JobId, JobStatus, SessionId}
 import muliao.platform.db.*
 import muliao.platform.db.Sql.*
 
@@ -10,7 +10,7 @@ final case class JobRow(
     agentId: AgentId,
     sessionId: SessionId,
     label: String,
-    state: String,
+    state: JobStatus,
     exitCode: Option[Int],
     reported: Boolean,
     startedAt: Long,
@@ -46,9 +46,9 @@ object Repo:
 
   /** 还在跑的，或结局还没交回的。 */
   val unsettled: Read[List[JobRow]] =
-    Sql.run(jobs.filter(j => j.state == "running" || !j.reported)).orInternal
+    Sql.run(jobs.filter(j => j.state == lift(JobStatus.Running) || !j.reported)).orInternal
 
-  def setOutcome(id: JobId, state: String, exitCode: Option[Int], endedAt: Long): Tx[Unit] =
+  def setOutcome(id: JobId, state: JobStatus, exitCode: Option[Int], endedAt: Long): Tx[Unit] =
     Sql.run(jobs.filter(_.id == lift(id)).update(_.state -> lift(state), _.exitCode -> lift(exitCode), _.endedAt -> Some(lift(endedAt)), _.reported -> false))
       .unit
       .orInternal

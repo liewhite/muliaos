@@ -12,7 +12,7 @@ import Http.ec
 
 /** 消息里的附件：图片显示缩略图（点开看原图），其他文件是下载链接。 */
 object Attachments:
-  def url(f: FileView): String = s"/api/files/${Http.enc(f.id)}"
+  def url(f: FileView): String = s"/api/files/${Http.enc(f.id.value)}"
 
   private val inlineTypes = Set("image/png", "image/jpeg", "image/gif", "image/webp")
   def isImage(f: FileView): Boolean = inlineTypes(f.mediaType)
@@ -81,10 +81,13 @@ final class Uploads:
 
   def remove(keys: Set[Int]): Unit = items.update(_.filterNot(u => keys(u.key)))
 
-  /** 已上传好的：发消息时引用它们的编号。 */
-  def done: List[(Int, FileView)] = items.now().collect { case Upload(k, _, State.Done(f)) => k -> f }
+  /** 已上传好的一个附件：列表里的键与文件。 */
+  final case class Ready(key: Int, file: FileView)
 
-  val ids: Signal[List[String]] = items.signal.map(_.collect { case Upload(_, _, State.Done(f)) => f.id })
+  /** 已上传好的：发消息时引用它们的编号。 */
+  def done: List[Ready] = items.now().collect { case Upload(k, _, State.Done(f)) => Ready(k, f) }
+
+  val ids: Signal[List[FileId]] = items.signal.map(_.collect { case Upload(_, _, State.Done(f)) => f.id })
 
   /** 有正在上传或失败未移除的：此时不能发送，免得以为附件发出去了。 */
   val blocking: Signal[Boolean] = items.signal.map(_.exists(_.state match

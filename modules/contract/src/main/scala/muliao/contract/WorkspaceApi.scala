@@ -8,13 +8,24 @@ import zio.json.*
 
 // ---- 后台任务 ----
 
-/** 一个后台任务。`state`：running / exited / killed / interrupted；`log` 是日志相对 agent 工作目录的路径。 */
+/** 后台任务的状态。 */
+enum JobStatus(val label: String) extends Labeled:
+  case Running     extends JobStatus("running")
+  case Exited      extends JobStatus("exited")
+  /** 被结束（job_kill、界面、会话被停止） */
+  case Killed      extends JobStatus("killed")
+  /** 服务关停或崩溃时它还在跑：平台没有接管它 */
+  case Interrupted extends JobStatus("interrupted")
+
+object JobStatus extends Labels[JobStatus]("后台任务状态", JobStatus.values)
+
+/** 一个后台任务。`exitCode`：结束了（exited / killed）时的退出码；`log` 是日志相对 agent 工作目录的路径。 */
 final case class JobView(
     id: JobId,
     agent: AgentId,
     session: SessionId,
     label: String,
-    state: String,
+    state: JobStatus,
     exitCode: Option[Int],
     startedAt: Long,
     endedAt: Option[Long],

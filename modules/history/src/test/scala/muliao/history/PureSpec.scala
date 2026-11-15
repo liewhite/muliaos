@@ -66,8 +66,8 @@ object PureSpec extends ZIOSpecDefault:
       )
     },
     test("读会话：来信按来源打标签，回答正文、调用与结果、通知各成一条，思考不读出；按标签、正则、时刻筛选；只截可截的") {
-      val call = CallView("c1", "run_shell", """{"command":"ls"}""", "Terminal", "done", Some(ResultView("a\nb", Nil, isError = false)), None, Some(at(9, 1)), Some(at(9, 2)))
-      val bad  = CallView("c2", "read_file", "{}", "Code", "done", Some(ResultView("没有这个文件", List(ImageRef("image/png", "s")), isError = true)), None, Some(at(9, 3)), Some(at(9, 4)))
+      val call = CallView(CallId.wrap("c1"), "run_shell", """{"command":"ls"}""", Display.Terminal, CallState.Done, Some(ResultView("a\nb", Nil, isError = false)), None, Some(at(9, 1)), Some(at(9, 2)))
+      val bad  = CallView(CallId.wrap("c2"), "read_file", "{}", Display.Code, CallState.Done, Some(ResultView("没有这个文件", List(ImageRef("image/png", "s")), isError = true)), None, Some(at(9, 3)), Some(at(9, 4)))
       val tl = List(
         TimelineItem(1, "context", Some(1), at(9, 0), at(9, 0), text = Some("当前时间 ...")),
         TimelineItem(2, "letter", Some(1), at(9, 0), at(9, 0), source = Some("USER"), text = Some("帮我看看目录" * 300)),

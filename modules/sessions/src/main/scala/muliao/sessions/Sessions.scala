@@ -17,8 +17,8 @@ import java.time.{Instant, LocalDate}
 /** 会话与运行领域给别的领域与界面的入口。
   *
   * 别的领域：投信（[[deliver]]，触发器开会话、看板投 issue 动态）、查工作状态（[[states]]，全系统唯一判断）、停止（[[stop]]）、
-  * 登记与结束异步工作（[[openWait]] / [[closeWait]]，如后台任务）、读时间线（[[timeline]]，`session_read`）。
-  * 往本领域接东西（工具、事件订阅、异步工作种类、批准后的执行者、未读来源）用 [[SessionHooks]]。
+  * 登记与结束会话在等的后台任务（[[openJobWait]] / [[closeJobWait]]）、读时间线（[[timeline]]，`session_read`）。
+  * 往本领域接东西（工具、事件订阅、后台任务的状态与取消、批准后的执行者、未读来源）用 [[SessionHooks]]。
   */
 trait Sessions:
   /** 启动：收尾上次被打断的调用、续跑、起等待调度。要在各领域都往 [[SessionHooks]] 接好工具后调用。 */
@@ -42,11 +42,11 @@ trait Sessions:
   /** 停止（空闲时什么也不做）。 */
   def stop(id: SessionId): IO[AppError, Unit]
 
-  /** 登记一项异步工作（会话因此「等待中」）；`heartbeat` 给出时定期投检查。返回等待编号。 */
-  def openWait(session: SessionId, kind: String, ref: String, label: String, heartbeat: Option[Duration]): IO[AppError, Long]
+  /** 会话开始等一个后台任务（因此「等待中」）；`heartbeat` 给出时定期投检查（状态取自 [[JobControl]]）。 */
+  def openJobWait(session: SessionId, job: JobId, label: String, heartbeat: Option[Duration]): IO[AppError, Unit]
 
-  /** 结束一项异步工作，`letter` 给出时作为事件投回发起会话。已结束的返回 false。 */
-  def closeWait(kind: String, ref: String, letter: Option[Letter]): IO[AppError, Boolean]
+  /** 后台任务结束，`letter` 给出时作为事件投回在等它的会话。没人在等（已结束过、会话被停止）返回 false。 */
+  def closeJobWait(job: JobId, letter: Option[Letter]): IO[AppError, Boolean]
 
   def timeline(id: SessionId): IO[AppError, List[TimelineItem]]
 
@@ -59,11 +59,11 @@ trait Sessions:
   def lastAnswer(id: SessionId): IO[AppError, String]
 
   // ---- 界面 ----
-  /** @param origins 只要这些来源（user / trigger / issue / thread；空是不限） */
-  def list(agent: Option[AgentId], q: Option[String], before: Option[Long], limit: Int, origins: List[String] = Nil): IO[AppError, SessionPage]
+  /** @param origins 只要这些来源（空是不限） */
+  def list(agent: Option[AgentId], q: Option[String], before: Option[Long], limit: Int, origins: List[OriginKind] = Nil): IO[AppError, SessionPage]
   def detail(id: SessionId): IO[AppError, SessionDetail]
   def retry(id: SessionId): IO[AppError, Unit]
-  def answer(id: SessionId, entry: Long, call: String, a: Answer): IO[AppError, Unit]
+  def answer(id: SessionId, call: CallKey, a: Answer): IO[AppError, Unit]
   def compact(id: SessionId): IO[AppError, Boolean]
   def delete(id: SessionId): IO[AppError, Unit]
   def markRead(id: SessionId): IO[AppError, Unit]
@@ -74,72 +74,107 @@ object Sessions:
   type Env = Database & ChangeBus & SessionHooks & Files & LiveHub & Resources & Agents & Models & McpConnector & Vault & ResourcePaths &
     SessionSettings & GeneralSettings & AgentHooks
 
-  val layer: ZLayer[Env, AppError, Sessions] = ZLayer.scoped(
-    for
-      deps <- ZIO.service[Database].zip(ZIO.service[ChangeBus]).zip(ZIO.service[SessionHooks]).zip(ZIO.service[Files]).zip(ZIO.service[LiveHub])
-      res  <- ZIO.service[Resources].zip(ZIO.service[Agents]).zip(ZIO.service[Models]).zip(ZIO.service[McpConnector]).zip(ZIO.service[Vault])
-      more <- ZIO.service[ResourcePaths].zip(ZIO.service[SessionSettings]).zip(ZIO.service[GeneralSettings])
-      (db, bus, hooks, files, live)                = deps
-      (resources, agents, models, mcp, vault)      = res
-      (paths, settings, general)                   = more
-      engine <- Engine.make(Deps(db, bus, hooks, files, live, resources, agents, models, mcp, vault, paths, settings, general.timezone))
-      _      <- hooks.addTools(SessionTools.all(engine))
-      ah     <- ZIO.service[AgentHooks]
-      _ <- ah.register(new AgentHook:
-             val name                        = "会话"
-             def busy(agent: AgentId)        = engine.agentBusy(agent)
-             def cleanup(agent: AgentId)     = engine.agentCleanup(agent)
-           )
-    yield Live(engine)
-  )
+  /** 按子领域装起本领域的各部分（各自是一个服务，依赖只朝下：底子 → 信箱 → 等待 → 委派 → 请求模型 → 驱动 / 控制 / 等待调度），
+    * 把本领域的工具与 agent 的忙碌判断、清理接到上游，对外只给 [[Sessions]]。
+    */
+  val layer: ZLayer[Env, AppError, Sessions] =
+    ZLayer.makeSome[Env, Sessions](
+      Kernel.layer,
+      Slots.layer,
+      Doorbell.layer,
+      States.layer,
+      Mailbox.layer,
+      Waits.layer,
+      Delegations.layer,
+      Requests.layer,
+      Compaction.layer,
+      CallRunner.layer,
+      Driver.layer,
+      Control.layer,
+      WaitClock.layer,
+      ZLayer.derive[Parts],
+      wired
+    )
+
+  private def wired: ZLayer[Parts & AgentHooks, Nothing, Sessions] =
+    ZLayer(
+      for
+        p  <- ZIO.service[Parts]
+        l   = Live(p)
+        ah <- ZIO.service[AgentHooks]
+        _  <- p.kernel.hooks.addTools(SessionTools.all(p.delegations, p.control, p.waits, p.workStates, p.agents, p.kernel.zone))
+        _ <- ah.register(new AgentHook:
+               val name                    = "会话"
+               def busy(agent: AgentId)    = p.control.agentBusy(agent)
+               def cleanup(agent: AgentId) = p.control.agentCleanup(agent)
+             )
+      yield l
+    )
 
   /** 本领域自己的工具名与类别（组装时汇进全部内置工具目录）。 */
   val toolNames: List[String] = List("ask_user", "delegate_task", "ask_agent", "list_threads", "stop_thread", "wake_me")
 
-  private final case class Live(e: Engine) extends Sessions:
-    import e.deps.*
+  /** 本领域的各部分。 */
+  private final case class Parts(
+      kernel: Kernel,
+      mailbox: Mailbox,
+      workStates: States,
+      waits: Waits,
+      delegations: Delegations,
+      requests: Requests,
+      driver: Driver,
+      control: Control,
+      clock: WaitClock,
+      agents: Agents
+  )
 
-    def start: IO[AppError, Unit] = e.startup
+  private final class Live(parts: Parts) extends Sessions:
+    import parts.*
+    import parts.kernel.*
 
-    def deliver(to: Address, letter: Letter, dedupe: Option[String]) = e.deliver(to, letter, dedupe)
-    def deliverIn(to: Address, letter: Letter, dedupe: Option[String]) = e.deliverIn(to, letter, dedupe)
+    def start: IO[AppError, Unit] = driver.start *> clock.start
+
+    def deliver(to: Address, letter: Letter, dedupe: Option[String])   = mailbox.deliver(to, letter, dedupe)
+    def deliverIn(to: Address, letter: Letter, dedupe: Option[String]) = mailbox.deliverIn(to, letter, dedupe)
 
     def issueSessions(issues: List[IssueId]): IO[AppError, List[IssueSession]] =
       if issues.isEmpty then ZIO.succeed(Nil)
       else
-        db.read(Repo.issueSessions(issues.map(_.value.toString))).map(_.flatMap { r =>
-          r.originRef.flatMap(_.toLongOption).map(i => IssueSession(IssueId.wrap(i), r.agentId, r.id))
+        db.read(Repo.issueSessions(issues)).flatMap(ZIO.foreach(_)(SessionInfo.decode)).map(_.collect { case SessionInfo(id, agent, Origin.Issue(i), _, _, _, _) =>
+          IssueSession(i, agent, id)
         })
-    def info(id: SessionId)                                          = e.info(id)
-    def states(ids: List[SessionId])                                 = e.states(ids)
-    def state(id: SessionId)                                         = e.state(id)
-    def stop(id: SessionId)                                          = e.stop(id, byUser = false)
-    def openWait(session: SessionId, kind: String, ref: String, label: String, heartbeat: Option[Duration]) =
-      e.openWait(session, kind, ref, label, heartbeat, None)
-    def closeWait(kind: String, ref: String, letter: Option[Letter]) = e.closeWait(kind, ref, letter)
-    def lastAnswer(id: SessionId)                                    = e.lastAnswer(id)
-    def retry(id: SessionId)                                         = e.retry(id)
-    def answer(id: SessionId, entry: Long, call: String, a: Answer)  = e.answer(id, entry, call, a)
-    def compact(id: SessionId)                                       = e.compactNow(id)
-    def delete(id: SessionId)                                        = e.delete(id)
-    def markRead(id: SessionId)                                      = e.info(id) *> hooks.unread.flatMap(_.markRead(id))
-    def subscribe(id: SessionId)                                     = live.subscribe(id)
+    def info(id: SessionId)          = kernel.info(id)
+    def states(ids: List[SessionId]) = workStates.states(ids)
+    def state(id: SessionId)         = workStates.state(id)
+    def stop(id: SessionId)          = control.stop(id, byUser = false)
+    def openJobWait(session: SessionId, job: JobId, label: String, heartbeat: Option[Duration]) =
+      waits.open(session, WaitRef.Job(job), label, heartbeat).unit
+    def closeJobWait(job: JobId, letter: Option[Letter])        = waits.close(WaitKey.job(job), letter)
+    def lastAnswer(id: SessionId)                               = kernel.lastAnswer(id)
+    def retry(id: SessionId)                                    = control.retry(id)
+    def answer(id: SessionId, call: CallKey, a: Answer)         = control.answer(id, call, a)
+    def compact(id: SessionId)                                  = control.compactNow(id)
+    def delete(id: SessionId)                                   = control.delete(id)
+    def markRead(id: SessionId)                                 = kernel.info(id) *> hooks.unread.flatMap(_.markRead(id))
+    def subscribe(id: SessionId)                                = live.subscribe(id)
 
-    private def display: UIO[String => String] =
-      hooks.tools.map(ts => ts.map(t => t.spec.name -> t.spec.display.toString).toMap).map(m => n => m.getOrElse(n, "Plain"))
+    private final case class Queued(row: InboxRow, letter: Letter)
+
+    private def display: UIO[String => Display] =
+      hooks.tools.map(ts => ts.map(t => t.spec.name -> t.spec.display).toMap).map(m => n => m.getOrElse(n, Display.Plain))
 
     def timeline(id: SessionId): IO[AppError, List[TimelineItem]] =
       for
-        _       <- e.info(id)
+        _       <- kernel.info(id)
         entries <- db.read(Repo.entriesOf(id)).flatMap(Decode.entries)
         calls   <- db.read(Repo.callsOfSession(id)).flatMap(Decode.calls).map(_.groupBy(_.entryId))
         fileIds  = entries.flatMap {
                      case Entry(_, _, EntryBody.Mail(l), _, _) => l.files.toList
                      case _                                    => Nil
                    }
-        uploads <- db.read(Repo.uploadsOf(fileIds.distinct.map(FileId.wrap)))
+        uploads <- db.read(Repo.uploadsOf(fileIds.distinct))
         d       <- display
-      yield Timeline.items(entries, calls, uploads.map(u => u.id.value -> u).toMap, d)
+      yield Timeline.items(entries, calls, uploads.map(u => u.id -> u).toMap, d)
 
     def find(prefix: String): IO[AppError, SessionInfo] =
       val p = prefix.trim.toLowerCase
@@ -158,12 +193,12 @@ object Sessions:
         msgs    <- db.read(Repo.messagesBetween(ids, from, to))
         runs    <- db.read(Repo.runsBetween(ids, from, to))
         infos   <- ZIO.foreach(rows)(SessionInfo.decode).map(_.map(i => i.id -> i).toMap)
-        letters <- ZIO.foreach(msgs.filter(_.kind == "letter"))(m => Decode.entry(m).map(m -> _.body))
-        states  <- e.states(ids)
+        letters <- ZIO.foreach(msgs.filter(_.kind == EntryKind.Letter))(m => Decode.entry(m).map(m -> _.body))
+        states  <- workStates.states(ids)
       yield
         val bySession = msgs.groupBy(_.sessionId)
         val runsOf    = runs.groupBy(_.sessionId)
-        val failed    = runs.filter(r => r.state == RunState.Failed.label && r.finishedAt.exists(f => f >= from && f < to))
+        val failed    = runs.filter(r => r.state == RunState.Failed && r.finishedAt.exists(f => f >= from && f < to))
         def inRange(t: Long) = t >= from && t < to
         val active = (bySession.keys ++ runsOf.keys).toList.distinct.flatMap { id =>
           infos.get(id).map { i =>
@@ -183,15 +218,15 @@ object Sessions:
 
     private def summaries(rows: List[SessionRow]): IO[AppError, List[SessionSummary]] =
       for
-        st     <- e.states(rows.map(_.id))
+        st     <- workStates.states(rows.map(_.id))
         unread <- hooks.unread.flatMap(_.unread(rows.map(_.id)))
         ns     <- names(rows.map(_.agentId))
       yield rows.map(r =>
         SessionSummary(r.id, r.agentId, ns.getOrElse(r.agentId, r.agentId.value), r.title, r.origin, r.originRef, r.parentId,
-          st.getOrElse(r.id, WorkState.Idle).label, unread(r.id), r.createdAt, r.updatedAt)
+          st.getOrElse(r.id, WorkState.Idle), unread(r.id), r.createdAt, r.updatedAt)
       )
 
-    def list(agent: Option[AgentId], q: Option[String], before: Option[Long], limit: Int, origins: List[String]): IO[AppError, SessionPage] =
+    def list(agent: Option[AgentId], q: Option[String], before: Option[Long], limit: Int, origins: List[OriginKind]): IO[AppError, SessionPage] =
       val n    = limit.max(1).min(200)
       val text = q.map(_.trim).filter(_.nonEmpty)
       for
@@ -208,21 +243,24 @@ object Sessions:
         summary <- summaries(List(row)).map(_.head)
         run     <- db.read(Repo.lastRun(id))
         queued  <- db.read(Repo.queued(id))
-        letters <- ZIO.foreach(queued)(q => Decode.letter(q.letter).map(q -> _))
-        uploads <- db.read(Repo.uploadsOf(letters.flatMap(_._2.files.toList).distinct.map(FileId.wrap))).map(_.map(u => u.id.value -> u).toMap)
-        waits   <- e.waitsOf(id)
+        letters <- ZIO.foreach(queued)(q => Decode.letter(q.letter).map(Queued(q, _)))
+        uploads <- db.read(Repo.uploadsOf(letters.flatMap(_.letter.files.toList).distinct)).map(_.map(u => u.id -> u).toMap)
+        ws      <- waits.list(id)
         threads <- db.read(Repo.threadsOf(id)).flatMap(summaries)
-        dels    <- db.read(Repo.delegationsOf(waits.filter(_.kind == e.DelegationKind).flatMap(_.ref.toLongOption)))
+        dels    <- delegations.threadsOf(ws.collect { case Wait(_, _, WaitRef.Delegation(d), _, _, _) => d })
         open    <- db.read(Repo.openCalls(id)).flatMap(Decode.calls)
-        size    <- e.contextSize(id)
+        size    <- requests.contextSize(id)
         used    <- db.read(Repo.usageOfSession(id))
       yield SessionDetail(
         summary = summary,
         run = run.map(r => RunView(r.id.value, r.state, r.error, r.retryNote, r.startedAt, r.finishedAt)),
-        queued = letters.map((q, l) => QueuedView(q.id, l.source.label, l.text, l.files.toList.flatMap(uploads.get).map(Timeline.file), l.checkIn, q.createdAt)),
-        waits = waits.map { w =>
-          val thread = Option.when(w.kind == e.DelegationKind)(w.ref.toLongOption).flatten.flatMap(d => dels.find(_.id == d)).map(_.threadId)
-          WaitItem(w.id, w.kind, w.ref, w.label, w.heartbeat, w.dueAt, w.createdAt, thread)
+        queued = letters.map(q => QueuedView(q.row.id, q.letter.source.label, q.letter.text, q.letter.files.toList.flatMap(uploads.get).map(Timeline.file), q.letter.checkIn, q.row.createdAt)),
+        waits = ws.map { w =>
+          val target = w.ref match
+            case WaitRef.Job(job)      => WaitTarget.Job(job)
+            case WaitRef.Wake(due)     => WaitTarget.Wake(due)
+            case WaitRef.Delegation(d) => WaitTarget.Delegation(dels.get(d))
+          WaitItem(w.id.value, target, w.label, w.heartbeat, w.createdAt)
         },
         threads = threads,
         pending = open.collect { case c if c.state == CallState.Suspended => c.pause.map(p => PendingCall(c.entryId, c.callId, c.name, Timeline.pending(p))) }.flatten,

@@ -10,13 +10,13 @@ import Http.ec
 /** /ai-assets：全部 AI 资源，按种类（`?kind=`）与归属（`?owner=`）筛选。每项显示归属与被谁使用；没加载的文件与原因、access.toml 写坏的提示放在最上面。 */
 object AssetsPage:
   /** 种类标签页；`id` 是地址里的 `?kind=`。 */
-  enum KindTab(val id: String, val label: String, val kinds: Set[String]):
-    case Skill  extends KindTab("skill", "Skill", Set("skill"))
-    case Mcp    extends KindTab("mcp", "MCP", Set("mcp"))
-    case Secret extends KindTab("secret", "Secret", Set("secret"))
-    case Memory extends KindTab("memory", "记忆", Set("memory"))
+  enum KindTab(val id: String, val label: String, val kinds: Set[AssetItemKind]):
+    case Skill  extends KindTab("skill", "Skill", Set(AssetItemKind.Skill))
+    case Mcp    extends KindTab("mcp", "MCP", Set(AssetItemKind.Mcp))
+    case Secret extends KindTab("secret", "Secret", Set(AssetItemKind.Secret))
+    case Memory extends KindTab("memory", "记忆", Set(AssetItemKind.Memory))
     /** agent.toml 与 access.toml */
-    case Config extends KindTab("config", "配置文件", Set("agent", "access"))
+    case Config extends KindTab("config", "配置文件", Set(AssetItemKind.Agent, AssetItemKind.Access))
 
   object KindTab:
     def of(id: Option[String]): KindTab = id.flatMap(i => values.find(_.id == i)).getOrElse(Skill)
@@ -102,7 +102,7 @@ object AssetsPage:
         val i = item.now()
         Confirm
           .ask(s"删除「${i.name}」？", Some(body), "删除", danger = true)
-          .foreach(ok => if ok then act.run(Http.call(ResourcesApi.deleteAsset)((i.kind, i.name))): Unit)
+          .foreach(ok => if ok then i.kind.asset.foreach(k => act.run(Http.call(ResourcesApi.deleteAsset)((k, i.name))): Unit))
       }
     )
 

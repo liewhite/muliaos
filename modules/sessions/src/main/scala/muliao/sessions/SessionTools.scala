@@ -1,6 +1,7 @@
 package muliao.sessions
 
-import muliao.contract.ThreadName
+import muliao.contract.{SessionId, ThreadName, WorkState}
+import muliao.resources.agents.Agents
 import muliao.platform.AppError
 import muliao.toolkit.*
 import zio.*
@@ -67,8 +68,7 @@ private[sessions] object SessionTools:
   private def fail(e: AppError): ToolFailure = ToolFailure.fromAppError(e)
   private def reject(m: String): ToolFailure = ToolFailure.Rejected(m)
 
-  def all(engine: Engine): List[Tool[RunContext]] =
-    import engine.deps.*
+  def all(delegations: Delegations, control: Control, waits: Waits, states: States, agents: Agents, zone: java.time.ZoneId): List[Tool[RunContext]] =
 
     val askUser = Tool[RunContext, AskUserIn](
       "ask_user",
@@ -104,12 +104,11 @@ private[sessions] object SessionTools:
       for
         name   <- thread(in.thread)
         target <- agents.resolve(in.agent).mapError(fail)
-        mode    = if in.reportBack then DelegationMode.Report else DelegationMode.Notify
-        hb      = in.heartbeatSeconds.filter(_ => in.reportBack).map(s => Duration.fromMillis((s * 1000).toLong.max(1000)))
-        out    <- engine.delegate(ctx, target, name, in.task, mode, hb).mapError(fail)
-      yield
-        val back = if in.reportBack then "回答会作为事件交回这里。" else "回答会推送给用户，不回给你。"
-        ToolOutcome.text(s"已交给 ${target.name.value} 的 thread「${name.value}」（会话 ${out._1.value}）。$back")
+        hb      = in.heartbeatSeconds.map(s => Duration.fromMillis((s * 1000).toLong.max(1000)))
+        done    = (thread: SessionId, back: String) => s"已交给 ${target.name.value} 的 thread「${name.value}」（会话 ${thread.value}）。$back"
+        text <- (if in.reportBack then delegations.track(ctx, target, name, in.task, TrackedMode.Report, hb).map(t => done(t.thread, "回答会作为事件交回这里。"))
+                 else delegations.notifyUser(ctx, target, name, in.task).map(done(_, "回答会推送给用户，不回给你。"))).mapError(fail)
+      yield ToolOutcome.text(text)
     }
 
     val askAgent = Tool[RunContext, AskAgentIn](
@@ -121,9 +120,8 @@ private[sessions] object SessionTools:
       for
         name   <- thread(in.thread)
         target <- agents.resolve(in.agent).mapError(fail)
-        out    <- engine.delegate(ctx, target, name, in.message, DelegationMode.Ask, None).mapError(fail)
-        d      <- ZIO.fromOption(out._2).orElseFail(ToolFailure.Aborted("委派没有编号"))
-      yield ToolOutcome.Suspended(Pause.AwaitThread(d, name.value, target.name.value))
+        out    <- delegations.track(ctx, target, name, in.message, TrackedMode.Ask, None).mapError(fail)
+      yield ToolOutcome.Suspended(Pause.AwaitThread(out.delegation, name, target.name))
     }
 
     val listThreads = Tool[RunContext, NoArgs](
@@ -132,7 +130,7 @@ private[sessions] object SessionTools:
       Access.Read,
       display = Display.JsonData
     ) { (_, ctx) =>
-      engine.threads(ctx.session).map(ts => ToolOutcome.text(ts.toJsonPretty)).mapError(fail)
+      delegations.threads(ctx.session).map(ts => ToolOutcome.text(ts.toJsonPretty)).mapError(fail)
     }
 
     val stopThread = Tool[RunContext, StopThreadIn](
@@ -141,12 +139,14 @@ private[sessions] object SessionTools:
       Access.Write,
       Scheduling.Ordered
     ) { (in, ctx) =>
-      (for
-        agent <- ZIO.foreach(in.agent)(agents.resolve)
-        row   <- engine.findThread(ctx.session, in.thread, agent)
-        st    <- engine.state(row.id)
-        _     <- engine.stop(row.id, byUser = false)
-      yield ToolOutcome.text(if st == WorkState.Idle then s"thread「${in.thread}」本来就空闲。" else s"已停下 thread「${in.thread}」。")).mapError(fail)
+      thread(in.thread).flatMap { name =>
+        (for
+          agent <- ZIO.foreach(in.agent)(agents.resolve)
+          row   <- delegations.findThread(ctx.session, name, agent)
+          st    <- states.state(row.id)
+          _     <- control.stop(row.id, byUser = false)
+        yield ToolOutcome.text(if st == WorkState.Idle then s"thread「${name.value}」本来就空闲。" else s"已停下 thread「${name.value}」。")).mapError(fail)
+      }
     }
 
     val wakeMe = Tool[RunContext, WakeIn](
@@ -169,7 +169,7 @@ private[sessions] object SessionTools:
         note <- (due, in.note.map(_.trim).filter(_.nonEmpty)) match
                   case (Some(_), None)    => ZIO.fail(reject("约唤醒要写 note：醒来时只看得到它。"))
                   case (_, n)             => ZIO.succeed(n.getOrElse(""))
-        text <- engine.wake(ctx.session, due, note).mapError(fail)
+        text <- waits.wake(ctx.session, due, note).mapError(fail)
       yield ToolOutcome.text(text)
     }
 

@@ -1,7 +1,6 @@
 package muliao.resources.tree
 
-import muliao.contract.AgentName
-import muliao.resources.access.Kind
+import muliao.contract.{AgentName, AssetKind}
 
 import java.nio.file.Path
 
@@ -42,12 +41,12 @@ enum AssetPath:
     case Hidden | Misplaced                    => None
 
   /** 这个文件属于哪个按名字分发的资源。 */
-  def subject: Option[(Kind, String)] = this match
-    case SharedMemory(n)          => Some(Kind.Memory -> n)
-    case SkillMain(_, n)          => Some(Kind.Skill -> n)
-    case SkillAttachment(_, n, _) => Some(Kind.Skill -> n)
-    case Mcp(_, n)                => Some(Kind.Mcp -> n)
-    case Secret(_, k)             => Some(Kind.Secret -> k)
+  def subject: Option[(AssetKind, String)] = this match
+    case SharedMemory(n)          => Some(AssetKind.Memory -> n)
+    case SkillMain(_, n)          => Some(AssetKind.Skill -> n)
+    case SkillAttachment(_, n, _) => Some(AssetKind.Skill -> n)
+    case Mcp(_, n)                => Some(AssetKind.Mcp -> n)
+    case Secret(_, k)             => Some(AssetKind.Secret -> k)
     case _                        => None
 
 object AssetPath:

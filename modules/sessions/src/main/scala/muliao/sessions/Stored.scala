@@ -1,5 +1,6 @@
 package muliao.sessions
 
+import muliao.contract.{Labeled, Labels}
 import muliao.models.llm.{ReplyPart, Usage}
 import zio.Chunk
 import zio.json.*
@@ -17,12 +18,22 @@ enum EntryBody derives JsonCodec:
 
   def encode: String = (this: EntryBody).toJson
 
-  def tag: String = this match
-    case _: Context    => "context"
-    case _: Mail       => "letter"
-    case _: Reply      => "reply"
-    case _: Compaction => "compaction"
-    case _: Notice     => "notice"
+  def entryKind: EntryKind = this match
+    case _: Context    => EntryKind.Context
+    case _: Mail       => EntryKind.Letter
+    case _: Reply      => EntryKind.Reply
+    case _: Compaction => EntryKind.Compaction
+    case _: Notice     => EntryKind.Notice
+
+/** 时间线里一条的种类（存库，按它筛选；与 [[EntryBody]] 的分支一一对应）。 */
+enum EntryKind(val label: String) extends Labeled:
+  case Context    extends EntryKind("context")
+  case Letter     extends EntryKind("letter")
+  case Reply      extends EntryKind("reply")
+  case Compaction extends EntryKind("compaction")
+  case Notice     extends EntryKind("notice")
+
+object EntryKind extends Labels[EntryKind]("时间线种类", EntryKind.values)
 
 enum NoticeKind derives JsonCodec:
   case Failed, Stopped, Info
@@ -38,27 +49,6 @@ final case class CallResult(content: Chunk[StoredPart], isError: Boolean) derive
 object CallResult:
   def error(text: String): CallResult = CallResult(Chunk(StoredPart.Text(text)), isError = true)
   def ok(text: String): CallResult    = CallResult(Chunk(StoredPart.Text(text)), isError = false)
-
-/** 工具调用的状态。 */
-enum CallState(val label: String):
-  /** 还没开始 */
-  case Pending   extends CallState("pending")
-  case Running   extends CallState("running")
-  /** 挂起，见 [[Pause]] */
-  case Suspended extends CallState("suspended")
-  /** 用户批准了，等接着执行 */
-  case Approved  extends CallState("approved")
-  /** 用户批准了并选了以后不再问，等接着执行 */
-  case ApprovedAlways extends CallState("approved-always")
-  case Done      extends CallState("done")
-
-  /** 驱动接下来要执行它。 */
-  def runnable: Boolean = this match
-    case Pending | Approved | ApprovedAlways => true
-    case Running | Suspended | Done          => false
-
-object CallState:
-  def parse(s: String): CallState = values.find(_.label == s).getOrElse(throw IllegalStateException(s"未知的调用状态 $s"))
 
 /** 被打断、没有结果的调用给模型的说明。 */
 object Interrupted:

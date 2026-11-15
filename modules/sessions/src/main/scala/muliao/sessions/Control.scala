@@ -7,10 +7,23 @@ import muliao.sessions.store.*
 import zio.*
 import zio.json.*
 
-/** 用户与别的领域对会话的控制：停止、重试、答复挂起的调用、手动压缩、删除，以及 agent 删除时的清理。 */
-private[sessions] trait ControlPart:
-  this: Engine =>
-  import deps.*
+/** 用户与别的领域对会话的控制：停止、重试、答复挂起的调用、手动压缩、删除，以及 agent 删除时的忙碌判断与清理。 */
+private[sessions] final case class Control(
+    kernel: Kernel,
+    slots: Slots,
+    states: States,
+    doorbell: Doorbell,
+    mailbox: Mailbox,
+    waits: Waits,
+    delegations: Delegations,
+    requests: Requests,
+    compaction: Compaction
+):
+  import kernel.*
+
+  /** 有排队的信就按门铃（停止、独占结束后）。 */
+  private def ringIfMail(id: SessionId): IO[AppError, Unit] =
+    doorbell.ring(id).whenZIO(db.read(Repo.queued(id)).map(_.nonEmpty)).unit
 
   // ---- 停止 ----
 
@@ -18,56 +31,53 @@ private[sessions] trait ControlPart:
     * `byUser`：用户在界面上点的（会话空闲时报错）；内部逐层停止时空闲的直接跳过。
     */
   def stop(id: SessionId, byUser: Boolean): IO[AppError, Unit] =
-    state(id).flatMap {
+    states.state(id).flatMap {
       case WorkState.Idle if byUser => ZIO.fail(AppError.conflict("会话空闲，没有可停的"))
       case WorkState.Idle           => ZIO.unit
       case _ =>
         for
-          slot <- slots.modifyZIO { m =>
-                    m.get(id) match
-                      case Some(s) => s.stopping.set(true).as((s, m))
-                      case None    => Slot.make.tap(_.stopping.set(true)).map(s => (s, m.updated(id, s)))
-                  }
-          _ <- slot.fiber.get.flatMap(ZIO.foreachDiscard(_)(_.interrupt))
-          _ <- stopped(id, slot).ensuring(slots.update(_ - id))
-          _ <- kick(id).whenZIO(db.read(Repo.queued(id)).map(_.nonEmpty))
+          slot <- slots.halt(id)
+          _    <- stopped(id, slot).ensuring(slots.release(id))
+          _    <- ringIfMail(id)
         yield ()
     }
+
+  /** 停止的收尾：一个事务里记下停止的现场，再放弃等待中的工作、停下 thread、交回「被停止」。 */
+  private final case class Halted(waits: List[Wait], pending: List[ReplyTo], asked: Int)
 
   private def stopped(id: SessionId, slot: Slot): IO[AppError, Unit] =
     for
       partial <- slot.partial.get
       t       <- now
       i       <- info(id)
-      (waits, pending, asked) <- db.write(
-                                   for
-                                     _ <- ZIO.foreachDiscard(partial.filter(_.builder.parts.exists(visible)))(p => savePartial(id, p, t))
-                                     open <- Repo.openCalls(id).flatMap(Decode.calls)
-                                     _ <- ZIO.foreachDiscard(open)(c => setResult(c, CallResult.error(stoppedNote(c.state)), t))
-                                     run <- Repo.lastRun(id)
-                                     _ <- ZIO.foreachDiscard(run.filter(r => r.state == RunState.Running.label || r.state == RunState.Suspended.label))(r =>
-                                            Repo.setRunState(r.id, RunState.Stopped.label, None, Some(t))
-                                          )
-                                     _     <- Repo.dropQueued(id)
-                                     waits <- Repo.waitsOf(id)
-                                     _     <- ZIO.foreachDiscard(waits)(w => Repo.deleteWait(w.id))
-                                     asked <- Repo.openDelegationsFrom(id)
-                                     _     <- ZIO.foreachDiscard(asked)(d => Repo.finishDelegation(d.id, CallResult.error("[发起方被停止了]").toJson))
-                                     _ <- Repo.insertEntry(EntryRow(0L, id, run.map(_.id), "notice", EntryBody.Notice(NoticeKind.Stopped, "已停止").encode, "", t, t))
-                                     p <- takePendingReply(id)
-                                     _ <- Repo.touch(id, t) *> changed
-                                   yield (waits, p, asked)
-                                 )
-      _ <- waitCache.update(_ -- waits.map(_.id))
+      h <- db.write(
+             for
+               _     <- ZIO.foreachDiscard(partial.filter(_.builder.parts.exists(visible)))(p => savePartial(id, p, t))
+               open  <- Repo.openCalls(id).flatMap(Decode.calls)
+               _     <- ZIO.foreachDiscard(open)(c => CallTx.finish(c, CallResult.error(stoppedNote(c.state)), t))
+               run   <- Repo.lastRun(id)
+               _     <- ZIO.foreachDiscard(run.filter(_.state.active))(r => Repo.setRunState(r.id, RunState.Stopped, None, Some(t)))
+               _     <- Repo.dropQueued(id)
+               ws    <- waits.dropTx(id)
+               asked <- delegations.abandonTx(id)
+               _     <- noticeTx(id, run.map(_.id), NoticeKind.Stopped, "已停止", t)
+               p     <- mailbox.takePendingReply(id)
+               _     <- Repo.touch(id, t) *> changed
+             yield Halted(ws, p, asked.size)
+           )
+      _ <- waits.forget(h.waits.map(_.id))
       _ <- slot.partial.set(None)
       _ <- live.done(id)
-      // 放弃等待中的工作：后台任务结束、委派的 thread 逐层停下
-      _ <- ZIO.foreachDiscard(waits)(w => hooks.workKind(w.kind).flatMap(ZIO.foreachDiscard(_)(_.cancel(w.ref))))
+      // 放弃等待中的工作：后台任务结束；委派的 thread 由下面逐层停下
+      _ <- ZIO.foreachDiscard(h.waits.map(_.ref)) {
+             case WaitRef.Job(job)                       => hooks.jobs.flatMap(_.cancel(job))
+             case WaitRef.Wake(_) | WaitRef.Delegation(_) => ZIO.unit
+           }
       threads <- db.read(Repo.threadsOf(id))
       _ <- ZIO.foreachDiscard(threads)(th => stop(th.id, byUser = false).catchAll(e => ZIO.logWarning(s"停 thread ${th.id.value} 失败：${e.message}")))
-      _ <- ZIO.logInfo(s"会话 ${i.id.value} 已停止（放弃 ${waits.size} 项等待、${asked.size} 个在等的委派）")
+      _ <- ZIO.logInfo(s"会话 ${i.id.value} 已停止（放弃 ${h.waits.size} 项等待、${h.asked} 个在等的委派）")
       text <- ZIO.succeed(partial.map(p => ModelView.answerText(p.builder.parts)).filter(_.nonEmpty)).someOrElseZIO(lastAnswer(id))
-      _ <- handBack(i, pending, Outcome.Stopped(text))
+      _    <- delegations.handBack(i, h.pending, Outcome.Stopped(text))
     yield ()
 
   private def visible(p: ReplyPart): Boolean = p match
@@ -79,7 +89,7 @@ private[sessions] trait ControlPart:
   private def savePartial(id: SessionId, p: Partial, t: Long) =
     val parts = p.builder.parts.filter(visible)
     Repo.insertEntry(
-      EntryRow(0L, id, Some(p.run), "reply", EntryBody.Reply(parts, p.model, Usage.zero, None, interrupted = true).encode, ModelView.searchText(parts), p.startedAt, t)
+      EntryRow(0L, id, Some(p.run), EntryKind.Reply, EntryBody.Reply(parts, p.model, Usage.zero, None, interrupted = true).encode, ModelView.searchText(parts), p.startedAt, t)
     )
 
   private def stoppedNote(s: CallState): String = s match
@@ -92,46 +102,44 @@ private[sessions] trait ControlPart:
   /** 最终失败的运行从失败处接着跑。 */
   def retry(id: SessionId): IO[AppError, Unit] =
     for
-      st  <- state(id)
-      _   <- ZIO.when(st != WorkState.Idle)(ZIO.fail(AppError.conflict("会话不空闲，不用重试")))
+      _ <- states.requireIdle(id, "不用重试")
       run <- db.read(Repo.lastRun(id)).flatMap {
-               case Some(r) if r.state == RunState.Failed.label => ZIO.succeed(r)
-               case _                                           => ZIO.fail(AppError.conflict("最近一次运行没有失败，没什么可重试的"))
+               case Some(r) if r.state == RunState.Failed => ZIO.succeed(r)
+               case _                                     => ZIO.fail(AppError.conflict("最近一次运行没有失败，没什么可重试的"))
              }
       t <- now
       _ <- db.write(
-             Repo.setRunState(run.id, RunState.Running.label, None, None) *>
-               Repo.insertEntry(EntryRow(0L, id, Some(run.id), "notice", EntryBody.Notice(NoticeKind.Info, "重试").encode, "", t, t)) *>
-               addPendingReply(id, List(ReplyTo.User)) *> Repo.touch(id, t) *> changed
+             Repo.setRunState(run.id, RunState.Running, None, None) *> noticeTx(id, Some(run.id), NoticeKind.Info, "重试", t) *>
+               mailbox.addPendingReply(id, List(ReplyTo.User)) *> Repo.touch(id, t) *> changed
            )
-      _ <- kick(id)
+      _ <- doorbell.ring(id)
     yield ()
 
   // ---- 答复挂起的调用 ----
 
-  def answer(id: SessionId, entry: Long, callId: String, a: Answer): IO[AppError, Unit] =
+  def answer(id: SessionId, key: CallKey, a: Answer): IO[AppError, Unit] =
     for
       t <- now
       _ <- db.write(
              for
-               row <- Repo.call(entry, callId).someOrFail(AppError.notFound("没有这个调用"))
+               row <- Repo.call(key.entry, key.call).someOrFail(AppError.notFound("没有这个调用"))
                c   <- Decode.call(row)
                _   <- ZIO.when(row.sessionId != id)(ZIO.fail(AppError.notFound("没有这个调用")))
                _   <- ZIO.when(c.state != CallState.Suspended)(ZIO.fail(AppError.conflict("这个调用已经不在等答复了")))
                _ <- (c.pause, a) match
                       case (Some(Pause.AskUser(qs)), Answer.Answers(as)) =>
                         if as.size != qs.size then ZIO.fail(AppError.invalid(s"要回答 ${qs.size} 个问题，收到 ${as.size} 个"))
-                        else setResult(c, CallResult.ok(answersText(qs, as)), t)
+                        else CallTx.finish(c, CallResult.ok(answersText(qs, as)), t)
                       case (Some(_: Pause.Approval), Answer.Decision(true, always)) =>
                         val next = if always then CallState.ApprovedAlways else CallState.Approved
-                        Repo.setCall(c.entryId, c.callId, next.label, c.pause.map(_.toJson), None, c.startedAt, None)
+                        Repo.setCall(c.entryId, c.callId, next, c.pause.map(_.toJson), None, c.startedAt, None)
                       case (Some(_: Pause.Approval), Answer.Decision(false, _)) =>
-                        setResult(c, CallResult.error("[用户没有批准，没有执行。]"), t)
+                        CallTx.finish(c, CallResult.error("[用户没有批准，没有执行。]"), t)
                       case _ => ZIO.fail(AppError.invalid("答复的种类和这个调用在等的不一致"))
                _ <- Repo.touch(id, t) *> changed
              yield ()
            )
-      _ <- kick(id)
+      _ <- doorbell.ring(id)
     yield ()
 
   private def answersText(qs: List[Question], as: List[String]): String =
@@ -139,29 +147,28 @@ private[sessions] trait ControlPart:
 
   // ---- 手动压缩 ----
 
+  /** 独占会话（必须空闲且没有驱动）压缩一次，做完照常看一遍有没有新信。 */
   def compactNow(id: SessionId): IO[AppError, Boolean] =
-    exclusive(id)(ZIO.scoped(prepareKit(id).flatMap(k => compact(k, None))))
+    for
+      _    <- states.requireIdle(id, "等它空闲再做")
+      _    <- slots.reserve(id)
+      done <- ZIO.scoped(requests.prepareKit(id).flatMap(k => compaction.compact(k, None))).ensuring(slots.release(id) *> ringIfMail(id).ignore)
+    yield done
 
   // ---- 删除 ----
 
   /** 删除会话：忙时拒绝；它开出的 thread 保留；交给它的未完成委派以「被删除」回给发起方。 */
-  def delete(id: SessionId): IO[AppError, Unit] =
-    for
-      st <- state(id)
-      _  <- ZIO.when(st != WorkState.Idle)(ZIO.fail(AppError.conflict(s"会话正在${if st == WorkState.Running then "运行" else "等待"}，先停止再删除")))
-      _  <- remove(id)
-    yield ()
+  def delete(id: SessionId): IO[AppError, Unit] = states.requireIdle(id, "先停止再删除") *> remove(id)
 
   /** 删掉（不查忙不忙）。 */
-  def remove(id: SessionId): IO[AppError, Unit] =
+  private def remove(id: SessionId): IO[AppError, Unit] =
     for
-      i    <- info(id)
-      open <- db.read(Repo.openDelegationsTo(id))
-      _    <- ZIO.foreachDiscard(open)(d => finishDelegation(d.id, i, Outcome.Failed("这个 thread 被删除了")))
-      _    <- db.write(Repo.orphanThreads(id) *> Repo.deleteSession(id) *> changed)
-      _    <- waitCache.update(_.filterNot(_._2.sessionId == id))
-      _    <- live.done(id)
-      _    <- hooks.emit(SessionEvent.Deleted(id, i.agent, i.origin))
+      i <- info(id)
+      _ <- delegations.threadGone(i)
+      _ <- db.write(Repo.orphanThreads(id) *> Repo.deleteSession(id) *> changed)
+      _ <- waits.forgetSession(id)
+      _ <- live.done(id)
+      _ <- hooks.emit(SessionEvent.Deleted(id, i.agent, i.origin))
     yield ()
 
   // ---- agent 的忙碌与清理 ----
@@ -169,7 +176,7 @@ private[sessions] trait ControlPart:
   def agentBusy(agent: AgentId): IO[AppError, Option[String]] =
     for
       ss <- db.read(Repo.sessionsOfAgent(agent))
-      st <- states(ss.map(_.id))
+      st <- states.states(ss.map(_.id))
     yield
       val busy = ss.filter(s => st.get(s.id).exists(_ != WorkState.Idle))
       Option.when(busy.nonEmpty)(s"有 ${busy.size} 个会话在运行或等待（${busy.take(3).map(_.title).mkString("、")}）")
@@ -177,3 +184,6 @@ private[sessions] trait ControlPart:
   /** 删 agent 时删掉它的全部会话（可重复执行）。 */
   def agentCleanup(agent: AgentId): IO[AppError, Unit] =
     db.read(Repo.sessionsOfAgent(agent)).flatMap(ZIO.foreachDiscard(_)(s => stop(s.id, byUser = false) *> remove(s.id)))
+
+private[sessions] object Control:
+  val layer: URLayer[Kernel & Slots & States & Doorbell & Mailbox & Waits & Delegations & Requests & Compaction, Control] = ZLayer.derive[Control]

@@ -2,7 +2,7 @@ package muliao.platform.db
 
 import com.zaxxer.hikari.{HikariConfig, HikariDataSource}
 import io.getquill.{MappedEncoding, SnakeCase, SqliteZioJdbcContext}
-import muliao.contract.IsNewtype
+import muliao.contract.{IsLabeled, IsNewtype}
 import muliao.platform.AppError
 import org.flywaydb.core.Flyway
 import zio.*
@@ -17,6 +17,11 @@ object Sql extends SqliteZioJdbcContext(SnakeCase):
   // 用 implicit 而不是 given：领域代码 `import Sql.*` 就能带上，不必再 `import Sql.given`
   implicit def newtypeEncode[T, A](implicit n: IsNewtype[T, A]): MappedEncoding[T, A] = MappedEncoding(n.unwrap)
   implicit def newtypeDecode[T, A](implicit n: IsNewtype[T, A]): MappedEncoding[A, T] = MappedEncoding(n.wrap)
+
+  /** 所有 [[muliao.contract.Labeled]] 枚举按 `label` 存取。库里出现程序不认识的写法是数据坏了（迁移保证库不比程序新），读出即报错。 */
+  implicit def labeledEncode[E](implicit l: IsLabeled[E]): MappedEncoding[E, String] = MappedEncoding(l.label)
+  implicit def labeledDecode[E](implicit l: IsLabeled[E]): MappedEncoding[String, E] =
+    MappedEncoding(s => l.parse(s).fold(e => throw IllegalStateException(s"库里的值读不懂：$e"), identity))
 
 /** 一次写事务里登记「提交成功后再做」的动作（如广播「数据变了」、投递通知）。回滚则不做。 */
 final class TxHooks private (hooks: Ref[Chunk[UIO[Unit]]]):

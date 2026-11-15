@@ -14,6 +14,9 @@ import zio.schema.annotation.{description, fieldName}
 /** 触发器的工具：trigger_kinds、trigger_list、trigger_create、trigger_update、trigger_run、trigger_delete。 */
 object TriggerTools:
 
+  given Schema[TriggerKind] = LabeledArg.schema
+  given Schema[FireWhen]    = LabeledArg.schema
+
   final case class ConfigIn(
       @description("schedule：5 段 cron 表达式（分 时 日 月 周），按服务器时区") cron: Option[String] = None,
       @description("once：ISO 8601 时刻，如 2026-10-22T10:30（不带时区按服务器时区），须在将来") at: Option[String] = None,
@@ -27,7 +30,7 @@ object TriggerTools:
   final case class PrecheckIn(
       @description("触发前先跑的 bash 命令（在 agent 的工作目录里，开了 pipefail）；常驻流的事件行从标准输入喂给它") command: String,
       @fieldName("fire_when") @description("output：退出码 0 且标准输出非空才触发，输出替换事件；changed：输出与上次不同才触发，事件是 diff 加当前输出（第一次只记基线）")
-      fireWhen: String = "output",
+      fireWhen: FireWhen = FireWhen.Output,
       @description("作为同名环境变量注入的 secret（vault 里的 key）") secrets: List[String] = Nil
   ):
     def toSpec: PrecheckSpec = PrecheckSpec(command, fireWhen, secrets)
@@ -43,7 +46,7 @@ object TriggerTools:
 
   final case class CreateIn(
       @description("名字：小写字母、数字和 -，如 daily-report") name: String,
-      @description("种类：schedule、once 或 stream（各自的 config 见 trigger_kinds）") kind: String,
+      @description("种类（各自的 config 见 trigger_kinds）") kind: TriggerKind,
       @description("每次触发交给 agent 的处理说明；事件内容附在后面的 <event> 里") prompt: String,
       @description("种类相关的配置，只填这个种类用得上的字段") config: ConfigIn,
       @description("由哪个 agent 处理（名字）；省略是你自己") agent: Option[String] = None,
@@ -68,7 +71,7 @@ object TriggerTools:
   @jsonMemberNames(SnakeCase)
   final case class Listed(
       name: String,
-      kind: String,
+      kind: TriggerKind,
       config: Json,
       status: Json,
       agent: String,
@@ -109,12 +112,12 @@ object TriggerTools:
 
   private def listed(v: TriggerView, zone: java.time.ZoneId, logName: String): Listed =
     val status = v.kind match
-      case "stream" =>
+      case TriggerKind.Stream =>
         Json.Obj(
           "running_since" -> v.runningSince.fold[Json](Json.Null)(t => Json.Str(iso(t, zone))),
           "stderr_log"    -> Json.Str(logName)
         )
-      case _ =>
+      case TriggerKind.Schedule | TriggerKind.Once =>
         Json.Obj(
           "next_run_at" -> v.nextAt.fold[Json](Json.Null)(t => Json.Str(iso(t, zone))),
           "skipped"     -> Json.Num(v.skipped)
@@ -122,7 +125,7 @@ object TriggerTools:
     Listed(
       v.name.value, v.kind, snakeConfig(v.config), status, v.agentName, v.prompt, v.enabled,
       v.precheck.map(p =>
-        Json.Obj("command" -> Json.Str(p.command), "fire_when" -> Json.Str(p.fireWhen), "secrets" -> Json.Arr(Chunk.fromIterable(p.secrets.map(Json.Str(_)))))
+        Json.Obj("command" -> Json.Str(p.command), "fire_when" -> Json.Str(p.fireWhen.label), "secrets" -> Json.Arr(Chunk.fromIterable(p.secrets.map(Json.Str(_)))))
       ),
       v.faults, v.lastSession.map(_.value), v.finishedAt.map(iso(_, zone))
     )
@@ -155,7 +158,7 @@ object TriggerTools:
       (for
         agent <- in.agent.fold(ZIO.succeed(ctx.agent))(n => agents.resolve(n).map(_.id))
         v     <- t.create(NewTrigger(in.name, agent, in.kind, in.config.toConfig, in.prompt, enabled = true, in.precheck.map(_.toSpec)))
-      yield s"已创建触发器 ${v.name.value}（${v.kind}，${v.agentName}）" + v.nextAt.fold("")(n => s"，下次触发 ${iso(n, t.zone)}"))
+      yield s"已创建触发器 ${v.name.value}（${v.kind.label}，${v.agentName}）" + v.nextAt.fold("")(n => s"，下次触发 ${iso(n, t.zone)}"))
         .mapBoth(fail, ToolOutcome.text)
     }
 

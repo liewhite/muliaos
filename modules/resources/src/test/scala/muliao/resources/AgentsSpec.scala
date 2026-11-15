@@ -1,9 +1,10 @@
 package muliao.resources
 
+import muliao.contract.{AgentState, Thinking}
 import muliao.contract.{AgentId, RoleName}
 import muliao.platform.AppError
 import muliao.resources.agents.*
-import muliao.resources.tree.{AssetStore, Owner, Thinking}
+import muliao.resources.tree.{AssetStore, Owner}
 import muliao.resources.vault.{Actor, Vault}
 import zio.*
 import zio.test.*

@@ -1,19 +1,9 @@
 package muliao.resources.access
 
+import muliao.contract.AssetKind
 import muliao.platform.config.ConfigCodecs
 
 import java.nio.file.Path
-
-/** 规则能指到的资源种类。 */
-enum Kind(val label: String):
-  case Tool   extends Kind("tool")
-  case Skill  extends Kind("skill")
-  case Mcp    extends Kind("mcp")
-  case Secret extends Kind("secret")
-  case Memory extends Kind("memory")
-
-object Kind:
-  def parse(s: String): Option[Kind] = values.find(_.label == s)
 
 /** 对资源做什么：用（进 skill 索引、注入记忆、连 MCP、解析 secret、调用工具），或改（写它的文件）。 */
 enum Action(val label: String):
@@ -56,7 +46,7 @@ object Glob:
 /** 规则选中的对象。 */
 enum Selector:
   /** 若干种类里名字匹配通配的资源或工具。 */
-  case Named(kinds: Set[Kind], glob: Glob)
+  case Named(kinds: Set[AssetKind], glob: Glob)
 
   /** 本机资源目录以外的一个目录（含其下全部）：`write:path:<目录>`。 */
   case Path(dir: java.nio.file.Path)
@@ -66,7 +56,7 @@ final case class Rule private (actions: Set[Action], selector: Selector, text: S
   def grants(action: Action): Boolean = actions(action)
 
   /** 是否选中某种类里的某个名字。 */
-  def selects(action: Action, kind: Kind, name: String): Boolean =
+  def selects(action: Action, kind: AssetKind, name: String): Boolean =
     actions(action) && (selector match
       case Selector.Named(kinds, glob) => kinds(kind) && glob.matches(name)
       case Selector.Path(_)            => false)
@@ -92,7 +82,7 @@ object Rule:
                         kinds <- parseKinds(k, text)
                         _ <- Either.cond(n.nonEmpty, (), s"规则 `$text`：缺名字（任意名字写 *）")
                         _ <- Either.cond(
-                               !(kinds == Set(Kind.Tool) && actions == Set(Action.Write)),
+                               !(kinds == Set(AssetKind.Tool) && actions == Set(Action.Write)),
                                (),
                                s"规则 `$text`：工具只能 use，没有 write"
                              )
@@ -104,15 +94,15 @@ object Rule:
     case "*" => Right(Action.values.toSet)
     case s   => Action.values.find(_.label == s).map(Set(_)).toRight(s"动作 `$s` 不认识，只能是 use、write 或 *")
 
-  private def parseKinds(k: String, text: String): Either[String, Set[Kind]] = k match
-    case "*" => Right(Kind.values.toSet)
+  private def parseKinds(k: String, text: String): Either[String, Set[AssetKind]] = k match
+    case "*" => Right(AssetKind.values.toSet)
     case s =>
-      Kind.parse(s).map(Set(_)).toRight(s"规则 `$text`：种类 `$s` 不认识，只能是 tool、skill、mcp、secret、memory、path 或 *")
+      AssetKind.parse(s).map(Set(_)).left.map(_ => s"规则 `$text`：种类 `$s` 不认识，只能是 tool、skill、mcp、secret、memory、path 或 *")
 
   /** 内部生成的规则（内置角色），原文由选择器给出。 */
-  private[resources] def builtin(actions: Set[Action], kinds: Set[Kind], glob: String): Rule =
+  private[resources] def builtin(actions: Set[Action], kinds: Set[AssetKind], glob: String): Rule =
     val a = if actions.size == Action.values.length then "*" else actions.head.label
-    val k = if kinds.size == Kind.values.length then "*" else kinds.head.label
+    val k = if kinds.size == AssetKind.values.length then "*" else kinds.head.label
     Rule(actions, Selector.Named(kinds, Glob(glob)), s"$a:$k:$glob")
 
   def pathOf(r: Rule): Option[Path] = r.selector match

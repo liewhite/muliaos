@@ -1,7 +1,6 @@
 package muliao.board
 
 import muliao.contract.*
-import muliao.sessions.WorkState
 import zio.test.*
 
 /** 看板规则（纯函数）：谁在处理、投给谁、停滞、改动成动态、交给用户、打回给谁、审核条件、依赖成环。 */

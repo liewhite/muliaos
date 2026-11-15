@@ -7,8 +7,8 @@ import zio.test.*
 import Model.*
 
 object SessionModelSpec extends ZIOSpecDefault:
-  private def call(id: String, name: String = "run_shell", state: String = "done", result: Option[ResultView] = Some(ResultView("ok", Nil, false))) =
-    CallView(id, name, "{}", "Plain", state, result, None, Some(1000L), Some(2000L))
+  private def call(id: String, name: String = "run_shell", state: CallState = CallState.Done, result: Option[ResultView] = Some(ResultView("ok", Nil, false))) =
+    CallView(CallId.wrap(id), name, "{}", Display.Plain, state, result, None, Some(1000L), Some(2000L))
   private def reply(id: Long, parts: PartView*) = TimelineItem(id, "reply", Some(1L), 0, 0, parts = parts.toList)
   private def tool(c: CallView)                 = PartView("call", None, Some(c))
   private def text(t: String)                   = PartView("text", Some(t), None)
@@ -47,8 +47,8 @@ object SessionModelSpec extends ZIOSpecDefault:
       assertTrue(
         toolStatus(call("a", result = Some(ResultView("x", Nil, true))), live = false, runActive = false) == ToolStatus.Rejected,
         toolStatus(call("a"), live = false, runActive = false) == ToolStatus.Done,
-        toolStatus(call("a", state = "running", result = None), live = true, runActive = false) == ToolStatus.Running,
-        toolStatus(call("a", state = "running", result = None), live = false, runActive = false) == ToolStatus.Unfinished
+        toolStatus(call("a", state = CallState.Running, result = None), live = true, runActive = false) == ToolStatus.Running,
+        toolStatus(call("a", state = CallState.Running, result = None), live = false, runActive = false) == ToolStatus.Unfinished
       )
     },
     test("实时回复：开始清空、分段增长；时间线已包含时算存进库了") {

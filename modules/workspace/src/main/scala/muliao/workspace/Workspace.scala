@@ -8,7 +8,7 @@ import muliao.resources.agents.Agents
 import muliao.resources.guard.AssetGuard
 import muliao.resources.tree.AssetStore
 import muliao.resources.vault.Vault
-import muliao.sessions.{Files, SessionHooks, Sessions, WorkKind}
+import muliao.sessions.{Files, JobControl, SessionHooks, Sessions}
 import muliao.toolkit.Tool
 import muliao.sessions.RunContext
 import muliao.workspace.jobs.Jobs
@@ -46,13 +46,9 @@ object Workspace:
         tools  = FileTools.all(access, files) ++ ShellTools.all(runner, jobs) :+ SkillRun.tool(runner, grants)
         _ <- hooks.addTools(tools)
         _ <- hooks.addApproval(SkillRun.approval(runner, grants))
-        _ <- hooks.addWorkKind(new WorkKind:
-               val kind = Jobs.Kind
-               def status(ref: String): UIO[String] =
-                 ref.toLongOption.fold(ZIO.succeed(s"（任务号不对：$ref）"))(n =>
-                   jobs.brief(JobId.wrap(n)).catchAll(e => ZIO.succeed(s"（查不到：${e.message}）"))
-                 )
-               def cancel(ref: String): UIO[Unit] = ref.toLongOption.fold(ZIO.unit)(n => jobs.kill(JobId.wrap(n)).unit)
+        _ <- hooks.setJobs(new JobControl:
+               def status(job: JobId): UIO[String] = jobs.brief(job).catchAll(e => ZIO.succeed(s"（查不到：${e.message}）"))
+               def cancel(job: JobId): UIO[Unit]   = jobs.kill(job).unit
              )
         _ <- agentHooks.register(new AgentHook:
                val name = "工作区"

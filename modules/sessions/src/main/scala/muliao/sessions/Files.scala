@@ -1,5 +1,6 @@
 package muliao.sessions
 
+import muliao.contract.FileId
 import muliao.platform.AppError
 import muliao.platform.db.Database
 import muliao.sessions.store.{Repo, UploadRow}

@@ -5,10 +5,11 @@ import muliao.board.store.{DepRow, EventRow, IssueRow}
 import muliao.contract.*
 import muliao.history.store.HistoryRow
 import muliao.notifications.store.{NotificationRow, SubscriptionRow}
-import muliao.resources.agents.{AgentRecord, AgentState}
-import muliao.sessions.FileId
+import muliao.contract.AgentState
+import muliao.resources.agents.AgentRecord
+import muliao.sessions.{DelegationId, TrackedMode}
 import muliao.sessions.store.{DelegationRow, UploadRow, UsageRow}
-import muliao.triggers.{Kind, Mode, Precheck}
+import muliao.triggers.{Mode, Precheck}
 import muliao.triggers.store.{FaultRow, TriggerRow}
 import muliao.workspace.store.{GrantRow, JobRow}
 import zio.json.*
@@ -26,9 +27,9 @@ object Convert:
 
   def issue(i: Old.Issue): Either[String, IssueRow] =
     for
-      _ <- IssueStatus.parse(i.status).toRight(s"issue #${i.id} 的状态 ${i.status} 认不出")
-      _ <- Priority.parse(i.priority).toRight(s"issue #${i.id} 的优先级 ${i.priority} 认不出")
-    yield IssueRow(IssueId.wrap(i.id), i.title, i.description, i.status, i.priority, i.owner.map(AgentId.wrap), i.assignee, i.creator,
+      st <- IssueStatus.parse(i.status).left.map(e => s"issue #${i.id}：$e")
+      pr <- Priority.parse(i.priority).left.map(e => s"issue #${i.id}：$e")
+    yield IssueRow(IssueId.wrap(i.id), i.title, i.description, st, pr, i.owner.map(AgentId.wrap), i.assignee.map(Assignee.decode), i.creator,
       i.createdAt, i.updatedAt)
 
   def dependency(d: Old.Dependency): DepRow = DepRow(IssueId.wrap(d.issueId), IssueId.wrap(d.upstream))
@@ -54,8 +55,8 @@ object Convert:
   val legacyStatus: Map[String, IssueStatus] = Map("todo" -> IssueStatus.InProgress, "waiting" -> IssueStatus.Blocked)
 
   private def status(s: String): Either[String, IssueStatus] =
-    IssueStatus.parse(s).orElse(legacyStatus.get(s)).toRight(s"状态 $s 认不出")
-  private def priority(s: String): Either[String, Priority]  = Priority.parse(s).toRight(s"优先级 $s 认不出")
+    IssueStatus.parse(s).orElse(legacyStatus.get(s).toRight(s"状态 $s 认不出"))
+  private def priority(s: String): Either[String, Priority]  = Priority.parse(s)
 
   /** 时间线的一条。旧版的 `unsettled`（请 agent 表态）新版不记在时间线上（只记在请表态表里），返回 Right(None)。 */
   def event(a: Old.Activity): Either[String, Option[EventRow]] =
@@ -119,21 +120,23 @@ object Convert:
   /** 触发器一律停用（两个版本同时跑时不重复触发对外动作）；配置与前置检查按新版的规则校验一遍。 */
   def trigger(t: Old.Trigger, zone: ZoneId, now: Long): Either[String, (TriggerRow, List[FaultRow])] =
     val converted = for
-      kind  <- Kind.parse(t.kind)
+      kind  <- TriggerKind.parse(t.kind)
       old   <- t.config.fromJson[OldConfig]
       config = TriggerConfig(old.cron, old.at, old.command, old.secrets, old.debounce_seconds)
       _     <- Mode.parse(kind, config, zone)
       pre   <- t.precheck.filter(_.trim.nonEmpty).fold(Right(None))(_.fromJson[OldPrecheck].map(Some(_)))
-      spec   = pre.map(p => PrecheckSpec(p.command, p.fire_when.getOrElse("output"), p.secrets.getOrElse(Nil)))
+      when  <- pre.flatMap(_.fire_when).fold(Right(FireWhen.Output))(FireWhen.parse)
+      spec   = pre.map(p => PrecheckSpec(p.command, when, p.secrets.getOrElse(Nil)))
       _     <- spec.fold(Right(()))(Precheck.parse(_).map(_ => ()))
       state <- t.state.filter(_.trim.nonEmpty).fold(Right(OldState()))(_.fromJson[OldState])
       faults <- t.faults.filter(_.trim.nonEmpty).fold(Right(Nil))(_.fromJson[List[OldFault]])
+      srcs   <- faults.foldRight[Either[String, List[(FaultSource, OldFault)]]](Right(Nil))((f, acc) => FaultSource.parse(f.source).flatMap(s => acc.map((s, f) :: _)))
     yield
-      val baseline = spec.filter(_.fireWhen == "changed").flatMap(_ => t.precheckOutput)
-      val row = TriggerRow(t.id, TriggerName.wrap(t.name), AgentId.wrap(t.agentId), t.prompt, kind.label, config.toJson, enabled = false,
+      val baseline = spec.filter(_.fireWhen == FireWhen.Changed).flatMap(_ => t.precheckOutput)
+      val row = TriggerRow(TriggerId.wrap(t.id), TriggerName.wrap(t.name), AgentId.wrap(t.agentId), t.prompt, kind, config.toJson, enabled = false,
         spec.map(_.toJson), None, state.skipped.getOrElse(0), t.lastSessionId.map(SessionId.wrap), t.lastFiredAt, None, baseline,
         t.finishedAt, t.createdAt, t.lastFiredAt.getOrElse(t.createdAt))
-      (row, faults.map(f => FaultRow(t.id, f.source, f.error, now)))
+      (row, srcs.map((s, f) => FaultRow(TriggerId.wrap(t.id), s, f.error, now)))
     converted.left.map(e => s"触发器 ${t.name}（${t.id}）：$e")
 
   // ---- 其他 ----
@@ -156,19 +159,17 @@ object Convert:
 
   /** 后台任务只搬记录：旧版还在跑的记成被中断，结局算已交回（新版不补交、不接管进程）。 */
   def job(j: Old.Job): JobRow =
-    val state = j.status match
-      case s @ ("exited" | "killed" | "interrupted") => s
-      case _                                          => "interrupted"
-    JobRow(JobId.wrap(j.id), AgentId.wrap(j.agentId), SessionId.wrap(j.sessionId), j.command, state, j.exitCode.filter(_ => state != "interrupted"),
+    val state = JobStatus.parse(j.status).toOption.filter(_ != JobStatus.Running).getOrElse(JobStatus.Interrupted)
+    JobRow(JobId.wrap(j.id), AgentId.wrap(j.agentId), SessionId.wrap(j.sessionId), j.command, state, j.exitCode.filter(_ => state != JobStatus.Interrupted),
       reported = true, j.startedAt, j.finishedAt.orElse(Some(j.startedAt)))
 
   def grant(g: Old.Grant): GrantRow =
     GrantRow(g.id, AgentId.wrap(g.agentId), g.skill, g.script, g.args, g.secrets, g.fingerprint, g.createdAt)
 
-  /** 委派记录（都已结束）。`callEntry`：发起会话里那次调用所在的回复条目。 */
-  def delegation(t: Old.ThreadCall, callEntry: Option[Long], at: Long): DelegationRow =
+  /** 委派记录（都已结束）。`callEntry`：发起会话里那次调用所在的回复条目。回答推给用户的委派新版不记，返回 None。 */
+  def delegation(t: Old.ThreadCall, callEntry: Option[Long], at: Long): Option[DelegationRow] =
     val mode = t.mode match
-      case "ask"         => "ask"
-      case "report_back" => "report"
-      case _             => "notify"
-    DelegationRow(t.id, SessionId.wrap(t.parent), SessionId.wrap(t.thread), mode, callEntry, Some(t.callId), done = true, None, at)
+      case "ask"         => Some(TrackedMode.Ask)
+      case "report_back" => Some(TrackedMode.Report)
+      case _             => None
+    mode.map(m => DelegationRow(DelegationId.wrap(t.id), SessionId.wrap(t.parent), SessionId.wrap(t.thread), m, callEntry, Some(CallId.wrap(t.callId)), done = true, None, at))

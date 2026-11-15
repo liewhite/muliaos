@@ -6,7 +6,8 @@ import muliao.platform.AppError
 import muliao.platform.db.{Database, Tx}
 import muliao.platform.events.ChangeBus
 import muliao.resources.ResourcePaths
-import muliao.resources.agents.{AgentState, Agents}
+import muliao.contract.AgentState
+import muliao.resources.agents.Agents
 import muliao.sessions.*
 import muliao.triggers.store.{FaultRow, Repo, TriggerRow}
 import muliao.workspace.AgentExec
@@ -78,19 +79,18 @@ private[triggers] final case class Core(
   def decode(r: TriggerRow): IO[AppError, Trigger] =
     val parsed =
       for
-        kind     <- Kind.parse(r.kind)
         config   <- r.config.fromJson[TriggerConfig]
-        mode     <- Mode.parse(kind, config, zone)
+        mode     <- Mode.parse(r.kind, config, zone)
         precheck <- r.precheck.fold(Right(None))(p => p.fromJson[PrecheckSpec].flatMap(Precheck.parse).map(Some(_)))
       yield Trigger(
-        TriggerId.wrap(r.id), r.name, r.agentId, r.prompt, mode, r.enabled, precheck, r.nextAt, r.skipped, r.lastSessionId, r.lastFiredAt,
+        r.id, r.name, r.agentId, r.prompt, mode, r.enabled, precheck, r.nextAt, r.skipped, r.lastSessionId, r.lastFiredAt,
         r.blockNotified, r.baseline, r.finishedAt, r.createdAt, r.updatedAt
       )
     ZIO.fromEither(parsed).mapError(e => AppError.Internal(s"库里的触发器 ${r.name.value}（${r.id}）读不懂：$e"))
 
   def encode(t: Trigger): TriggerRow =
     TriggerRow(
-      t.id.value, t.name, t.agent, t.prompt, t.mode.kind.label, t.mode.config(zone).toJson, t.enabled, t.precheck.map(_.spec.toJson), t.nextAt,
+      t.id, t.name, t.agent, t.prompt, t.mode.kind, t.mode.config(zone).toJson, t.enabled, t.precheck.map(_.spec.toJson), t.nextAt,
       t.skipped, t.lastSession, t.lastFiredAt, t.blockNotified, t.baseline, t.finishedAt, t.createdAt, t.updatedAt
     )
 
@@ -111,7 +111,7 @@ private[triggers] final case class Core(
   /** 交给 agent 的信：处理说明，有事件就附在后面。 */
   def letter(t: Trigger, event: Option[String]): Letter =
     val text = event.fold(t.prompt)(e => s"${t.prompt}\n\n<event>\n$e\n</event>")
-    Letter(Source.Trigger(t.name.value), text)
+    Letter(Source.Trigger(t.name), text)
 
   /** 触发一次：agent 能不能接活 → 防重叠 → 前置检查 → 开会话（记下触发与投信在同一事务）。 */
   def fire(t: Trigger, cause: Occasion): IO[AppError, Fired] =
@@ -245,16 +245,16 @@ private[triggers] final case class Core(
       at <- now
       fresh <- db.write(
                  for
-                   before <- Repo.faultsOf(List(t.id.value))
+                   before <- Repo.faultsOf(List(t.id))
                    live   <- Repo.get(t.id)
-                   _      <- ZIO.when(live.isDefined)(Repo.putFault(FaultRow(t.id.value, source.label, error, at)) *> changed)
+                   _      <- ZIO.when(live.isDefined)(Repo.putFault(FaultRow(t.id, source, error, at)) *> changed)
                  yield before.isEmpty && live.isDefined
                )
       _ <- ZIO.when(fresh)(alert(t, source, error))
     yield ()).catchAll(e => ZIO.logError(s"记录触发器 ${t.name.value} 的脚本故障失败：${e.message}"))
 
   def clearFault(t: Trigger, source: FaultSource): UIO[Unit] =
-    db.write(Repo.clearFaults(t.id, Some(source.label)).tap(n => ZIO.when(n > 0)(changed)))
+    db.write(Repo.clearFaults(t.id, Some(source)).tap(n => ZIO.when(n > 0)(changed)))
       .catchAll(e => ZIO.logError(s"清除触发器 ${t.name.value} 的脚本故障失败：${e.message}"))
       .unit
 
@@ -272,7 +272,7 @@ private[triggers] final case class Core(
          |
          |请排查并修好它。$fix""".stripMargin
     sessions
-      .deliver(Address.Fresh(t.agent, Origin.Trigger(t.name), s"${t.name.value} 的$what 出错"), Letter(Source.Trigger(t.name.value), text))
+      .deliver(Address.Fresh(t.agent, Origin.Trigger(t.name), s"${t.name.value} 的$what 出错"), Letter(Source.Trigger(t.name), text))
       .unit
       .catchAll { e =>
         notifications

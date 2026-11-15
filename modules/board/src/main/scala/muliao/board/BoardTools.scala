@@ -20,26 +20,8 @@ object BoardTools:
 
   // ---- 参数里的枚举（JSON 里的写法与界面一致） ----
 
-  enum StatusArg:
-    @caseName("backlog") case Backlog
-    @caseName("in_progress") case InProgress
-    @caseName("in_review") case InReview
-    @caseName("blocked") case Blocked
-    @caseName("done") case Done
-    @caseName("cancelled") case Cancelled
-
-    def value: IssueStatus = IssueStatus.valueOf(toString)
-  given Schema[StatusArg] = DeriveSchema.gen[StatusArg]
-
-  enum PriorityArg:
-    @caseName("none") case Unset
-    @caseName("urgent") case Urgent
-    @caseName("high") case High
-    @caseName("medium") case Medium
-    @caseName("low") case Low
-
-    def value: Priority = Priority.valueOf(toString)
-  given Schema[PriorityArg] = DeriveSchema.gen[PriorityArg]
+  given Schema[IssueStatus] = LabeledArg.schema
+  given Schema[Priority]    = LabeledArg.schema
 
   /** 叫停后能进的状态。 */
   enum HaltArg:
@@ -56,7 +38,7 @@ object BoardTools:
   final case class ListIn(
       @description("只看指派给这个 agent（名字）或 `user` 的") assignee: Option[String] = None,
       @description("只看这个 agent（名字）负责的：它项目的全部历史") owner: Option[String] = None,
-      @description("只看这些状态；不给就是全部") statuses: List[StatusArg] = Nil
+      @description("只看这些状态；不给就是全部") statuses: List[IssueStatus] = Nil
   )
   given Schema[ListIn] = DeriveSchema.gen[ListIn]
 
@@ -68,8 +50,8 @@ object BoardTools:
       @description("一句话标题") title: String,
       @description("负责项目的 agent（名字），通常是你自己；改指派也不变") owner: String,
       @description("Markdown 详情：背景、做成什么样算完") description: String = "",
-      @description("初始状态：马上开始的用 in_progress，以后做的用 backlog") status: StatusArg = StatusArg.Backlog,
-      @description("优先级") priority: PriorityArg = PriorityArg.Unset,
+      @description("初始状态：马上开始的用 in_progress，以后做的用 backlog") status: IssueStatus = IssueStatus.Backlog,
+      @description("优先级") priority: Priority = Priority.Unset,
       @description("agent 名、`user`，或不给（不指派）") assignee: Option[String] = None,
       @fieldName("depends_on") @description("等这些已有 issue 结束（done 或 cancelled）才投递") dependsOn: List[Long] = Nil,
       @fieldName("depends_on_keys") @description("等本批里这些键的项结束才投递") dependsOnKeys: List[String] = Nil
@@ -80,8 +62,8 @@ object BoardTools:
       @description("一句话标题（用 issues 时不给）") title: Option[String] = None,
       @description("负责项目的 agent（名字），通常是你自己（用 issues 时不给）") owner: Option[String] = None,
       @description("Markdown 详情：背景、做成什么样算完") description: String = "",
-      @description("初始状态：马上开始的用 in_progress，以后做的用 backlog") status: StatusArg = StatusArg.Backlog,
-      @description("优先级") priority: PriorityArg = PriorityArg.Unset,
+      @description("初始状态：马上开始的用 in_progress，以后做的用 backlog") status: IssueStatus = IssueStatus.Backlog,
+      @description("优先级") priority: Priority = Priority.Unset,
       @description("agent 名、`user`，或不给（不指派）") assignee: Option[String] = None,
       @fieldName("depends_on") @description("等这些 issue 结束（done 或 cancelled）才投递；不能成环") dependsOn: List[Long] = Nil,
       @description("一次建一批互相依赖的（给了它就不给上面的单项字段）：每项可带 key，别的项用 depends_on_keys 引用；任一项不合法整批不建，建完才投递")
@@ -93,8 +75,8 @@ object BoardTools:
       @fieldName("issue_id") @description("issue 号") issueId: Long,
       @description("新标题") title: Option[String] = None,
       @description("新描述（整段替换）") description: Option[String] = None,
-      @description("新状态：做完设 in_review（有别的 issue 依赖它时设 done，下游才开始）；只有用户能处理时设 blocked 并指派 user") status: Option[StatusArg] = None,
-      @description("新优先级") priority: Option[PriorityArg] = None,
+      @description("新状态：做完设 in_review（有别的 issue 依赖它时设 done，下游才开始）；只有用户能处理时设 blocked 并指派 user") status: Option[IssueStatus] = None,
+      @description("新优先级") priority: Option[Priority] = None,
       @description("新指派：agent 名或 `user`（交给用户会通知他）") assignee: Option[String] = None,
       @description("true：去掉指派") unassign: Boolean = false,
       @description("新 owner（agent 名）") owner: Option[String] = None,
@@ -124,7 +106,7 @@ object BoardTools:
       status: String,
       priority: String,
       assignee: Option[String],
-      @jsonField("assignee_state") assigneeState: Option[String],
+      @jsonField("assignee_state") assigneeState: Option[WorkState],
       stalled: Boolean,
       @jsonField("depends_on") dependsOn: List[Long],
       @jsonField("waiting_on") waitingOn: List[Long],
@@ -163,7 +145,7 @@ object BoardTools:
         for
           a  <- ZIO.foreach(in.assignee)(assignee)
           o  <- ZIO.foreach(in.owner)(agentId)
-          xs <- board.list(Filter(in.statuses.map(_.value).toSet, a, o))
+          xs <- board.list(Filter(in.statuses.toSet, a, o))
         yield xs
       )(xs =>
         xs.map(s =>
@@ -185,7 +167,7 @@ object BoardTools:
         e.comment.fold(head)(c => head + "：\n" + c.linesIterator.map("  " + _).mkString("\n"))
       }
       s"""# Issue #${s.id.value}：${s.title}
-         |owner：${s.ownerName.getOrElse("无")} | 状态：${s.status.label} | 优先级：${s.priority.label} | 指派：${s.assigneeName.getOrElse("无")}${s.assigneeState.fold("")(st => s"（$st）")}${if s.stalled then " | 没人在处理" else ""} | 建立者：${d.createdBy}
+         |owner：${s.ownerName.getOrElse("无")} | 状态：${s.status.label} | 优先级：${s.priority.label} | 指派：${s.assigneeName.getOrElse("无")}${s.assigneeState.fold("")(st => s"（${st.label}）")}${if s.stalled then " | 没人在处理" else ""} | 建立者：${d.createdBy}
          |依赖：${links(d.dependsOn)} | 在等：$waiting | 被依赖：${links(d.blocks)}$sessions
          |
          |${if d.description.trim.isEmpty then "（没有描述）" else d.description}
@@ -205,7 +187,7 @@ object BoardTools:
         o  <- agentId(i.owner)
         a  <- ZIO.foreach(i.assignee)(assignee)
         up <- ZIO.foreach(i.dependsOn)(issueId)
-      yield Draft(i.key, i.title, o, i.description, i.status.value, i.priority.value, a, up.map(Upstream.Existing(_)) ++ i.dependsOnKeys.map(Upstream.Key(_)))
+      yield Draft(i.key, i.title, o, i.description, i.status, i.priority, a, up.map(Upstream.Existing(_)) ++ i.dependsOnKeys.map(Upstream.Key(_)))
 
     val issueCreate = Tool[RunContext, CreateIn](
       "issue_create",
@@ -246,7 +228,7 @@ object BoardTools:
           a  <- ZIO.foreach(in.assignee)(assignee)
           o  <- ZIO.foreach(in.owner)(agentId)
           up <- ZIO.foreach(in.dependsOn)(ZIO.foreach(_)(issueId))
-        yield id -> Patch(in.title, in.description, in.status.map(_.value), in.priority.map(_.value), o,
+        yield id -> Patch(in.title, in.description, in.status, in.priority, o,
           if in.unassign then Some(None) else a.map(Some(_)), up)
       run(patch.flatMap((id, p) => board.update(by(ctx), id, p).as(id)))(id => s"已更新 #${id.value}")
     }

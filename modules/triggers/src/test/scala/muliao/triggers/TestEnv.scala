@@ -13,7 +13,7 @@ import muliao.resources.agents.Agents
 import muliao.resources.guard.AssetGuard
 import muliao.resources.tree.AssetStore
 import muliao.resources.vault.Vault
-import muliao.sessions.{Files, LiveHub, SessionHooks, SessionPaths, SessionSettings, Sessions, WorkState}
+import muliao.sessions.{Files, LiveHub, SessionHooks, SessionPaths, SessionSettings, Sessions}
 import muliao.sessions.TestEnv as S
 import muliao.toolkit.Access
 import muliao.workspace.Workspace
@@ -115,7 +115,7 @@ object TestEnv:
 
   /** 这个 agent 由触发器开出的会话（旧的在前）。 */
   def triggerSessions(agent: AgentId): ZIO[Sessions, AppError, List[SessionSummary]] =
-    ZIO.serviceWithZIO[Sessions](_.list(Some(agent), None, None, 200)).map(_.items.filter(_.origin == "trigger").sortBy(_.createdAt))
+    ZIO.serviceWithZIO[Sessions](_.list(Some(agent), None, None, 200)).map(_.items.filter(_.origin == OriginKind.Trigger).sortBy(_.createdAt))
 
   def eventually[R, A](what: String)(get: ZIO[R, AppError, A])(ok: A => Boolean): ZIO[R, AppError, A] =
     Live.live(S.eventually(what)(get)(ok))
@@ -135,10 +135,10 @@ object TestEnv:
   def read(p: Path): UIO[String] = ZIO.attemptBlocking(if JFiles.exists(p) then JFiles.readString(p) else "").orDie
 
   def schedule(name: String, agent: AgentId, cron: String, prompt: String = "定时任务", precheck: Option[PrecheckSpec] = None): NewTrigger =
-    NewTrigger(name, agent, "schedule", TriggerConfig(cron = Some(cron)), prompt, precheck = precheck)
+    NewTrigger(name, agent, TriggerKind.Schedule, TriggerConfig(cron = Some(cron)), prompt, precheck = precheck)
 
   def streamOf(name: String, agent: AgentId, command: String, debounce: Double = 0.3, precheck: Option[PrecheckSpec] = None): NewTrigger =
-    NewTrigger(name, agent, "stream", TriggerConfig(command = Some(command), debounceSeconds = Some(debounce)), "处理事件", precheck = precheck)
+    NewTrigger(name, agent, TriggerKind.Stream, TriggerConfig(command = Some(command), debounceSeconds = Some(debounce)), "处理事件", precheck = precheck)
 
   /** 不经工具直接用到的类型，免得测试文件逐个 import。 */
   export muliao.sessions.TestEnv.{Script, dirs, fakeModels, probe, text, call, lastUserText, userTexts, agent}

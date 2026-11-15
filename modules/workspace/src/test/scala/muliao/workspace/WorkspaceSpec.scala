@@ -6,7 +6,7 @@ import muliao.platform.db.Database
 import muliao.resources.ResourcePaths
 import muliao.resources.tree.Owner
 import muliao.resources.vault.{Actor, Vault}
-import muliao.sessions.{Answer, Files, Sessions, WorkState}
+import muliao.sessions.{Answer, CallKey, Files, Sessions}
 import muliao.sessions.TestEnv as S
 import muliao.sessions.TestEnv.{Script, call as modelCall, text as say}
 import muliao.workspace.TestEnv.*
@@ -208,7 +208,7 @@ object WorkspaceSpec extends ZIOSpecDefault:
                    _     <- write(ws.resolve("report.md"), "# 报告\n")
                    sh    <- call("share_file", args("path" -> str("report.md")), ctx)
                    view   = text(sh).fromJson[FileView].toOption.get
-                   found <- ZIO.serviceWithZIO[Files](_.find(List(muliao.sessions.FileId.wrap(view.id))))
+                   found <- ZIO.serviceWithZIO[Files](_.find(List(view.id)))
                  yield (text(sec), text(no), text(slow), view, found)
                }
         (sec, no, slow, view, found) = out
@@ -251,7 +251,7 @@ object WorkspaceSpec extends ZIOSpecDefault:
         val end   = reqs.flatMap(S.userTexts).find(_.contains("[后台任务 1 结束]")).get
         assertTrue(
           first.startsWith("已在后台运行，任务号 1"),
-          row.state == "exited",
+          row.state == JobStatus.Exited,
           row.exitCode.contains(0),
           row.reported,
           log == "start\nend\n",
@@ -279,13 +279,13 @@ object WorkspaceSpec extends ZIOSpecDefault:
                    b     <- S.userSession(alice, "起一个")
                    _     <- S.eventually("等后台任务")(S.stateOf(b))(_ == WorkState.Waiting)
                    _     <- ZIO.serviceWithZIO[Sessions](_.stop(b))
-                   r2    <- S.eventually("任务被结束")(jobRow(2))(_.state == "killed")
+                   r2    <- S.eventually("任务被结束")(jobRow(2))(_.state == JobStatus.Killed)
                    r1    <- jobRow(1)
                    n     <- ZIO.serviceWithZIO[Jobs](_.running(alice))
                  yield (r1, r2, n)
                }
         (r1, r2, n) = out
-      yield assertTrue(r1.state == "killed", r2.state == "killed", n == 0)
+      yield assertTrue(r1.state == JobStatus.Killed, r2.state == JobStatus.Killed, n == 0)
     },
     test("重启：关停时结束后台任务并标为被中断，重启后告诉发起会话") {
       for
@@ -314,7 +314,7 @@ object WorkspaceSpec extends ZIOSpecDefault:
                  yield (before, after, late)
                }
         (before, after, late) = out
-      yield assertTrue(before.state == "interrupted", !before.reported, after.reported, !late)
+      yield assertTrue(before.state == JobStatus.Interrupted, !before.reported, after.reported, !late)
     },
     test("skill 脚本：要批准的等用户，始终允许后同样的调用直接跑，skill 文件改了又要批准；拒绝不执行") {
       for
@@ -329,11 +329,13 @@ object WorkspaceSpec extends ZIOSpecDefault:
                  val skill = d.assets.resolve("alice/skills/deploy")
                  def approve(id: SessionId, ok: Boolean, always: Boolean) =
                    for
-                     det <- S.eventually("等批准")(ZIO.serviceWithZIO[Sessions](_.detail(id)))(_.pending.exists(_.pending.kind == "approval"))
+                     det <- S.eventually("等批准")(ZIO.serviceWithZIO[Sessions](_.detail(id)))(_.pending.exists(_.pending.isInstanceOf[PendingView.Approval]))
                      p    = det.pending.head
-                     _   <- ZIO.serviceWithZIO[Sessions](_.answer(id, p.entry, p.call, Answer.Decision(ok, always)))
+                     _   <- ZIO.serviceWithZIO[Sessions](_.answer(id, CallKey(p.entry, p.call), Answer.Decision(ok, always)))
                      _   <- S.idle(id)
-                   yield p.pending.summary.getOrElse("")
+                   yield p.pending match
+                     case PendingView.Approval(s) => s
+                     case _                       => ""
                  for
                    _     <- start
                    alice <- S.agent("alice")

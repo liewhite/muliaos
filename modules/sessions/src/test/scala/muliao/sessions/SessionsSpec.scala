@@ -51,7 +51,7 @@ object SessionsSpec extends ZIOSpecDefault:
           evs.collect { case SessionEvent.Settled(`id`, _, _, Outcome.Answered(a), true) => a } == List("你好呀", "你好呀"),
           detail.usage.input == 200L,
           detail.contextTokens == 100L,
-          detail.summary.state == "idle"
+          detail.summary.state == WorkState.Idle
         )
       }
     },
@@ -70,7 +70,7 @@ object SessionsSpec extends ZIOSpecDefault:
           got   <- p.secrets.get
           calls  = tl.flatMap(_.parts.flatMap(_.call))
         yield assertTrue(
-          calls.map(_.state) == List("done", "done", "done"),
+          calls.map(_.state) == List(CallState.Done, CallState.Done, CallState.Done),
           calls.flatMap(_.result.map(_.text)).take(2) == List("echo:a", "echo:b"),
           userTexts(reqs(1)).containsSlice(List("echo:a", "echo:b", "收到")),
           got == List("s3cr3t"),
@@ -97,7 +97,7 @@ object SessionsSpec extends ZIOSpecDefault:
         // 第二次：重启后重新请求，模型要执行 block，block 卡住时服务又停了
         m2 <- fakeModels(_ => Script.Say(List(call("b1", "block", "{}"))))
         _ <- ZIO.scoped(layer(d, m2).build.flatMap(env =>
-               (start(p) *> eventually("block 在执行")(timeline(id))(_.exists(_.parts.exists(_.call.exists(_.state == "running"))))).provideEnvironment(env)
+               (start(p) *> eventually("block 在执行")(timeline(id))(_.exists(_.parts.exists(_.call.exists(_.state == CallState.Running))))).provideEnvironment(env)
              ))
         // 第三次：被打断的 block 补上结果，不重新执行
         m3 <- fakeModels(req => Script.Say(List(text(s"看到了：${lastUserText(req)}"))))
@@ -111,7 +111,7 @@ object SessionsSpec extends ZIOSpecDefault:
         reqs2.size == 1,
         reqs3.size == 1,
         lastUserText(reqs3.head).contains("被打断"),
-        tl.flatMap(_.parts.flatMap(_.call)).map(_.state) == List("done"),
+        tl.flatMap(_.parts.flatMap(_.call)).map(_.state) == List(CallState.Done),
         tl.last.parts.head.text.exists(_.contains("没有重新执行")),
         !gateOpen
       )
@@ -130,18 +130,20 @@ object SessionsSpec extends ZIOSpecDefault:
           _      <- eventually("等提问")(stateOf(id))(_ == WorkState.Waiting)
           d1     <- sessions.flatMap(_.detail(id))
           q       = d1.pending.head
-          _      <- sessions.flatMap(_.answer(id, q.entry, q.call, Answer.Answers(List("A"))))
-          d2     <- eventually("等批准")(sessions.flatMap(_.detail(id)))(_.pending.exists(_.pending.kind == "approval"))
+          _      <- sessions.flatMap(_.answer(id, CallKey(q.entry, q.call), Answer.Answers(List("A"))))
+          d2     <- eventually("等批准")(sessions.flatMap(_.detail(id)))(_.pending.exists(_.pending.isInstanceOf[PendingView.Approval]))
           a       = d2.pending.head
-          _      <- sessions.flatMap(_.answer(id, a.entry, a.call, Answer.Decision(approved = true, always = true)))
+          _      <- sessions.flatMap(_.answer(id, CallKey(a.entry, a.call), Answer.Decision(approved = true, always = true)))
           _      <- eventually("回答完")(timeline(id))(_.exists(_.parts.exists(_.text.contains("都好了"))))
           _      <- idle(id)
           tl     <- timeline(id)
           ok     <- p.approvals.get
           evs    <- events.get
         yield assertTrue(
-          q.pending.kind == "question",
-          q.pending.questions.head.options.map(_.label) == List("A", "B"),
+          q.pending match
+            case PendingView.Question(qs) => qs.head.options.map(_.label) == List("A", "B")
+            case _                        => false
+          ,
           tl.flatMap(_.parts.flatMap(_.call)).flatMap(_.result.map(_.text)).head.contains("方案（选哪个？）：A"),
           ok == List(true),
           evs.collect { case SessionEvent.NeedsUser(`id`, _, _, true) => 1 }.size == 2
@@ -155,7 +157,7 @@ object SessionsSpec extends ZIOSpecDefault:
       } { (_, _, _) =>
         for
           alice <- agent("alice")
-          d <- sessions.flatMap(_.deliver(Address.Fresh(alice, Origin.Trigger(TriggerName.wrap("daily")), "daily"), Letter(Source.Trigger("daily"), "跑一下")))
+          d <- sessions.flatMap(_.deliver(Address.Fresh(alice, Origin.Trigger(TriggerName.wrap("daily")), "daily"), Letter(Source.Trigger(TriggerName.wrap("daily")), "跑一下")))
           id = d.get.session
           _  <- idle(id)
           tl <- timeline(id)
@@ -195,8 +197,8 @@ object SessionsSpec extends ZIOSpecDefault:
           _   <- eventually("alice 转述")(timeline(id3))(_.exists(_.parts.exists(_.text.exists(_.startsWith("alice 转述")))))
           _   <- idle(id3)
           tl3 <- timeline(id3)
-          threads <- sessions.flatMap(_.list(None, None, None, 50)).map(_.items.filter(_.origin == "thread"))
-          byOrigin <- sessions.flatMap(_.list(None, None, None, 50, List("thread"))).map(_.items)
+          threads <- sessions.flatMap(_.list(None, None, None, 50)).map(_.items.filter(_.origin == OriginKind.Thread))
+          byOrigin <- sessions.flatMap(_.list(None, None, None, 50, List(OriginKind.Thread))).map(_.items)
           d1      <- sessions.flatMap(_.detail(id1))
         yield assertTrue(
           byOrigin.map(_.id).toSet == threads.map(_.id).toSet,
@@ -205,7 +207,7 @@ object SessionsSpec extends ZIOSpecDefault:
           tl3.flatMap(_.parts.flatMap(_.call)).head.result.map(_.text).contains("bob 答：任务三"),
           tl3.last.parts.head.text.contains("alice 转述：bob 答：任务三"),
           threads.map(_.originRef.get).sorted == List("t1", "t2", "t3"),
-          threads.forall(_.state == "idle")
+          threads.forall(_.state == WorkState.Idle)
         )
       }
     },
@@ -228,7 +230,7 @@ object SessionsSpec extends ZIOSpecDefault:
           d1  <- sessions.flatMap(_.detail(id1))
           // 等别人回答时停：thread 一并停下
           id2 <- userSession(alice, "等 bob")
-          th  <- eventually("bob 的 thread 在跑")(sessions.flatMap(_.list(None, None, None, 50)))(_.items.exists(i => i.originRef.contains("slow") && i.state == "running"))
+          th  <- eventually("bob 的 thread 在跑")(sessions.flatMap(_.list(None, None, None, 50)))(_.items.exists(i => i.originRef.contains("slow") && i.state == WorkState.Running))
                    .map(_.items.find(_.originRef.contains("slow")).get.id)
           _   <- eventually("alice 在等")(stateOf(id2))(_ == WorkState.Waiting)
           _   <- sessions.flatMap(_.stop(id2))
@@ -241,7 +243,7 @@ object SessionsSpec extends ZIOSpecDefault:
           tl1.exists(i => i.kind == "reply" && i.interrupted && i.parts.head.text.contains("写到一半")),
           tl1.last.noticeKind.contains("Stopped"),
           d1.queued.isEmpty,
-          d1.run.map(_.state).contains("stopped"),
+          d1.run.map(_.state).contains(RunState.Stopped),
           s2 == WorkState.Idle,
           st == WorkState.Idle,
           tl2.flatMap(_.parts.flatMap(_.call)).head.result.exists(r => r.isError && r.text.contains("被停止")),
@@ -337,7 +339,7 @@ object SessionsSpec extends ZIOSpecDefault:
           s2    <- idle(th)
           d2    <- sessions.flatMap(_.detail(id))
         yield assertTrue(
-          d.waits.map(_.kind) == List("delegation"),
+          d.waits.map(_.target).collect { case _: WaitTarget.Delegation => true } == List(true),
           d.waits.head.heartbeatSeconds.contains(1),
           s1 == WorkState.Idle,
           s2 == WorkState.Idle,
@@ -370,7 +372,7 @@ object SessionsSpec extends ZIOSpecDefault:
                  events <- recordEvents
                  alice  <- agent("alice")
                  id     <- userSession(alice, "试试")
-                 _      <- eventually("失败")(sessions.flatMap(_.detail(id)))(_.run.exists(_.state == "failed"))
+                 _      <- eventually("失败")(sessions.flatMap(_.detail(id)))(_.run.exists(_.state == RunState.Failed))
                  failed <- eventually("失败通知")(events.get)(_.exists {
                              case SessionEvent.Settled(`id`, _, _, Outcome.Failed(_), true) => true
                              case _                                                     => false
@@ -383,6 +385,6 @@ object SessionsSpec extends ZIOSpecDefault:
                  _      <- n.set(1)
                yield d
              }
-      yield assertTrue(r.run.exists(_.state == "finished"))
+      yield assertTrue(r.run.exists(_.state == RunState.Finished))
     }
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(60.seconds) @@ TestAspect.sequential

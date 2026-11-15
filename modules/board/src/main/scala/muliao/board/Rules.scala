@@ -1,7 +1,7 @@
 package muliao.board
 
 import muliao.contract.*
-import muliao.sessions.WorkState
+import muliao.contract.WorkState
 
 import java.time.{Instant, ZoneId}
 import java.time.format.DateTimeFormatter

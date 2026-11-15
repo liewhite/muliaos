@@ -6,7 +6,7 @@ import muliao.notifications.Notifications
 import muliao.platform.{AppError, InstanceLock}
 import muliao.platform.http.OutboundHttp
 import muliao.platform.server.HttpServer
-import muliao.sessions.{Sessions, WorkState}
+import muliao.sessions.Sessions
 import muliao.sessions.TestEnv.{FakeModels, Script, call, fakeModels, lastUserText, text}
 import muliao.triggers.Triggers
 import zio.*
@@ -206,11 +206,11 @@ object AppSpec extends ZIOSpecDefault:
                  r6 <- step(c, env, s1, tool("list_agents", "{}"))
                  // 看板：建一个指派给 bob 的 issue，bob 在 issue 会话里收到
                  r7 <- step(c, env, s1, tool("issue_create", """{"title":"集成测试","owner":"alice","assignee":"bob","status":"in_progress"}"""))
-                 bobs <- eventually("bob 的 issue 会话")(env.get[Sessions].list(Some(bob), None, None, 50).map(_.items))(_.exists(_.origin == "issue"))
+                 bobs <- eventually("bob 的 issue 会话")(env.get[Sessions].list(Some(bob), None, None, 50).map(_.items))(_.exists(_.origin == OriginKind.Issue))
                  // 触发器：建、立即运行，开出 alice 的触发器会话
                  r8 <- step(c, env, s1, tool("trigger_create", """{"name":"t-once","kind":"schedule","prompt":"定时说好","config":{"cron":"0 3 * * *"}}"""))
                  r9 <- step(c, env, s1, tool("trigger_run", """{"name":"t-once"}"""))
-                 trig <- eventually("触发器开出的会话")(env.get[Sessions].list(Some(alice), None, None, 50).map(_.items))(_.exists(_.origin == "trigger"))
+                 trig <- eventually("触发器开出的会话")(env.get[Sessions].list(Some(alice), None, None, 50).map(_.items))(_.exists(_.origin == OriginKind.Trigger))
                  // 通知与工作历史
                  r10 <- step(c, env, s1, tool("notify_user", """{"title":"集成","body":"通知正文"}"""))
                  inbox <- env.get[Notifications].inbox(50).map(_.items)
@@ -230,10 +230,10 @@ object AppSpec extends ZIOSpecDefault:
                    r5.exists((n, t, _) => n == "ask_agent" && t.contains("好")),
                    r6.exists(_._2.contains("bob")),
                    ok(r7, "issue_create"),
-                   bobs.exists(_.origin == "issue"),
+                   bobs.exists(_.origin == OriginKind.Issue),
                    ok(r8, "trigger_create"),
                    ok(r9, "trigger_run"),
-                   trig.exists(_.origin == "trigger"),
+                   trig.exists(_.origin == OriginKind.Trigger),
                    ts.exists(_.name.value == "t-once"),
                    inbox.exists(_.title == "集成"),
                    ok(r11, "history_append"),

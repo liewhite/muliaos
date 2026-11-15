@@ -228,7 +228,7 @@ object FileTools:
         bytes <- access.bytes(ctx.agent, path)
         name   = Option(path.getFileName).map(_.toString).getOrElse(in.path)
         row   <- files.upload(name, FileContent.mediaTypeOf(name, bytes), Chunk.fromArray(bytes))
-      yield ToolOutcome.text(FileView(row.id.value, row.name, row.mediaType, row.size).toJson)).mapError(rejected)
+      yield ToolOutcome.text(FileView(row.id, row.name, row.mediaType, row.size).toJson)).mapError(rejected)
     }
 
   /** 本组工具的名字与类别（组装时汇进全部内置工具目录）。 */

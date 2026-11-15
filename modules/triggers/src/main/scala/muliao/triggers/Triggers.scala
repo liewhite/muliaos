@@ -103,7 +103,7 @@ object Triggers:
           yield ()
       }
 
-    val kinds: List[TriggerKindView] = Kind.values.toList.map(k => TriggerKindView(k.label, k.description))
+    val kinds: List[TriggerKindView] = TriggerKind.values.toList.map(k => TriggerKindView(k, Kinds.description(k)))
 
     // ---- 查看 ----
 
@@ -117,17 +117,17 @@ object Triggers:
 
     private def views(ts: List[Trigger]): IO[AppError, List[TriggerView]] =
       for
-        faults <- db.read(Repo.faultsOf(ts.map(_.id.value)))
+        faults <- db.read(Repo.faultsOf(ts.map(_.id)))
         names  <- ZIO.foreach(ts.map(_.agent).distinct)(a => agents.get(a).map(r => a -> r.name.value).orElseSucceed(a -> a.value)).map(_.toMap)
         hs     <- health.get
       yield
         val byTrigger = faults.groupBy(_.triggerId)
         ts.map { t =>
           TriggerView(
-            t.id, t.name, t.agent, names.getOrElse(t.agent, t.agent.value), t.mode.kind.label, t.mode.config(zone), t.prompt, t.enabled,
+            t.id, t.name, t.agent, names.getOrElse(t.agent, t.agent.value), t.mode.kind, t.mode.config(zone), t.prompt, t.enabled,
             t.precheck.map(_.spec), t.nextAt.filter(_ => t.enabled), t.skipped, hs.get(t.id).flatMap(_.runningSince), t.lastSession,
             t.lastFiredAt, t.finishedAt,
-            byTrigger.getOrElse(t.id.value, Nil).flatMap(f => FaultSource.parse(f.source).map(Fault(_, f.error, f.at).view)).sortBy(_.source),
+            byTrigger.getOrElse(t.id, Nil).map(f => Fault(f.source, f.error, f.at).view).sortBy(_.source.ordinal),
             t.createdAt, t.updatedAt
           )
         }
@@ -138,14 +138,14 @@ object Triggers:
         live <- db.read(Repo.live(n))
         done <- if live.isEmpty && orFinished then db.read(Repo.finishedNamed(n)).map(_.headOption) else ZIO.none
         row  <- ZIO.fromOption(live.orElse(done)).orElseFail(AppError.notFound(s"没有触发器 $name（trigger_list 看现有的）"))
-      yield TriggerId.wrap(row.id)
+      yield row.id
 
     // ---- 改动 ----
 
     private def validPrompt(p: String): IO[AppError, String] =
       if p.trim.isEmpty then ZIO.fail(AppError.invalid("prompt 不能为空：它是每次触发交给 agent 的处理说明")) else ZIO.succeed(p)
 
-    private def mode(kind: Kind, c: TriggerConfig, at: Long): IO[AppError, Mode] =
+    private def mode(kind: TriggerKind, c: TriggerConfig, at: Long): IO[AppError, Mode] =
       ZIO.fromEither(Mode.parse(kind, c, zone)).mapError(AppError.invalid).tap {
         case Mode.Once(t) if t.toEpochMilli <= at =>
           ZIO.fail(AppError.invalid(s"once 的时刻 ${c.at.getOrElse("")} 已经过去，要在将来；要现在跑就用立即运行"))
@@ -158,9 +158,8 @@ object Triggers:
       for
         name   <- ZIO.fromEither(TriggerName.make(req.name.trim)).mapError(AppError.invalid)
         _      <- agents.requireActive(req.agent)
-        kind   <- ZIO.fromEither(Kind.parse(req.kind)).mapError(AppError.invalid)
         t0     <- now
-        m      <- mode(kind, req.config, t0)
+        m      <- mode(req.kind, req.config, t0)
         pre    <- ZIO.foreach(req.precheck)(precheck)
         prompt <- validPrompt(req.prompt)
         draft = Trigger(TriggerId.wrap(1L), name, req.agent, prompt, m, req.enabled, pre,
@@ -169,7 +168,7 @@ object Triggers:
                 for
                   taken <- Repo.live(name)
                   _     <- ZIO.when(taken.isDefined)(ZIO.fail(AppError.conflict(s"已有触发器叫 ${name.value}")))
-                  id    <- Repo.insert(encode(draft).copy(id = 0L))
+                  id    <- Repo.insert(encode(draft).copy(id = TriggerId.wrap(0L)))
                   _     <- changed
                 yield id
               )
@@ -232,5 +231,5 @@ object Triggers:
     /** 删 agent 时：删掉它的全部触发器（含已结束的），常驻命令随之结束。 */
     def cleanup(agent: AgentId): IO[AppError, Unit] =
       db.write(
-        Repo.ofAgent(agent).flatMap(rows => ZIO.foreachDiscard(rows)(r => Repo.delete(TriggerId.wrap(r.id)))) *> changed
+        Repo.ofAgent(agent).flatMap(rows => ZIO.foreachDiscard(rows)(r => Repo.delete(r.id))) *> changed
       ) *> signal.ping

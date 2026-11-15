@@ -39,7 +39,7 @@ object OpenAiResponsesWire extends Wire:
     val reasoning = req.thinking match
       case Thinking.Default => shown
       case Thinking.Off     => obj("effort" -> s("none"))
-      case other            => shown.withField("effort", s(other.id))
+      case other            => shown.withField("effort", s(other.label))
     objOpt(
       "model"             -> Some(s(model)),
       "stream"            -> Some(b(true)),

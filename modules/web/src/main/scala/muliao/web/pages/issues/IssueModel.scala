@@ -74,10 +74,9 @@ object IssueModel:
     case Busy, Idle
 
   object Work:
-    def parse(s: String): Option[Work] = s match
-      case "running" | "waiting" => Some(Busy)
-      case "idle"                => Some(Idle)
-      case _                     => None
+    def of(s: WorkState): Work = s match
+      case WorkState.Running | WorkState.Waiting => Busy
+      case WorkState.Idle                        => Idle
 
   def workLabel(w: Work): String = w match
     case Work.Busy => "处理中"
@@ -89,7 +88,7 @@ object IssueModel:
     case Session(w: Work)
 
   def handling(i: IssueSummary): Option[Handling] =
-    if i.stalled then Some(Handling.Stalled) else i.assigneeState.flatMap(Work.parse).map(Handling.Session(_))
+    if i.stalled then Some(Handling.Stalled) else i.assigneeState.map(s => Handling.Session(Work.of(s)))
 
   // ---- 手动操作的可用性 ----
 
@@ -110,7 +109,7 @@ object IssueModel:
   /** 能不能叫停：指派给 agent、没结束，且在做或它的会话正忙（停掉它处理这个 issue 的会话再改状态）。 */
   def stoppable(i: IssueSummary): Boolean =
     i.assignee.exists(_.agent.isDefined) && !i.status.finished &&
-      (i.status == IssueStatus.InProgress || i.assigneeState.flatMap(Work.parse).contains(Work.Busy))
+      (i.status == IssueStatus.InProgress || i.assigneeState.map(Work.of).contains(Work.Busy))
 
   /** 能不能审核：指派给用户且没结束（与接口的条件一致）。 */
   def reviewable(i: IssueSummary): Boolean = i.assignee.contains(Assignee.User) && !i.status.finished
@@ -157,7 +156,7 @@ object IssueModel:
   object Filters:
     def parse(params: Map[String, String]): Filters =
       Filters(
-        statuses = params.get("status").toList.flatMap(_.split(',').toList).flatMap(IssueStatus.parse).distinct,
+        statuses = params.get("status").toList.flatMap(_.split(',').toList).flatMap(IssueStatus.parse(_).toOption).distinct,
         assignee = params.get("assignee").filter(_.nonEmpty),
         owner = params.get("owner").filter(_.nonEmpty).flatMap(o => AgentId.make(o).toOption)
       )

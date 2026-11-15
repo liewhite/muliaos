@@ -55,7 +55,7 @@ object IssueModelSpec extends ZIOSpecDefault:
       assertTrue(g(IssueStatus.Done).map(_.id.value) == List(1L, 3L), g(IssueStatus.Backlog).map(_.id.value) == List(2L))
     },
     test("负责项目色相按 agent 列表顺序取黄金角，找不到不着色") {
-      val as = List("a", "b").map(n => AgentSummary(AgentId.wrap(n), AgentName.wrap(n), None, None, None, "active", false))
+      val as = List("a", "b").map(n => AgentSummary(AgentId.wrap(n), AgentName.wrap(n), None, None, None, AgentState.Active, false))
       assertTrue(
         ownerHue(as, Some(AgentId.wrap("a"))).contains(0),
         ownerHue(as, Some(AgentId.wrap("b"))).contains(138),

@@ -160,7 +160,7 @@ object HistorySpec extends ZIOSpecDefault:
           today <- h.today
           (s1, _) <- ask(bob, "帮我部署")
           s2    <- userSession(bob, "这次会失败")
-          _     <- eventually("失败")(ZIO.serviceWithZIO[Sessions](_.detail(s2)))(_.run.exists(_.state == "failed"))
+          _     <- eventually("失败")(ZIO.serviceWithZIO[Sessions](_.detail(s2)))(_.run.exists(_.state == RunState.Failed))
           (s3, _) <- ask(carol, "carol 的事")
           ids   <- b.create(By.user, List(Draft(None, "bob 的活", bob, status = IssueStatus.Backlog, assignee = Some(Assignee.Agent(bob))),
                      Draft(None, "carol 的活", carol, status = IssueStatus.Backlog)))

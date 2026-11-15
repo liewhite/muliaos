@@ -1,6 +1,6 @@
 package muliao.triggers
 
-import muliao.contract.{AgentId, TriggerId, TriggerName}
+import muliao.contract.{AgentId, FaultSource, TriggerId, TriggerName}
 import muliao.exec.{Exec, Masker, Program}
 import muliao.platform.AppError
 import muliao.resources.vault.SecretUse

@@ -1,0 +1,194 @@
+package muliao.sessions
+
+import muliao.contract.*
+import muliao.models.llm.ReplyBuilder
+import muliao.platform.{AppError, GeneralSettings}
+import muliao.platform.db.{Database, Read, Tx, TxHooks}
+import muliao.platform.events.ChangeBus
+import muliao.sessions.store.*
+import zio.*
+import zio.json.*
+
+import java.time.ZoneId
+
+/** 会话的基本信息（解码后）。 */
+final case class SessionInfo(
+    id: SessionId,
+    agent: AgentId,
+    origin: Origin,
+    title: String,
+    pendingReply: List[ReplyTo],
+    createdAt: Long,
+    updatedAt: Long
+):
+  def userWaiting: Boolean = pendingReply.contains(ReplyTo.User)
+
+private[sessions] object SessionInfo:
+  def decode(r: SessionRow): IO[AppError, SessionInfo] =
+    for
+      origin  <- ZIO.fromEither(Origin.of(r.origin, r.originRef, r.parentId)).mapError(e => AppError.Internal(s"会话 ${r.id.value} 的来源记录坏了：$e"))
+      pending <- Decode.replyTos(r.pendingReply)
+    yield SessionInfo(r.id, r.agentId, origin, r.title, pending, r.createdAt, r.updatedAt)
+
+  def row(id: SessionId, agent: AgentId, origin: Origin, title: String, now: Long): SessionRow =
+    SessionRow(id, agent, origin.kind, origin.ref, origin.parentId, title, "[]", now, now)
+
+/** 本领域各部分共用的底子：库、「数据变了」广播、实时事件、接进来的东西、配置，以及读会话基本信息。 */
+private[sessions] final case class Kernel(db: Database, bus: ChangeBus, live: LiveHub, hooks: SessionHooks, settings: SessionSettings, general: GeneralSettings):
+  val Topic: muliao.contract.Topic = muliao.contract.Topic.wrap("sessions")
+
+  def zone: ZoneId = general.timezone
+
+  def now: UIO[Long] = Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
+
+  /** 提交后广播「会话变了」。 */
+  def changed: URIO[TxHooks, Unit] = bus.publishAfterCommit(Topic)
+
+  def afterCommit(effect: UIO[Unit]): URIO[TxHooks, Unit] = TxHooks.afterCommit(effect)
+
+  def info(id: SessionId): IO[AppError, SessionInfo] = db.read(infoTx(id))
+
+  def infoTx(id: SessionId): Read[SessionInfo] =
+    Repo.session(id).someOrFail(AppError.notFound(s"会话 ${id.value} 不存在（可能已删除）")).flatMap(SessionInfo.decode)
+
+  /** 最后一条回复的正文。 */
+  def lastAnswer(id: SessionId): IO[AppError, String] =
+    db.read(Repo.lastEntry(id, EntryKind.Reply)).flatMap(ZIO.foreach(_)(Decode.entry)).map {
+      case Some(Entry(_, _, EntryBody.Reply(parts, _, _, _, _), _, _)) => ModelView.answerText(parts)
+      case _                                                           => ""
+    }
+
+  /** 往会话的时间线里记一条提示。 */
+  def noticeTx(id: SessionId, run: Option[RunId], kind: NoticeKind, text: String, t: Long): Tx[Long] =
+    Repo.insertEntry(EntryRow(0L, id, run, EntryKind.Notice, EntryBody.Notice(kind, text).encode, "", t, t))
+
+  /** 把会话的回答去向写回库。 */
+  def setPendingTx(id: SessionId, all: List[ReplyTo]): Tx[Unit] = Repo.setPendingReply(id, all.toJson)
+
+private[sessions] object Kernel:
+  val layer: URLayer[Database & ChangeBus & LiveHub & SessionHooks & SessionSettings & GeneralSettings, Kernel] = ZLayer.derive[Kernel]
+
+/** 正在生成的一条回复。 */
+private[sessions] final case class Partial(run: RunId, model: String, startedAt: Long, builder: ReplyBuilder)
+
+/** 一个会话的驱动槽：同一会话同时只有一个驱动 fiber（或一件独占的事）。
+  * @param again    驱动期间又有人踢了一下：结束前再看一遍
+  * @param stopping 正在停止或被独占：驱动不再自己收尾，由停止方（独占方）收尾
+  * @param partial  正在生成的回复（停止时保存已生成的部分）
+  * @param secrets  打码前的调用参数：库里只存打码后的，执行用原文；重启后没有原文的调用不再执行
+  */
+private[sessions] final class Slot(
+    val again: Ref[Boolean],
+    val stopping: Ref[Boolean],
+    val partial: Ref[Option[Partial]],
+    val fiber: Ref[Option[Fiber[Nothing, Unit]]],
+    val secrets: Ref[Map[CallKey, String]]
+)
+
+/** 一次工具调用在库里的键。 */
+final case class CallKey(entry: Long, call: CallId)
+
+private[sessions] object Slot:
+  def make(stopping: Boolean): UIO[Slot] =
+    for
+      a <- Ref.make(false)
+      s <- Ref.make(stopping)
+      p <- Ref.make(Option.empty[Partial])
+      f <- Ref.make(Option.empty[Fiber[Nothing, Unit]])
+      r <- Ref.make(Map.empty[CallKey, String])
+    yield Slot(a, s, p, f, r)
+
+/** 各会话的驱动槽。 */
+private[sessions] final class Slots(ref: Ref.Synchronized[Map[SessionId, Slot]]):
+
+  /** 正有驱动（或独占）的会话。 */
+  def busy: UIO[Set[SessionId]] = ref.get.map(_.keySet)
+
+  /** 没有槽就新建一个并由 `run` 起驱动 fiber；已有就让它结束前再看一遍。 */
+  def kick(id: SessionId)(run: Slot => UIO[Fiber[Nothing, Unit]]): UIO[Unit] =
+    ref.modifyZIO { m =>
+      m.get(id) match
+        case Some(s) => s.again.set(true).as(((), m))
+        case None =>
+          for
+            s <- Slot.make(stopping = false)
+            f <- run(s)
+            _ <- s.fiber.set(Some(f))
+          yield ((), m.updated(id, s))
+    }
+
+  /** 驱动做完一轮：被踢过就再来一轮（返回 true），否则让出槽。正在停止的槽由停止方移除。 */
+  def again(id: SessionId, s: Slot): UIO[Boolean] =
+    ref.modifyZIO { m =>
+      s.stopping.get.flatMap {
+        case true  => ZIO.succeed((false, m))
+        case false => s.again.getAndSet(false).map(again => (again, if again then m else m - id))
+      }
+    }
+
+  /** 停止：标记槽正在停止（没有就占一个，挡住新驱动），打断驱动 fiber，返回槽。之后由调用方 [[release]]。 */
+  def halt(id: SessionId): UIO[Slot] =
+    for
+      s <- ref.modifyZIO { m =>
+             m.get(id) match
+               case Some(s) => s.stopping.set(true).as((s, m))
+               case None    => Slot.make(stopping = true).map(s => (s, m.updated(id, s)))
+           }
+      _ <- s.fiber.get.flatMap(ZIO.foreachDiscard(_)(_.interrupt))
+    yield s
+
+  /** 独占一个会话（没有驱动时）：占上一个正在停止的槽挡住驱动。 */
+  def reserve(id: SessionId): IO[AppError, Unit] =
+    ref.modifyZIO { m =>
+      if m.contains(id) then ZIO.fail(AppError.conflict("会话正忙，稍后再试"))
+      else Slot.make(stopping = true).map(s => ((), m.updated(id, s)))
+    }
+
+  def release(id: SessionId): UIO[Unit] = ref.update(_ - id)
+
+private[sessions] object Slots:
+  val layer: ULayer[Slots] = ZLayer(Ref.Synchronized.make(Map.empty[SessionId, Slot]).map(Slots(_)))
+
+/** 「这个会话有事要做」的门铃：投了信、等的结果到了、挂起的调用有了答复时按一下，由驱动（[[Driver]]）去踢它。
+  * 本领域各部分只按门铃、不直接踢驱动，所以都不依赖驱动；驱动在 [[Driver.start]] 之后才开始应门。
+  */
+private[sessions] final class Doorbell(queue: Queue[SessionId]):
+  def ring(id: SessionId): UIO[Unit]   = queue.offer(id).unit
+  private[sessions] def next: UIO[SessionId] = queue.take
+
+private[sessions] object Doorbell:
+  val layer: ULayer[Doorbell] = ZLayer(Queue.unbounded[SessionId].map(Doorbell(_)))
+
+/** 工作状态：全系统唯一的判断。有运行中的运行、有驱动或有排队的信是运行中；有挂起的运行或等待中的工作是等待中；否则空闲。 */
+private[sessions] final case class States(db: Database, slots: Slots):
+  def states(ids: List[SessionId]): IO[AppError, Map[SessionId, WorkState]] =
+    if ids.isEmpty then ZIO.succeed(Map.empty)
+    else
+      for
+        active  <- db.read(Repo.activeRuns(ids))
+        queued  <- db.read(Repo.queuedCounts(ids))
+        waiting <- db.read(Repo.waitCounts(ids))
+        driving <- slots.busy
+      yield
+        val byRun = active.groupMapReduce(_.sessionId)(_.state)((a, b) => if a == RunState.Running then a else b)
+        ids.map { id =>
+          val runState = byRun.get(id)
+          val st =
+            if runState.contains(RunState.Running) || driving(id) || queued.contains(id) then WorkState.Running
+            else if runState.contains(RunState.Suspended) || waiting.contains(id) then WorkState.Waiting
+            else WorkState.Idle
+          id -> st
+        }.toMap
+
+  def state(id: SessionId): IO[AppError, WorkState] = states(List(id)).map(_.getOrElse(id, WorkState.Idle))
+
+  /** 要求会话空闲（删除、重试、手动压缩前）。`doing` 写在冲突说明里。 */
+  def requireIdle(id: SessionId, doing: String): IO[AppError, Unit] =
+    state(id).flatMap {
+      case WorkState.Idle    => ZIO.unit
+      case WorkState.Running => ZIO.fail(AppError.conflict(s"会话正在运行，$doing"))
+      case WorkState.Waiting => ZIO.fail(AppError.conflict(s"会话正在等待，$doing"))
+    }
+
+private[sessions] object States:
+  val layer: URLayer[Database & Slots, States] = ZLayer.derive[States]

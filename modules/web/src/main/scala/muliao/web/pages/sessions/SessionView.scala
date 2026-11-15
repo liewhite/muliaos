@@ -136,7 +136,7 @@ object SessionView:
   /** 最近一次运行没正常结束：在跑（暂时失败在退避重试时说明原因），或最终失败（可重试）。 */
   private def runStatus(run: Option[RunView], onRetry: () => Unit): Option[HtmlElement] = run.flatMap { r =>
     r.state match
-      case "failed" =>
+      case RunState.Failed =>
         Some(
           div(
             cls := "flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground",
@@ -146,7 +146,7 @@ object SessionView:
             Ui.btn(Variant.Secondary, Size.Sm)(cls := "self-start", Icon("RotateCcw"), "重试", onClick --> (_ => onRetry()))
           )
         )
-      case "running" =>
+      case RunState.Running =>
         Some(
           div(
             cls := "flex flex-col items-end gap-1 self-end text-xs text-muted",
@@ -177,22 +177,22 @@ object SessionView:
 
     val markRead: () => Unit = () => Http.call(SessionsApi.read)(id).failed.foreach(e => dom.console.error("marking session read failed", e.getMessage))
 
-    def canSend(text: String, ids: List[String], blocking: Boolean) = (text.trim.nonEmpty || ids.nonEmpty) && !blocking
+    def canSend(text: String, ids: List[FileId], blocking: Boolean) = (text.trim.nonEmpty || ids.nonEmpty) && !blocking
     val sendable = draft.signal.combineWith(uploads.ids, uploads.blocking).map(canSend)
     val sendableNow = Var(false)
 
     /** 发出 `content`（默认输入框里的）；成功后清掉输入框（发送中又改了就保留新内容）与这一批附件。 */
     def send(content: Option[String] = None): Future[Boolean] =
       val text = content.getOrElse(draft.now())
-      if action.busy.now() || !canSend(text, uploads.done.map(_._2.id), uploads.items.now().exists(!_.state.isInstanceOf[uploads.State.Done])) then Future.successful(false)
+      if action.busy.now() || !canSend(text, uploads.done.map(_.file.id), uploads.items.now().exists(!_.state.isInstanceOf[uploads.State.Done])) then Future.successful(false)
       else
         val batch = uploads.done
         val shown = draft.now()
-        action.run(Http.call(SessionsApi.send)((id, MessageIn(text.trim, batch.map(_._2.id))))).map { ok =>
+        action.run(Http.call(SessionsApi.send)((id, MessageIn(text.trim, batch.map(_.file.id))))).map { ok =>
           if ok then
             bottom.pin()
             if draft.now() == shown then draft.set("")
-            uploads.remove(batch.map(_._1).toSet)
+            uploads.remove(batch.map(_.key).toSet)
           ok
         }
 
@@ -202,10 +202,10 @@ object SessionView:
       send(Some(content)).foreach(ok => if !ok then draft.set(content))
     })
 
-    val answer: (Long, String, AnswerIn) => Future[Unit] = (entry, call, a) => Http.call(SessionsApi.answer)((id, entry, call, a))
+    val answer: (Long, CallId, AnswerIn) => Future[Unit] = (entry, call, a) => Http.call(SessionsApi.answer)((id, entry, call, a))
     val ctx = detail
       .map(_.data)
-      .map(d => (d.flatMap(_.run).exists(_.state == "running"), d.map(_.threads).getOrElse(Nil)))
+      .map(d => (d.flatMap(_.run).exists(_.state == RunState.Running), d.map(_.threads).getOrElse(Nil)))
       .distinct
       .map((active, threads) => TranscriptCtx(id, active, threads, answer))
 
@@ -220,7 +220,7 @@ object SessionView:
         if ok then action.run(Http.call(SessionsApi.delete)(id), leave = Some(() => Router.go(backNow.now()))): Unit
       }
 
-    val active = detail.map(_.data.exists(d => Model.Work.of(d.summary.state) != Model.Work.Idle)).combineWith(compaction.busy.signal).map(_ || _)
+    val active = detail.map(_.data.exists(_.summary.state != WorkState.Idle)).combineWith(compaction.busy.signal).map(_ || _)
 
     val composer = div(
       cls := "flex flex-col gap-2",
@@ -249,7 +249,7 @@ object SessionView:
 
     Ui.page(
       title = child <-- summary.map {
-        case Some(s) if s.origin == "issue" => s.originRef.flatMap(_.toLongOption).fold[HtmlElement](span(s.title))(n => issueTitle(n, s.title))
+        case Some(s) if s.origin == OriginKind.Issue => s.originRef.flatMap(_.toLongOption).fold[HtmlElement](span(s.title))(n => issueTitle(n, s.title))
         case Some(s)                        => span(s.title)
         case None                           => span("会话")
       },

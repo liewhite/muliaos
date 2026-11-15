@@ -1,6 +1,6 @@
 package muliao.sessions
 
-import muliao.contract.RunId
+import muliao.contract.{CallId, CallState, FileId, RunId}
 import muliao.models.llm.{Message, ReplyPart, UserPart}
 import muliao.platform.AppError
 import muliao.sessions.store.{EntryRow, ToolCallRow, UploadRow}
@@ -16,7 +16,7 @@ final case class Entry(id: Long, run: Option[RunId], body: EntryBody, startedAt:
 /** 一次工具调用（解码后）。 */
 final case class Call(
     entryId: Long,
-    callId: String,
+    callId: CallId,
     seq: Int,
     name: String,
     args: String,
@@ -40,7 +40,7 @@ private[sessions] object Decode:
     for
       pause  <- ZIO.foreach(r.pause)(json[Pause]("挂起", _))
       result <- ZIO.foreach(r.result)(json[CallResult]("工具结果", _))
-    yield Call(r.entryId, r.callId, r.seq, r.name, r.args, CallState.parse(r.state), pause, result, r.startedAt, r.finishedAt)
+    yield Call(r.entryId, r.callId, r.seq, r.name, r.args, r.state, pause, result, r.startedAt, r.finishedAt)
 
   def calls(rs: List[ToolCallRow]): IO[AppError, List[Call]] = ZIO.foreach(rs)(call)
 
@@ -51,15 +51,16 @@ private[sessions] object Decode:
 /** 时间线 → 给模型的消息。纯函数：附件内容由调用方事先取好。 */
 private[sessions] object ModelView:
 
-  /** 给模型看的窗口：最近一个压缩点的摘要，和它之后的各条（不含压缩点本身）。 */
-  def window(entries: List[Entry]): (Option[String], List[Entry]) =
-    entries.reverseIterator.collectFirst { case Entry(_, _, EntryBody.Compaction(s, from), _, _) => (s, from) } match
-      case Some((summary, from)) =>
-        (Some(summary), entries.filter(e => e.id >= from && !e.body.isInstanceOf[EntryBody.Compaction]))
-      case None => (None, entries.filterNot(_.body.isInstanceOf[EntryBody.Compaction]))
+  /** 压缩点切出的窗口：最近一个压缩点的摘要，和它之后的各条（不含压缩点本身）。 */
+  final case class Cut(summary: Option[String], entries: List[Entry])
+
+  def window(entries: List[Entry]): Cut =
+    entries.reverseIterator.collectFirst { case Entry(_, _, c: EntryBody.Compaction, _, _) => c } match
+      case Some(c) => Cut(Some(c.summary), entries.filter(e => e.id >= c.from && !e.body.isInstanceOf[EntryBody.Compaction]))
+      case None    => Cut(None, entries.filterNot(_.body.isInstanceOf[EntryBody.Compaction]))
 
   /** 附件：上传记录与内容。 */
-  final case class Attachments(uploads: Map[String, UploadRow], bytes: Map[String, Chunk[Byte]], path: String => Path):
+  final case class Attachments(uploads: Map[FileId, UploadRow], bytes: Map[String, Chunk[Byte]], path: String => Path):
     def shas: Set[String] = uploads.values.map(_.sha256).toSet
 
   def summaryText(summary: String): String =
@@ -77,9 +78,9 @@ private[sessions] object ModelView:
 
   private val imageTypes = Set("image/png", "image/jpeg", "image/gif", "image/webp")
 
-  private def attachmentParts(id: String, a: Attachments): Chunk[UserPart] =
+  private def attachmentParts(id: FileId, a: Attachments): Chunk[UserPart] =
     a.uploads.get(id) match
-      case None => Chunk(UserPart.Text(s"[附件 $id 不存在]"))
+      case None => Chunk(UserPart.Text(s"[附件 ${id.value} 不存在]"))
       case Some(u) =>
         val where = s"[附件 ${u.name}（${u.mediaType}，${u.size} 字节）：${a.path(u.sha256)}]"
         (u.mediaType, a.bytes.get(u.sha256)) match
@@ -106,7 +107,7 @@ private[sessions] object ModelView:
         case EntryBody.Mail(l)    => List(U(Chunk(UserPart.Text(letterText(l))) ++ Chunk.fromIterable(l.files).flatMap(attachmentParts(_, a))))
         case EntryBody.Reply(parts, _, _, _, _) =>
           val cs      = calls.getOrElse(e.id, Nil)
-          val known   = cs.map(_.callId).toSet
+          val known   = cs.map(_.callId.value).toSet
           // 没落库成调用的（被打断的半截）不发；有调用的必须带结果
           val visible = parts.filter {
             case c: ReplyPart.ToolCall => known(c.id)
@@ -114,7 +115,7 @@ private[sessions] object ModelView:
           }
           val results = cs.sortBy(_.seq).map { c =>
             val r = c.result.getOrElse(CallResult.error(Interrupted.restartedBeforeStart))
-            UserPart.ToolResult(c.callId, resultParts(r, a), r.isError)
+            UserPart.ToolResult(c.callId.value, resultParts(r, a), r.isError)
           }
           List(A(visible)).filter(_.parts.nonEmpty) ++ Option.when(results.nonEmpty)(U(Chunk.fromIterable(results))).toList
         case _: EntryBody.Compaction | _: EntryBody.Notice => Nil

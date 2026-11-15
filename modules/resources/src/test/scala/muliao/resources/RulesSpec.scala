@@ -1,6 +1,6 @@
 package muliao.resources
 
-import muliao.contract.{AgentId, AgentName, RoleName}
+import muliao.contract.{AgentId, AgentName, RoleName, AssetKind}
 import muliao.resources.access.*
 import muliao.resources.tree.Owner
 import muliao.toolkit.Access
@@ -21,16 +21,16 @@ object RulesSpec extends ZIOSpecDefault:
     test("规则解析：动作、种类、通配、path；不合法的说明原因") {
       val bad = List("use:skill", "read:skill:x", "use:thing:x", "use:skill:", "write:tool:x", "use:path:/tmp", "write:path:relative")
       assertTrue(
-        rule("use:skill:relay-host").selects(Action.Use, Kind.Skill, "relay-host"),
-        !rule("use:skill:relay-host").selects(Action.Write, Kind.Skill, "relay-host"),
-        rule("*:memory:trading").selects(Action.Write, Kind.Memory, "trading"),
-        rule("use:secret:RELAY_*").selects(Action.Use, Kind.Secret, "RELAY_KEY"),
-        !rule("use:secret:RELAY_*").selects(Action.Use, Kind.Secret, "XRELAY_KEY"),
-        rule("use:*:x?z").selects(Action.Use, Kind.Mcp, "xyz"),
-        rule("use:tool:trigger_[cd]*").selects(Action.Use, Kind.Tool, "trigger_delete"),
-        !rule("use:tool:trigger_[!cd]*").selects(Action.Use, Kind.Tool, "trigger_delete"),
-        rule("use:skill:a.b").selects(Action.Use, Kind.Skill, "a.b"),
-        !rule("use:skill:a.b").selects(Action.Use, Kind.Skill, "axb"),
+        rule("use:skill:relay-host").selects(Action.Use, AssetKind.Skill, "relay-host"),
+        !rule("use:skill:relay-host").selects(Action.Write, AssetKind.Skill, "relay-host"),
+        rule("*:memory:trading").selects(Action.Write, AssetKind.Memory, "trading"),
+        rule("use:secret:RELAY_*").selects(Action.Use, AssetKind.Secret, "RELAY_KEY"),
+        !rule("use:secret:RELAY_*").selects(Action.Use, AssetKind.Secret, "XRELAY_KEY"),
+        rule("use:*:x?z").selects(Action.Use, AssetKind.Mcp, "xyz"),
+        rule("use:tool:trigger_[cd]*").selects(Action.Use, AssetKind.Tool, "trigger_delete"),
+        !rule("use:tool:trigger_[!cd]*").selects(Action.Use, AssetKind.Tool, "trigger_delete"),
+        rule("use:skill:a.b").selects(Action.Use, AssetKind.Skill, "a.b"),
+        !rule("use:skill:a.b").selects(Action.Use, AssetKind.Skill, "axb"),
         Rule.pathOf(rule("write:path:~/projects/x")).exists(_.toString.endsWith("/projects/x")),
         !Rule.pathOf(rule("write:path:~/projects/x")).exists(_.toString.startsWith("~")),
         bad.forall(b => Rule.parse(b).isLeft),
@@ -40,8 +40,8 @@ object RulesSpec extends ZIOSpecDefault:
     test("自己的资源总能用能改，deny 也拦不住") {
       val p = perms(deny = List("*:*:*"))
       assertTrue(
-        p.decide(Action.Write, Kind.Skill, "mine", Owner.Agent(me)) == Decision.Allowed(Grant.Ownership),
-        !p.decide(Action.Use, Kind.Skill, "x", other).allowed
+        p.decide(Action.Write, AssetKind.Skill, "mine", Owner.Agent(me)) == Decision.Allowed(Grant.Ownership),
+        !p.decide(Action.Use, AssetKind.Skill, "x", other).allowed
       )
     },
     test("base：全部非管理类工具与全局记忆；管理类工具要规则") {
@@ -50,9 +50,9 @@ object RulesSpec extends ZIOSpecDefault:
         p.canUseTool("read_file", Access.Read),
         p.canUseTool("run_shell", Access.Write),
         !p.canUseTool("create_agent", Access.Admin),
-        p.decide(Action.Use, Kind.Memory, "global", Owner.Platform) == Decision.Allowed(Grant.GlobalMemory),
-        !p.decide(Action.Write, Kind.Memory, "global", Owner.Platform).allowed,
-        !p.decide(Action.Use, Kind.Memory, "trading", Owner.Platform).allowed,
+        p.decide(Action.Use, AssetKind.Memory, "global", Owner.Platform) == Decision.Allowed(Grant.GlobalMemory),
+        !p.decide(Action.Write, AssetKind.Memory, "global", Owner.Platform).allowed,
+        !p.decide(Action.Use, AssetKind.Memory, "trading", Owner.Platform).allowed,
         perms(allow = List("use:tool:create_agent")).canUseTool("create_agent", Access.Admin)
       )
     },
@@ -63,10 +63,10 @@ object RulesSpec extends ZIOSpecDefault:
       )
       val p = perms(roles = List("trader"), deny = List("use:skill:danger", "use:tool:run_shell"), access = access)
       assertTrue(
-        p.decide(Action.Write, Kind.Memory, "trading", Owner.Platform) ==
+        p.decide(Action.Write, AssetKind.Memory, "trading", Owner.Platform) ==
           Decision.Allowed(Grant.ByRule(rule("*:memory:trading"), Source.Role(RoleName.wrap("trader")))),
-        p.decide(Action.Use, Kind.Skill, "danger", other) == Decision.Denied(rule("use:skill:danger"), Source.Own),
-        p.decide(Action.Use, Kind.Skill, "safe", other).allowed,
+        p.decide(Action.Use, AssetKind.Skill, "danger", other) == Decision.Denied(rule("use:skill:danger"), Source.Own),
+        p.decide(Action.Use, AssetKind.Skill, "safe", other).allowed,
         !p.canUseTool("run_shell", Access.Write)
       )
     },
@@ -75,9 +75,9 @@ object RulesSpec extends ZIOSpecDefault:
       assertTrue(
         p.isAdmin,
         p.canUseTool("create_agent", Access.Admin),
-        p.decide(Action.Write, Kind.Skill, "any", other).allowed,
-        !p.decide(Action.Write, Kind.Secret, "PROD_KEY", other).allowed,
-        p.decide(Action.Use, Kind.Secret, "PROD_KEY", other).allowed
+        p.decide(Action.Write, AssetKind.Skill, "any", other).allowed,
+        !p.decide(Action.Write, AssetKind.Secret, "PROD_KEY", other).allowed,
+        p.decide(Action.Use, AssetKind.Secret, "PROD_KEY", other).allowed
       )
     },
     test("write:path 与 deny write:path") {

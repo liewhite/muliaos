@@ -227,7 +227,7 @@ object AgentDetail:
       ),
       div(
         cls := "flex flex-col gap-1 text-sm text-muted",
-        child.text <-- d.map(x => x.assets.filter(_.kind == "memory").map(_.name) match
+        child.text <-- d.map(x => x.assets.filter(_.kind == AssetKind.Memory).map(_.name) match
           case Nil => "它没有别的记忆可用。"
           case ms  => s"它还能用这些记忆：${ms.mkString("、")}。"
         ),

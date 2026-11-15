@@ -1,9 +1,9 @@
 package muliao.resources.vault
 
-import muliao.contract.AgentId
+import muliao.contract.{AgentId, AssetKind}
 import muliao.platform.AppError
 import muliao.resources.VaultSettings
-import muliao.resources.access.{Action, Decision, Kind, Permissions}
+import muliao.resources.access.{Action, Decision, Permissions}
 import muliao.resources.agents.Agents
 import muliao.resources.tree.*
 import zio.*
@@ -84,7 +84,7 @@ object Vault:
                        case Some(doc) =>
                          for
                            _ <- ZIO.foreachDiscard(perms)(p =>
-                                  p.decide(Action.Write, Kind.Secret, key, doc.owner) match
+                                  p.decide(Action.Write, AssetKind.Secret, key, doc.owner) match
                                     case Decision.Allowed(_) => ZIO.unit
                                     case _ =>
                                       ZIO.fail(AppError.forbidden(s"secret $key 归 ${doc.owner.label}，你没有改它的权限；请它的主人改，或找 admin 授权"))
@@ -97,7 +97,7 @@ object Vault:
                            _ <- store.write(doc.file, Formats.renderSecret(next), privateFile = true)
                          yield false
                        case None =>
-                         val owners = snap.occupied.getOrElse(Kind.Secret -> key, Nil)
+                         val owners = snap.occupied.getOrElse(AssetKind.Secret -> key, Nil)
                          for
                            _ <- ZIO.when(owners.nonEmpty)(
                                   ZIO.fail(AppError.conflict(s"${owners.map(_.label).mkString("、")} 已有名为 $key 的 secret 文件（没加载：见资源问题），先处理它"))
@@ -120,7 +120,7 @@ object Vault:
                      doc <- ZIO
                               .fromOption(snap.secret(key))
                               .orElseFail(AppError.invalid(s"没有可用的 secret $key（不存在或文件没加载）"))
-                     _ <- perms.decide(Action.Use, Kind.Secret, key, doc.owner) match
+                     _ <- perms.decide(Action.Use, AssetKind.Secret, key, doc.owner) match
                             case Decision.Allowed(_) => ZIO.unit
                             case _                   => ZIO.fail(AppError.forbidden(s"你不能用 secret $key（归 ${doc.owner.label}）；找 admin 授权"))
                      _ <- ZIO.when(use == SecretUse.Shell && !doc.content.allowShell)(

@@ -3,7 +3,7 @@ package muliao.workspace.scripts
 import muliao.exec.{Program, RealPath}
 import muliao.resources.SkillEntry
 import muliao.resources.vault.SecretUse
-import muliao.sessions.{ApprovalHandler, Pause, RunContext}
+import muliao.sessions.{ApprovalHandler, ApproverName, Pause, RunContext}
 import muliao.toolkit.*
 import muliao.workspace.tools.{CommandRunner, RunMode}
 import zio.*
@@ -32,7 +32,7 @@ object SkillRun:
   final case class Approval(call: SkillRunIn, filesHash: String) derives JsonCodec
 
   /** 批准后的执行者名。 */
-  val Handler = "skill_run"
+  val Handler: ApproverName = ApproverName.wrap("skill_run")
 
   /** 一次调用验证过的样子。 */
   private final case class Checked(entry: SkillEntry, script: String, real: RealPath, mode: RunMode, needsApproval: Boolean)

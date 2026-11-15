@@ -1,35 +1,18 @@
 package muliao.models.llm
 
+import muliao.contract.{Labeled, Labels}
+export muliao.contract.Thinking
 import muliao.toolkit.ToolContent
 import zio.Chunk
 import zio.json.*
 import zio.json.ast.Json
 
 /** 模型服务商说的协议。加一种协议：加一个枚举值和它的 [[Wire]] 实现。 */
-enum Protocol(val id: String):
+enum Protocol(val label: String) extends Labeled:
   case Anthropic       extends Protocol("anthropic")
   case OpenAiResponses extends Protocol("openai-responses")
 
-object Protocol:
-  def parse(s: String): Either[String, Protocol] =
-    values.find(_.id == s).toRight(s"不认识的协议 $s（可选：${values.map(_.id).mkString("、")}）")
-
-  given JsonCodec[Protocol] = JsonCodec.string.transformOrFail(parse, _.id)
-
-/** 思考档位：`Default` 照模型平时的做法并要回思考摘要；`Off` 不思考；其余按这个力度思考，也要摘要。 */
-enum Thinking(val id: String):
-  case Default extends Thinking("default")
-  case Off     extends Thinking("off")
-  case Low     extends Thinking("low")
-  case Medium  extends Thinking("medium")
-  case High    extends Thinking("high")
-  case XHigh   extends Thinking("xhigh")
-
-object Thinking:
-  def parse(s: String): Either[String, Thinking] =
-    values.find(_.id == s).toRight(s"不认识的思考档位 $s（可选：${values.map(_.id).mkString("、")}）")
-
-  given JsonCodec[Thinking] = JsonCodec.string.transformOrFail(parse, _.id)
+object Protocol extends Labels[Protocol]("协议", Protocol.values)
 
 /** 交给模型的一个工具：名字、说明、参数的 JSON Schema。 */
 final case class ToolDef(name: String, description: String, inputSchema: Json)

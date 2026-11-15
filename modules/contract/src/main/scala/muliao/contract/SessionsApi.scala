@@ -5,23 +5,106 @@ import sttp.tapir.*
 import sttp.tapir.json.zio.*
 import zio.json.*
 
+// ---- 状态与种类 ----
+
+/** 会话的工作状态。全系统（会话列表、看板、触发器防重叠、thread 列表）都用这一个判断。 */
+enum WorkState(val label: String) extends Labeled:
+  case Running extends WorkState("running")
+  case Waiting extends WorkState("waiting")
+  case Idle    extends WorkState("idle")
+
+  /** 给人看的说法。 */
+  def text: String = this match
+    case Running => "运行中"
+    case Waiting => "等待中"
+    case Idle    => "空闲"
+
+object WorkState extends Labels[WorkState]("工作状态", WorkState.values)
+
+/** 运行的状态。 */
+enum RunState(val label: String) extends Labeled:
+  case Running   extends RunState("running")
+  /** 有工具调用挂起（等用户回答、批准，或等别的 agent 回答） */
+  case Suspended extends RunState("suspended")
+  case Finished  extends RunState("finished")
+  /** 最终失败，可重试 */
+  case Failed    extends RunState("failed")
+  case Stopped   extends RunState("stopped")
+
+  /** 还没结束（运行中或挂起）。 */
+  def active: Boolean = this match
+    case Running | Suspended          => true
+    case Finished | Failed | Stopped  => false
+
+object RunState extends Labels[RunState]("运行状态", RunState.values):
+  val activeOnes: List[RunState] = values.toList.filter(_.active)
+
+/** 工具调用的状态。 */
+enum CallState(val label: String) extends Labeled:
+  /** 还没开始 */
+  case Pending   extends CallState("pending")
+  case Running   extends CallState("running")
+  /** 挂起：等用户回答、批准，或等别的 agent 回答 */
+  case Suspended extends CallState("suspended")
+  /** 用户批准了，等接着执行 */
+  case Approved  extends CallState("approved")
+  /** 用户批准了并选了以后不再问，等接着执行 */
+  case ApprovedAlways extends CallState("approved-always")
+  case Done      extends CallState("done")
+
+  /** 驱动接下来要执行它。 */
+  def runnable: Boolean = this match
+    case Pending | Approved | ApprovedAlways => true
+    case Running | Suspended | Done          => false
+
+object CallState extends Labels[CallState]("调用状态", CallState.values)
+
+/** 会话来源的种类（谁开的）。 */
+enum OriginKind(val label: String) extends Labeled:
+  /** 用户在界面上新建 */
+  case User    extends OriginKind("user")
+  case Trigger extends OriginKind("trigger")
+  /** 某 agent 处理某 issue 的专属会话 */
+  case Issue   extends OriginKind("issue")
+  /** 委派开出的 thread */
+  case Thread  extends OriginKind("thread")
+
+object OriginKind extends Labels[OriginKind]("会话来源", OriginKind.values)
+
+/** 界面怎么展示一个工具的调用与结果（由工具声明）。 */
+enum Display(val label: String) extends Labeled:
+  /** 原文 */
+  case Plain      extends Display("Plain")
+  /** 终端输出（命令） */
+  case Terminal   extends Display("Terminal")
+  /** 带行号的文件内容 */
+  case Code       extends Display("Code")
+  /** 改动对比 */
+  case Diff       extends Display("Diff")
+  /** 一段 JSON（列表、详情） */
+  case JsonData   extends Display("JsonData")
+  /** Markdown 文本 */
+  case Markdown   extends Display("Markdown")
+  /** 发给用户的文件：结果是附件的 JSON（id、name、mediaType、size），界面显示成附件 */
+  case SharedFile extends Display("SharedFile")
+
+object Display extends Labels[Display]("展示方式", Display.values)
+
 // ---- 会话列表 ----
 
 /** 会话列表里的一行。
-  * @param origin    来源：user / trigger / issue / thread
   * @param originRef 触发器名 / issue 号 / thread 名
   * @param parent    thread 的发起会话
-  * @param state     工作状态：running / waiting / idle
   */
 final case class SessionSummary(
     id: SessionId,
     agent: AgentId,
     agentName: String,
     title: String,
-    origin: String,
+    origin: OriginKind,
     originRef: Option[String],
     parent: Option[SessionId],
-    state: String,
+    state: WorkState,
     unread: Boolean,
     createdAt: Long,
     updatedAt: Long
@@ -30,11 +113,11 @@ final case class SessionSummary(
 /** 一页会话；`next` 是取下一页时的 `before`。运行中、等待中的总在第一页最前。 */
 final case class SessionPage(items: List[SessionSummary], next: Option[Long]) derives JsonCodec, Schema
 
-final case class FileView(id: String, name: String, mediaType: String, size: Long) derives JsonCodec, Schema
+final case class FileView(id: FileId, name: String, mediaType: String, size: Long) derives JsonCodec, Schema
 
-final case class NewSession(agent: AgentId, text: String, files: List[String] = Nil) derives JsonCodec, Schema
+final case class NewSession(agent: AgentId, text: String, files: List[FileId] = Nil) derives JsonCodec, Schema
 
-final case class MessageIn(text: String, files: List[String] = Nil) derives JsonCodec, Schema
+final case class MessageIn(text: String, files: List[FileId] = Nil) derives JsonCodec, Schema
 
 final case class Created(id: SessionId) derives JsonCodec, Schema
 
@@ -49,25 +132,28 @@ final case class OptionView(label: String, description: String) derives JsonCode
 
 final case class QuestionView(question: String, header: String, options: List[OptionView], multiSelect: Boolean) derives JsonCodec, Schema
 
-/** 挂起的调用在等什么。`kind`：question（等用户回答）/ approval（等用户批准）/ agent（等别的 agent 回答）。 */
-final case class PendingView(
-    kind: String,
-    questions: List[QuestionView],
-    summary: Option[String],
-    thread: Option[String],
-    agent: Option[String]
-) derives JsonCodec, Schema
+/** 挂起的调用在等什么。JSON 里 `kind` 是分支名。 */
+@jsonDiscriminator("kind")
+enum PendingView derives JsonCodec:
+  /** 等用户回答选择题 */
+  case Question(questions: List[QuestionView])
+  /** 等用户批准 */
+  case Approval(summary: String)
+  /** 等别的 agent 的 thread 回答 */
+  case Agent(thread: ThreadName, agent: AgentName)
 
-/** 一次工具调用。
-  * @param display 结果怎么展示：Plain / Terminal / Code / Diff / JsonData / Markdown / SharedFile（结果是 FileView 的 JSON）
-  * @param state   pending / running / suspended / approved / approved-always / done
-  */
+object PendingView:
+  given Schema[PendingView] =
+    given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
+    Schema.derived
+
+/** 一次工具调用。 */
 final case class CallView(
-    id: String,
+    id: CallId,
     name: String,
     args: String,
-    display: String,
-    state: String,
+    display: Display,
+    state: CallState,
     result: Option[ResultView],
     pending: Option[PendingView],
     startedAt: Option[Long],
@@ -108,22 +194,28 @@ final case class TimelineItem(
 
 final case class QueuedView(id: Long, source: String, text: String, files: List[FileView], checkIn: Boolean, at: Long) derives JsonCodec, Schema
 
-/** 进行中的异步工作。`kind`：job（`ref` 是任务号）/ delegation（`ref` 是委派编号，`thread` 是做它的 thread 会话）/ wake ...。 */
-final case class WaitItem(
-    id: Long,
-    kind: String,
-    ref: String,
-    label: String,
-    heartbeatSeconds: Option[Int],
-    dueAt: Option[Long],
-    createdAt: Long,
-    thread: Option[SessionId] = None
-) derives JsonCodec, Schema
+/** 进行中的异步工作在等什么。JSON 里 `kind` 是分支名。 */
+@jsonDiscriminator("kind")
+enum WaitTarget derives JsonCodec:
+  /** 后台任务 */
+  case Job(job: JobId)
+  /** 约好的唤醒 */
+  case Wake(dueAt: Long)
+  /** 带回报的委派：`thread` 是做它的 thread 会话 */
+  case Delegation(thread: Option[SessionId])
 
-final case class PendingCall(entry: Long, call: String, name: String, pending: PendingView) derives JsonCodec, Schema
+object WaitTarget:
+  given Schema[WaitTarget] =
+    given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
+    Schema.derived
 
-/** 最近一次运行。`state`：running / suspended / finished / failed / stopped；`retryNote`：暂时失败、正在退避重试的原因。 */
-final case class RunView(id: Long, state: String, error: Option[String], retryNote: Option[String], startedAt: Long, finishedAt: Option[Long])
+/** 进行中的异步工作。 */
+final case class WaitItem(id: Long, target: WaitTarget, label: String, heartbeatSeconds: Option[Int], createdAt: Long) derives JsonCodec, Schema
+
+final case class PendingCall(entry: Long, call: CallId, name: String, pending: PendingView) derives JsonCodec, Schema
+
+/** 最近一次运行。`retryNote`：暂时失败、正在退避重试的原因。 */
+final case class RunView(id: Long, state: RunState, error: Option[String], retryNote: Option[String], startedAt: Long, finishedAt: Option[Long])
     derives JsonCodec, Schema
 
 final case class SessionDetail(
@@ -171,11 +263,11 @@ object SessionsApi:
   /** 一个会话下的接口（实时事件 `GET /api/sessions/{id}/live` 是 SSE，声明在服务端）。 */
   val one = sessions.in(path[SessionId]("id"))
 
-  val list: Endpoint[Option[String], (Option[AgentId], List[String], Option[String], Option[Long], Option[Int]), ApiError, SessionPage, Any] =
+  val list: Endpoint[Option[String], (Option[AgentId], List[OriginKind], Option[String], Option[Long], Option[Int]), ApiError, SessionPage, Any] =
     sessions.get
       .in(
         query[Option[AgentId]]("agent")
-          .and(query[List[String]]("origin"))
+          .and(query[List[OriginKind]]("origin"))
           .and(query[Option[String]]("q"))
           .and(query[Option[Long]]("before"))
           .and(query[Option[Int]]("limit"))
@@ -208,9 +300,9 @@ object SessionsApi:
   val delete: Endpoint[Option[String], SessionId, ApiError, Unit, Any] =
     one.delete.out(statusCode(StatusCode.NoContent)).name("deleteSession").description("删除会话：忙时拒绝；它开出的 thread 保留。")
 
-  val answer: Endpoint[Option[String], (SessionId, Long, String, AnswerIn), ApiError, Unit, Any] =
+  val answer: Endpoint[Option[String], (SessionId, Long, CallId, AnswerIn), ApiError, Unit, Any] =
     one.post
-      .in("calls" / path[Long]("entry") / path[String]("call") / "answer")
+      .in("calls" / path[Long]("entry") / path[CallId]("call") / "answer")
       .in(jsonBody[AnswerIn])
       .out(statusCode(StatusCode.NoContent))
       .name("answerCall")
@@ -227,9 +319,9 @@ object SessionsApi:
       .description("上传一个附件（请求体是文件内容），返回的 id 在发消息时引用。内容相同只存一份。")
 
   /** 下载：附件按不可信内容处理，只有常见图片内联显示，其余一律作为下载。 */
-  val download: Endpoint[Option[String], String, ApiError, (String, String, Array[Byte]), Any] =
+  val download: Endpoint[Option[String], FileId, ApiError, (String, String, Array[Byte]), Any] =
     Api.secure.get
-      .in("files" / path[String]("id"))
+      .in("files" / path[FileId]("id"))
       .out(header[String]("Content-Type").and(header[String]("Content-Disposition")).and(byteArrayBody))
       .out(header("X-Content-Type-Options", "nosniff").and(header("Content-Security-Policy", "sandbox")))
       .name("downloadFile")

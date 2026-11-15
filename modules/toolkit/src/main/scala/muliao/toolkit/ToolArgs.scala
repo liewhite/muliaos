@@ -71,7 +71,10 @@ object ToolArgs:
       case m: Schema.Map[?, ?]            => obj("type" -> Json.Str("object"), "additionalProperties" -> toJson(m.valueSchema, None))
       case e: Schema.Enum[?] if e.cases.forall(c => isSingleton(c.schema)) =>
         withDescription(obj("type" -> Json.Str("string"), "enum" -> Json.Arr(e.cases.map(c => Json.Str(caseLabel(c))))), descriptionOf(e.annotations))
-      case Schema.Primitive(t, _) => primitive(t)
+      case Schema.Primitive(t, ann) =>
+        ann.collectFirst { case choices(vs) => vs } match
+          case Some(vs) => obj("type" -> Json.Str("string"), "enum" -> Json.Arr(Chunk.fromIterable(vs.map(Json.Str(_)))))
+          case None     => primitive(t)
       case _                      => obj()
     withDescription(body, desc)
 

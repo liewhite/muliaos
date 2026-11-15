@@ -1,5 +1,6 @@
 package muliao.resources.guard
 
+import muliao.contract.AssetKind
 import muliao.platform.AppError
 import muliao.platform.db.Database
 import muliao.resources.*
@@ -102,7 +103,7 @@ object AssetGuard:
           }
         case _ => ZIO.unit
 
-    private def nameTaken(kind: Kind, name: String, owner: Owner): IO[AppError, Unit] =
+    private def nameTaken(kind: AssetKind, name: String, owner: Owner): IO[AppError, Unit] =
       store.snapshot.flatMap { snap =>
         val others = snap.occupied.getOrElse(kind -> name, Nil).filterNot(_ == owner)
         ZIO.when(others.nonEmpty)(
@@ -143,7 +144,7 @@ object AssetGuard:
           val dir = path.getParent
           for
             _ <- ZIO.unless(Formats.validSlug(name))(ZIO.fail(refuse("Skills")("skill 名（目录名）只能用小写字母、数字和 -")))
-            _ <- ZIO.when(old.isEmpty)(nameTaken(Kind.Skill, name, owner))
+            _ <- ZIO.when(old.isEmpty)(nameTaken(AssetKind.Skill, name, owner))
             _ <- ZIO
                    .attemptBlocking(Formats.parseSkill(content, name, rel => Files.isRegularFile(dir.resolve(rel))))
                    .orDie
@@ -161,7 +162,7 @@ object AssetGuard:
         case AssetPath.Mcp(owner, name) =>
           for
             _   <- ZIO.unless(Formats.validSlug(name))(ZIO.fail(refuse("MCP servers")("MCP 名只能用小写字母、数字和 -")))
-            _   <- ZIO.when(old.isEmpty)(nameTaken(Kind.Mcp, name, owner))
+            _   <- ZIO.when(old.isEmpty)(nameTaken(AssetKind.Mcp, name, owner))
             cfg <- ZIO.fromEither(Formats.parseMcp(content)).mapError(refuse("MCP servers"))
             _   <- secretRefs(actor, cfg.secretRefs)
           yield content
@@ -206,7 +207,7 @@ object AssetGuard:
                  case Actor.User => ZIO.unit
                  case Actor.Agent(id) =>
                    resources.permissions(id).flatMap { p =>
-                     val denied = keys.filterNot(k => snap.secret(k).exists(d => p.decide(Action.Use, Kind.Secret, k, d.owner).allowed))
+                     val denied = keys.filterNot(k => snap.secret(k).exists(d => p.decide(Action.Use, AssetKind.Secret, k, d.owner).allowed))
                      ZIO.when(denied.nonEmpty)(
                        ZIO.fail(refuse("MCP servers")(s"你不能用这些 secret：${denied.toList.sorted.mkString("、")}"))
                      )

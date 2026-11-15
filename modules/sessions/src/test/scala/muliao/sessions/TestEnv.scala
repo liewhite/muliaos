@@ -104,12 +104,12 @@ object TestEnv:
     Tool[RunContext, NoIn]("block", "卡住直到放行", Access.Write, Scheduling.Ordered)((_, _) => p.gate.await.as(ToolOutcome.text("放行了"))),
     Tool[RunContext, SecretIn]("keep_secret", "收一个秘密", Access.Write)((in, _) => p.secrets.update(_ :+ in.value).as(ToolOutcome.text("收到"))),
     Tool[RunContext, NoIn]("approve_me", "要批准", Access.Write, Scheduling.Ordered)((_, _) =>
-      ZIO.succeed(ToolOutcome.Suspended(Pause.Approval("test-approval", "跑测试脚本", Json.Obj("x" -> Json.Num(1)))))
+      ZIO.succeed(ToolOutcome.Suspended(Pause.Approval(ApproverName.wrap("test-approval"), "跑测试脚本", Json.Obj("x" -> Json.Num(1)))))
     )
   )
 
   def approval(p: Probe): ApprovalHandler = new ApprovalHandler:
-    val name = "test-approval"
+    val name = ApproverName.wrap("test-approval")
     def approved(payload: Json, always: Boolean, ctx: RunContext): IO[ToolFailure, ToolOutcome] =
       p.approvals.update(_ :+ always).as(ToolOutcome.text(s"批准后执行了，always=$always"))
 

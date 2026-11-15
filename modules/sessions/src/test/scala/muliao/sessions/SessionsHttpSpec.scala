@@ -106,7 +106,7 @@ object SessionsHttpSpec extends ZIOSpecDefault:
           ev.fromJson[LiveView].toOption.exists(v => v.kind == "snapshot" && v.parts.head.text.contains("正在写")),
           busy.status == 409,
           st.status == 204,
-          det.body.fromJson[SessionDetail].toOption.exists(_.run.exists(_.state == "stopped")),
+          det.body.fromJson[SessionDetail].toOption.exists(_.run.exists(_.state == RunState.Stopped)),
           lines.map(_.requests).sum == 1L,
           lines.head.agentName == "alice",
           del.status == 204,

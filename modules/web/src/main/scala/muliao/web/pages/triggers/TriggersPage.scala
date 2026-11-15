@@ -57,7 +57,7 @@ object Card:
           div(cls := "truncate font-medium", child.text <-- t.map(_.name.value)),
           div(
             cls := "mt-1 flex flex-wrap items-center gap-1.5",
-            child <-- t.map(x => Ui.chip(Kind.label(x.kind))()),
+            child <-- t.map(x => Ui.chip(x.kind.title)()),
             Option.when(showAgent)(child <-- t.map(x => Ui.chip(x.agentName, Tone.Accent)())),
             child.maybe <-- t.map(x => Show.warning(x).map(w => Ui.chip(w, Tone.Warning)()))
           )
@@ -132,7 +132,7 @@ object Detail:
           Dialog.heading(cls := "break-all", child.text <-- t.map(_.name.value)),
           div(
             cls := "mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted",
-            child <-- t.map(x => Ui.chip(Kind.label(x.kind))()),
+            child <-- t.map(x => Ui.chip(x.kind.title)()),
             child <-- t.map(x => Ui.chip(x.agentName, Tone.Accent)()),
             child <-- t.map(kindStatus),
             child.maybe <-- t.map(_.finishedAt.map(f => span(s"· 完成 ${Ui.formatTime(f)}")))
@@ -148,15 +148,15 @@ object Detail:
     )
 
   /** 这种方式自己的运行状态：下次时间、进程等。 */
-  private def kindStatus(t: TriggerView): HtmlElement = Kind.of(t.kind) match
-    case Some(Kind.Schedule) =>
+  private def kindStatus(t: TriggerView): HtmlElement = t.kind match
+    case TriggerKind.Schedule =>
       span(
         code(cls := "rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs", t.config.cron.getOrElse("")),
         t.nextAt.filter(_ => t.enabled).map(n => s" · 下次 ${Ui.formatTime(n)}"),
         Option.when(t.skipped > 0)(span(cls := "text-warning", s" · 已连续跳过 ${t.skipped} 次：上次的会话还没做完"))
       )
-    case Some(Kind.Once) => span(s"计划 ${Show.planned(t, Ui.formatTime)}")
-    case Some(Kind.Stream) =>
+    case TriggerKind.Once => span(s"计划 ${Show.planned(t, Ui.formatTime)}")
+    case TriggerKind.Stream =>
       span(
         cls := "flex flex-col gap-1",
         code(cls := "break-all rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs", t.config.command.getOrElse("")),
@@ -166,7 +166,6 @@ object Detail:
           code(cls := "font-mono text-xs", Show.stderrLog(t))
         )
       )
-    case None => span()
 
   private def sessionLink(id: SessionId, text: String): HtmlElement =
     Ui.appLink(Route.Session(id.value).url)(cls := "text-accent", text)
@@ -178,13 +177,13 @@ object Detail:
       child.text <-- t.map(_.lastFiredAt.fold("还没有触发过")(l => s"上次触发 ${Ui.formatTime(l)}")),
       child.maybe <-- t.map(_.lastSession.map(s => span(" · ", sessionLink(s, "上次会话"))))
     ),
-    children <-- t.map(_.faults.map(f => Ui.errorAlert(FaultSource.title(f), f.error)))
+    children <-- t.map(_.faults.map(f => Ui.errorAlert(f.source.title, f.error)))
   )
 
   private def precheckSummary(p: PrecheckSpec): HtmlElement =
     div(
       cls := "flex flex-col gap-1 text-xs text-muted",
-      div(s"前置检查 · ${FireWhen.of(p.fireWhen).label}"),
+      div(s"前置检查 · ${p.fireWhen.title}"),
       pre(cls := Ui.CodeBlock, p.command)
     )
 
@@ -246,7 +245,7 @@ object Detail:
           cls := "text-xs text-muted",
           child <-- t.map(_.lastSession.fold[HtmlElement](span("没有触发会话（前置检查判定没事，或触发失败）"))(s => sessionLink(s, "这次触发的会话")))
         ),
-        children <-- t.map(_.faults.map(f => Ui.errorAlert(FaultSource.title(f), f.error))),
+        children <-- t.map(_.faults.map(f => Ui.errorAlert(f.source.title, f.error))),
         p(cls := "whitespace-pre-wrap text-sm", child.text <-- t.map(_.prompt)),
         act.errorView()
       ),
@@ -261,11 +260,11 @@ object Editor:
   /** @param facts 详情正文开头的几行（上次触发、故障），编辑时也显示 */
   def view(base: TriggerView, facts: Modifier[HtmlElement], onDone: () => Unit): HtmlElement =
     val prompt   = Var(base.prompt)
-    val config   = ConfigDraft.of(base).map(Var(_))
+    val config   = Var(ConfigDraft.of(base))
     val precheck = Var(PrecheckDraft.of(base.precheck))
     val act      = new Action
     val patch    = prompt.signal
-      .combineWith(config.fold(Val(Option.empty[ConfigDraft]))(_.signal.map(Some(_))), precheck.signal)
+      .combineWith(config.signal, precheck.signal)
       .map((p, c, pc) => Edit.patch(base, p, c, pc))
     def save(p: Either[String, TriggerPatch]): Unit = p match
       case Right(x) if Edit.isEmpty(x) => onDone()
@@ -276,7 +275,7 @@ object Editor:
       Dialog.body(
         cls := "flex flex-col gap-3",
         facts,
-        config.map(Editors.config),
+        Editors.config(config),
         Editors.precheck(precheck),
         Fields.area("处理说明", prompt, rowsN = 5),
         act.errorView()
@@ -301,7 +300,7 @@ object NewForm:
     )
 
   private def fields(agents: Signal[List[AgentSummary]], onCreated: () => Unit): HtmlElement =
-    val config   = Var(ConfigDraft.empty(Kind.Schedule, js.Date.now()))
+    val config   = Var(ConfigDraft.empty(TriggerKind.Schedule, js.Date.now()))
     val name     = Var("")
     val agent    = Var(Option.empty[AgentId])
     val precheck = Var(PrecheckDraft.off)
@@ -320,11 +319,11 @@ object NewForm:
       case Left(why) => act.error.set(Some(why))
     div(
       cls := "flex flex-col gap-4",
-      Fields.select[Kind](
+      Fields.select[TriggerKind](
         "触发方式",
         config.signal.map(c => Some(c.kind)),
         k => config.set(ConfigDraft.empty(k, js.Date.now())),
-        Val(Kind.values.toList.map(k => Opt(k, k.label, Some(k.summary))))
+        Val(TriggerKind.values.toList.map(k => Opt(k, k.title, Some(k.summary))))
       ),
       Fields.text("名称", name, hint = Some("小写字母、数字和 -，如 daily-report"), mono = true),
       Fields.select[AgentId](

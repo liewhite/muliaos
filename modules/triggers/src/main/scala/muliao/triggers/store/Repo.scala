@@ -1,16 +1,16 @@
 package muliao.triggers.store
 
 import io.getquill.*
-import muliao.contract.{AgentId, SessionId, TriggerId, TriggerName}
+import muliao.contract.{AgentId, FaultSource, SessionId, TriggerId, TriggerKind, TriggerName}
 import muliao.platform.db.*
 import muliao.platform.db.Sql.*
 
 final case class TriggerRow(
-    id: Long,
+    id: TriggerId,
     name: TriggerName,
     agentId: AgentId,
     prompt: String,
-    kind: String,
+    kind: TriggerKind,
     config: String,
     enabled: Boolean,
     precheck: Option[String],
@@ -25,7 +25,7 @@ final case class TriggerRow(
     updatedAt: Long
 )
 
-final case class FaultRow(triggerId: Long, source: String, error: String, at: Long)
+final case class FaultRow(triggerId: TriggerId, source: FaultSource, error: String, at: Long)
 
 /** 本领域的表的读写。只做存取，不含规则。 */
 private[triggers] object Repo:
@@ -33,10 +33,10 @@ private[triggers] object Repo:
   private inline def faults   = quote(querySchema[FaultRow]("trigger_fault"))
 
   def insert(row: TriggerRow): Tx[TriggerId] =
-    Sql.run(triggers.insertValue(lift(row)).returningGenerated(_.id)).map(TriggerId.wrap).orInternal
+    Sql.run(triggers.insertValue(lift(row)).returningGenerated(_.id)).orInternal
 
   def get(id: TriggerId): Read[Option[TriggerRow]] =
-    Sql.run(triggers.filter(_.id == lift(id.value))).map(_.headOption).orInternal
+    Sql.run(triggers.filter(_.id == lift(id))).map(_.headOption).orInternal
 
   /** 没结束的同名触发器。 */
   def live(name: TriggerName): Read[Option[TriggerRow]] =
@@ -61,11 +61,11 @@ private[triggers] object Repo:
     Sql.run(triggers.filter(_.id == lift(row.id)).updateValue(lift(row))).unit.orInternal
 
   def delete(id: TriggerId): Tx[Unit] =
-    (Sql.run(triggers.filter(_.id == lift(id.value)).delete) *> Sql.run(faults.filter(_.triggerId == lift(id.value)).delete)).unit.orInternal
+    (Sql.run(triggers.filter(_.id == lift(id)).delete) *> Sql.run(faults.filter(_.triggerId == lift(id)).delete)).unit.orInternal
 
   // ---- 脚本故障 ----
 
-  def faultsOf(ids: List[Long]): Read[List[FaultRow]] =
+  def faultsOf(ids: List[TriggerId]): Read[List[FaultRow]] =
     Sql.run(faults.filter(f => liftQuery(ids).contains(f.triggerId))).orInternal
 
   def putFault(row: FaultRow): Tx[Unit] =
@@ -73,7 +73,7 @@ private[triggers] object Repo:
       Sql.run(faults.insertValue(lift(row)))).unit.orInternal
 
   /** 删一个来源的故障；`source` 为空删全部。返回删了几条。 */
-  def clearFaults(id: TriggerId, source: Option[String]): Tx[Long] =
+  def clearFaults(id: TriggerId, source: Option[FaultSource]): Tx[Long] =
     source match
-      case Some(s) => Sql.run(faults.filter(f => f.triggerId == lift(id.value) && f.source == lift(s)).delete).orInternal
-      case None    => Sql.run(faults.filter(_.triggerId == lift(id.value)).delete).orInternal
+      case Some(s) => Sql.run(faults.filter(f => f.triggerId == lift(id) && f.source == lift(s)).delete).orInternal
+      case None    => Sql.run(faults.filter(_.triggerId == lift(id)).delete).orInternal

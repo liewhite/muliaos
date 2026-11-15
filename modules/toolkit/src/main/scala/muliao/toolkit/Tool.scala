@@ -16,22 +16,8 @@ enum Access:
 enum Scheduling:
   case Concurrent, Ordered
 
-/** 界面怎么展示这个工具的调用与结果；认不出的按原文显示。 */
-enum Display:
-  /** 原文 */
-  case Plain
-  /** 终端输出（命令） */
-  case Terminal
-  /** 带行号的文件内容 */
-  case Code
-  /** 改动对比 */
-  case Diff
-  /** 一段 JSON（列表、详情） */
-  case JsonData
-  /** Markdown 文本 */
-  case Markdown
-  /** 发给用户的文件：结果是附件的 JSON（id、name、mediaType、size），界面显示成附件 */
-  case SharedFile
+/** 界面怎么展示工具的调用与结果（定义在 contract，前后端共用）。 */
+export muliao.contract.Display
 
 /** 标在参数字段上：值是敏感的（如 secret），保存与展示调用参数时打码。 */
 final class sensitive extends StaticAnnotation

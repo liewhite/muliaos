@@ -198,7 +198,7 @@ object IssueView:
               cls := "flex items-center gap-1 text-accent",
               Icon("MessageSquare", "size-4"),
               s"${s.agentName} 的会话",
-              Work.parse(s.state).map(w => span(cls := "text-xs text-muted", s"（${workLabel(w)}）"))
+              span(cls := "text-xs text-muted", s"（${workLabel(Work.of(s.state))}）")
             )
           }
       }

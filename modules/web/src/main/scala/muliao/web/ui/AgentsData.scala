@@ -1,7 +1,7 @@
 package muliao.web.ui
 
 import com.raquo.laminar.api.L.*
-import muliao.contract.{AgentId, AgentSummary, ResourcesApi}
+import muliao.contract.{AgentId, AgentState, AgentSummary, ResourcesApi}
 import muliao.web.core.*
 
 /** 多个页面共用的 agent 列表：显示名、分组、可选来派活的。 */
@@ -9,7 +9,7 @@ object AgentsData:
   /** 全部 agent（含归档的），随 agents 主题刷新。每次调用得到一份新的数据源，页面各自持有。 */
   def load(): Signal[Load[List[AgentSummary]]] = Remote("agents", "assets")(Http.call(ResourcesApi.listAgents)(()))  // 改 agent.toml（模型、分组）只发 assets
 
-  def archived(a: AgentSummary): Boolean = a.state == "archived"
+  def archived(a: AgentSummary): Boolean = a.state == AgentState.Archived
 
   /** 列表页的分段：不分组的平铺在前，每个组一段（按组名），归档的单独一段；各段内保持接口给的顺序。 */
   final case class Groups(ungrouped: List[AgentSummary], groups: List[(String, List[AgentSummary])], archived: List[AgentSummary])

@@ -7,17 +7,14 @@ import muliao.web.ui.*
 
 import Http.ec
 
-/** 资源的种类（规则里的 kind）。 */
-enum AssetKind(val id: String, val label: String):
-  case Tool   extends AssetKind("tool", "工具")
-  case Skill  extends AssetKind("skill", "Skill")
-  case Mcp    extends AssetKind("mcp", "MCP")
-  case Secret extends AssetKind("secret", "Secret")
-  case Memory extends AssetKind("memory", "记忆")
-
-object AssetKind:
-  def of(id: String): Option[AssetKind] = values.find(_.id == id)
-  def label(id: String): String         = of(id).fold(id)(_.label)
+/** 资源种类在界面上的名字。 */
+extension (k: AssetKind)
+  def shownName: String = k match
+    case AssetKind.Tool   => "工具"
+    case AssetKind.Skill  => "Skill"
+    case AssetKind.Mcp    => "MCP"
+    case AssetKind.Secret => "Secret"
+    case AssetKind.Memory => "记忆"
 
 /** 权限规则（`动作:种类:名字`）的输入、逐条校验，以及按规则算出的「能用什么」。规则语法与匹配只在服务端，这里只显示。 */
 object Rules:
@@ -26,9 +23,9 @@ object Rules:
     val tools  = Remote.once(Http.call(ResourcesApi.checkRules)(RulesRequest(List("use:tool:*"))).map(_.flatMap(_.matches)))
     val assets = Remote("assets")(Http.call(ResourcesApi.listAssets)(()).map(_.items))
     tools.combineWith(assets).map { (t, a) =>
-      val wild  = AssetKind.values.toList.map(k => s"use:${k.id}:*")
+      val wild  = AssetKind.values.toList.map(k => s"use:${k.label}:*")
       val named = t.data.getOrElse(Nil).map(n => s"use:tool:$n") ++
-        a.data.getOrElse(Nil).filter(i => AssetKind.of(i.kind).isDefined).map(i => s"use:${i.kind}:${i.name}")
+        a.data.getOrElse(Nil).flatMap(i => i.kind.asset.map(k => s"use:${k.label}:${i.name}"))
       (wild ++ named).distinct
     }
 
@@ -142,9 +139,9 @@ object Grants:
           if r.assets.isEmpty then List(span(cls := "text-sm text-muted", "没有 skill、MCP、secret、记忆"))
           else
             r.assets.map(g =>
-              Ui.appLink(s"${Route.Assets.url}?kind=${g.kind}")(
+              Ui.appLink(s"${Route.Assets.url}?kind=${g.kind.label}")(
                 title := s"用：${g.use}" + g.write.fold("")(w => s"\n改：$w"),
-                secondaryChip(span(cls := "text-muted", AssetKind.label(g.kind)), " ", span(cls := "font-mono", g.name))
+                secondaryChip(span(cls := "text-muted", g.kind.shownName), " ", span(cls := "font-mono", g.name))
               )
             )
         )
@@ -168,11 +165,11 @@ object Grants:
     div(
       cls := "flex flex-col gap-3",
       kinds.map { k =>
-        val items = (if k == AssetKind.Tool then tools else assets.map(_.filter(_.kind == k.id))).map(_.sortBy(_.name))
-        Ui.groupSection(k.label, items.map(_.size), defaultExpanded = k != AssetKind.Tool)(
+        val items = (if k == AssetKind.Tool then tools else assets.map(_.filter(_.kind == k))).map(_.sortBy(_.name))
+        Ui.groupSection(k.shownName, items.map(_.size), defaultExpanded = k != AssetKind.Tool)(
           div(
             cls := "flex flex-col",
-            child.maybe <-- items.map(is => Option.when(is.isEmpty)(p(cls := "py-2 text-sm text-muted", s"没有${k.label}"))),
+            child.maybe <-- items.map(is => Option.when(is.isEmpty)(p(cls := "py-2 text-sm text-muted", s"没有${k.shownName}"))),
             children <-- items.splitSeq(_.item)(g => row(g))
           )
         )

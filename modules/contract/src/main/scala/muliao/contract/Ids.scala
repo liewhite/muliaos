@@ -51,3 +51,7 @@ type NotificationId = NotificationId.Type
 
 object RoleName extends StringId
 type RoleName = RoleName.Type
+
+/** 上传文件（附件）。 */
+object FileId extends StringId
+type FileId = FileId.Type

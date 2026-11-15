@@ -207,7 +207,7 @@ object IssuesPage:
   private def columnAt(x: Double, y: Double): Option[IssueStatus] =
     Option(dom.document.elementFromPoint(x, y))
       .flatMap(e => Option(e.closest("[data-column]")))
-      .flatMap(c => IssueStatus.parse(c.getAttribute("data-column")))
+      .flatMap(c => IssueStatus.parse(c.getAttribute("data-column")).toOption)
 
   private val MouseThreshold = 6.0
   private val TouchSlop      = 8.0

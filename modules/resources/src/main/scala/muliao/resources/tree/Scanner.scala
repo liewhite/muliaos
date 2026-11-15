@@ -1,7 +1,7 @@
 package muliao.resources.tree
 
-import muliao.contract.AgentName
-import muliao.resources.access.{AccessConfig, Kind}
+import muliao.contract.{AgentName, AssetKind}
+import muliao.resources.access.AccessConfig
 
 import java.nio.charset.{CharacterCodingException, CodingErrorAction, StandardCharsets}
 import java.nio.ByteBuffer
@@ -27,7 +27,7 @@ final case class Snapshot(
     secrets: List[SecretDoc],
     problems: List[Problem],
     /** 磁盘上出现过的每个按名字分发的资源及其主人（含没加载的），用于新建时查重名。 */
-    occupied: Map[(Kind, String), List[Owner]]
+    occupied: Map[(AssetKind, String), List[Owner]]
 ):
   def sharedMemory(name: String): Option[MemoryDoc] =
     memories.find(_.scope == MemoryScope.Shared(name))
@@ -40,11 +40,11 @@ final case class Snapshot(
   def secret(key: String): Option[SecretDoc]  = secrets.find(_.key == key)
 
   /** 已加载的、按名字分发的资源：种类、名字、主人。 */
-  def named: List[(Kind, String, Owner)] =
-    memories.collect { case MemoryDoc(MemoryScope.Shared(n), _, _) => (Kind.Memory, n, Owner.Platform) } ++
-      skills.map(s => (Kind.Skill, s.name, s.owner)) ++
-      mcps.map(m => (Kind.Mcp, m.name, m.owner)) ++
-      secrets.map(s => (Kind.Secret, s.key, s.owner))
+  def named: List[(AssetKind, String, Owner)] =
+    memories.collect { case MemoryDoc(MemoryScope.Shared(n), _, _) => (AssetKind.Memory, n, Owner.Platform) } ++
+      skills.map(s => (AssetKind.Skill, s.name, s.owner)) ++
+      mcps.map(m => (AssetKind.Mcp, m.name, m.owner)) ++
+      secrets.map(s => (AssetKind.Secret, s.key, s.owner))
 
 /** 扫描资源目录（阻塞 IO，调用方放到阻塞线程上）。 */
 object Scanner:
@@ -92,12 +92,12 @@ object Scanner:
     case Secret(doc: SecretDoc)
 
   private sealed trait Candidate:
-    def kind: Kind
+    def kind: AssetKind
     def name: String
     def owner: Owner
     def path: Path
-  private final case class Ok(kind: Kind, name: String, owner: Owner, path: Path, value: Loaded) extends Candidate
-  private final case class Bad(kind: Kind, name: String, owner: Owner, path: Path, reason: String) extends Candidate
+  private final case class Ok(kind: AssetKind, name: String, owner: Owner, path: Path, value: Loaded) extends Candidate
+  private final case class Bad(kind: AssetKind, name: String, owner: Owner, path: Path, reason: String) extends Candidate
 
   def scan(root: Path): Snapshot =
     val fp      = fingerprint(root)
@@ -147,27 +147,27 @@ object Scanner:
     val candidates: List[Candidate] = classes.flatMap {
       case (p, AssetPath.SharedMemory(n)) =>
         Some(
-          if !Formats.validSlug(n) then Bad(Kind.Memory, n, Owner.Platform, p, "共享记忆名只能用小写字母、数字和 -")
-          else readText(p).fold(Bad(Kind.Memory, n, Owner.Platform, p, _), t => Ok(Kind.Memory, n, Owner.Platform, p, Loaded.Memory(MemoryDoc(MemoryScope.Shared(n), p, t))))
+          if !Formats.validSlug(n) then Bad(AssetKind.Memory, n, Owner.Platform, p, "共享记忆名只能用小写字母、数字和 -")
+          else readText(p).fold(Bad(AssetKind.Memory, n, Owner.Platform, p, _), t => Ok(AssetKind.Memory, n, Owner.Platform, p, Loaded.Memory(MemoryDoc(MemoryScope.Shared(n), p, t))))
         )
       case (p, AssetPath.SkillMain(o, n)) =>
         val dir = p.getParent
         Some(
-          if !Formats.validSlug(n) then Bad(Kind.Skill, n, o, p, "skill 名（目录名）只能用小写字母、数字和 -")
+          if !Formats.validSlug(n) then Bad(AssetKind.Skill, n, o, p, "skill 名（目录名）只能用小写字母、数字和 -")
           else
             readText(p).flatMap(t => Formats.parseSkill(t, n, rel => Files.isRegularFile(dir.resolve(rel)))) match
-              case Right(m) => Ok(Kind.Skill, n, o, p, Loaded.Skill(SkillDoc(n, o, dir, m.description, m.approval)))
-              case Left(r)  => Bad(Kind.Skill, n, o, p, r)
+              case Right(m) => Ok(AssetKind.Skill, n, o, p, Loaded.Skill(SkillDoc(n, o, dir, m.description, m.approval)))
+              case Left(r)  => Bad(AssetKind.Skill, n, o, p, r)
         )
       case (p, AssetPath.Mcp(o, n)) =>
         Some(
-          if !Formats.validSlug(n) then Bad(Kind.Mcp, n, o, p, "MCP 名只能用小写字母、数字和 -")
-          else readText(p).flatMap(Formats.parseMcp).fold(Bad(Kind.Mcp, n, o, p, _), c => Ok(Kind.Mcp, n, o, p, Loaded.Mcp(McpDoc(n, o, p, c))))
+          if !Formats.validSlug(n) then Bad(AssetKind.Mcp, n, o, p, "MCP 名只能用小写字母、数字和 -")
+          else readText(p).flatMap(Formats.parseMcp).fold(Bad(AssetKind.Mcp, n, o, p, _), c => Ok(AssetKind.Mcp, n, o, p, Loaded.Mcp(McpDoc(n, o, p, c))))
         )
       case (p, AssetPath.Secret(o, k)) =>
         Some(
-          if !Formats.validSecretKey(k) then Bad(Kind.Secret, k, o, p, "secret 名只能用大写字母、数字和下划线，字母开头")
-          else readText(p).flatMap(Formats.parseSecret).fold(Bad(Kind.Secret, k, o, p, _), s => Ok(Kind.Secret, k, o, p, Loaded.Secret(SecretDoc(k, o, p, s))))
+          if !Formats.validSecretKey(k) then Bad(AssetKind.Secret, k, o, p, "secret 名只能用大写字母、数字和下划线，字母开头")
+          else readText(p).flatMap(Formats.parseSecret).fold(Bad(AssetKind.Secret, k, o, p, _), s => Ok(AssetKind.Secret, k, o, p, Loaded.Secret(SecretDoc(k, o, p, s))))
         )
       case _ => None
     }

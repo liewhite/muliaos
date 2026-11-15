@@ -4,34 +4,34 @@ import muliao.contract.*
 
 import scala.scalajs.js
 
-/** 触发方式。`summary` 是选择方式时的一句话说明（后端 kinds 的说明是写给 agent 的，太长）。 */
-enum Kind(val id: String, val label: String, val summary: String):
-  case Schedule extends Kind("schedule", "定时", "按 cron 表达式周期运行")
-  case Once     extends Kind("once", "一次性", "到指定时间运行一次，之后移入「已结束」")
-  case Stream   extends Kind("stream", "流式", "托管一条常驻命令，它输出的每一行是一个事件")
+/** 触发方式在界面上的名字与选择时的一句话说明（后端 kinds 的说明是写给 agent 的，太长）。 */
+extension (k: TriggerKind)
+  def title: String = k match
+    case TriggerKind.Schedule => "定时"
+    case TriggerKind.Once     => "一次性"
+    case TriggerKind.Stream   => "流式"
+  def summary: String = k match
+    case TriggerKind.Schedule => "按 cron 表达式周期运行"
+    case TriggerKind.Once     => "到指定时间运行一次，之后移入「已结束」"
+    case TriggerKind.Stream   => "托管一条常驻命令，它输出的每一行是一个事件"
 
-object Kind:
-  def of(id: String): Option[Kind] = values.find(_.id == id)
-
-  /** 界面上的名字；不认识的种类原样显示。 */
-  def label(id: String): String = of(id).fold(id)(_.label)
-
-/** 前置检查的触发条件。 */
-enum FireWhen(val id: String, val label: String, val description: String):
-  case Output  extends FireWhen("output", "有输出就触发", "没有输出就跳过；适合脚本自己记游标、只打印新内容")
-  case Changed extends FireWhen("changed", "输出变化才触发", "与上次输出比较，交给 agent 差异和完整输出；第一次只记录基线")
-
-object FireWhen:
-  def of(id: String): FireWhen = values.find(_.id == id).getOrElse(Output)
+/** 前置检查的触发条件在界面上的说法。 */
+extension (w: FireWhen)
+  def title: String = w match
+    case FireWhen.Output  => "有输出就触发"
+    case FireWhen.Changed => "输出变化才触发"
+  def description: String = w match
+    case FireWhen.Output  => "没有输出就跳过；适合脚本自己记游标、只打印新内容"
+    case FireWhen.Changed => "与上次输出比较，交给 agent 差异和完整输出；第一次只记录基线"
 
 /** 脚本故障的来源：卡片上的一句话与详情里的标题。 */
-enum FaultSource(val id: String, val short: String, val title: String):
-  case Precheck extends FaultSource("precheck", "前置检查出错", "前置检查出错，未触发")
-  case Stream   extends FaultSource("stream", "流式命令反复退出", "流式命令反复退出")
-
-object FaultSource:
-  def short(f: FaultView): String = values.find(_.id == f.source).fold(s"${f.source} 出错")(_.short)
-  def title(f: FaultView): String = values.find(_.id == f.source).fold(s"${f.source} 出错")(_.title)
+extension (f: FaultSource)
+  def short: String = f match
+    case FaultSource.Precheck => "前置检查出错"
+    case FaultSource.Stream   => "流式命令反复退出"
+  def title: String = f match
+    case FaultSource.Precheck => "前置检查出错，未触发"
+    case FaultSource.Stream   => "流式命令反复退出"
 
 /** 逗号分隔的 secret 名（输入框里的写法）。 */
 object SecretList:
@@ -58,10 +58,10 @@ enum ConfigDraft:
   case Once(at: String)
   case Stream(command: String, debounce: String, secrets: String)
 
-  def kind: Kind = this match
-    case _: Schedule => Kind.Schedule
-    case _: Once     => Kind.Once
-    case _: Stream   => Kind.Stream
+  def kind: TriggerKind = this match
+    case _: Schedule => TriggerKind.Schedule
+    case _: Once     => TriggerKind.Once
+    case _: Stream   => TriggerKind.Stream
 
   /** 不合法时是原因：保存、创建按钮据此禁用，不会提交上一次的合法值。范围等由服务端校验（不合法时报 422）。 */
   def toConfig: Either[String, TriggerConfig] = this match
@@ -80,18 +80,17 @@ enum ConfigDraft:
 
 object ConfigDraft:
   /** 新建时的初始配置：在打开表单、切换方式时才算（一次性的默认时间是那时起一小时后）。 */
-  def empty(kind: Kind, nowMs: Double): ConfigDraft = kind match
-    case Kind.Schedule => Schedule("*/5 * * * *")
-    case Kind.Once     => Once(WallClock.inAnHour(nowMs))
-    case Kind.Stream   => Stream("", "", "")
+  def empty(kind: TriggerKind, nowMs: Double): ConfigDraft = kind match
+    case TriggerKind.Schedule => Schedule("*/5 * * * *")
+    case TriggerKind.Once     => Once(WallClock.inAnHour(nowMs))
+    case TriggerKind.Stream   => Stream("", "", "")
 
-  /** 已有触发器的配置；不认识的种类没有编辑器。 */
-  def of(t: TriggerView): Option[ConfigDraft] = Kind.of(t.kind).map {
-    case Kind.Schedule => Schedule(t.config.cron.getOrElse(""))
-    case Kind.Once     => Once(t.config.at.fold("")(WallClock.of))
-    case Kind.Stream =>
+  /** 已有触发器的配置。 */
+  def of(t: TriggerView): ConfigDraft = t.kind match
+    case TriggerKind.Schedule => Schedule(t.config.cron.getOrElse(""))
+    case TriggerKind.Once     => Once(t.config.at.fold("")(WallClock.of))
+    case TriggerKind.Stream =>
       Stream(t.config.command.getOrElse(""), t.config.debounceSeconds.fold("")(seconds), SecretList.show(t.config.secrets.getOrElse(Nil)))
-  }
 
   /** 5.0 显示成 5。 */
   def seconds(d: Double): String = if d == math.floor(d) && !d.isInfinite then d.toLong.toString else d.toString
@@ -100,13 +99,13 @@ object ConfigDraft:
 final case class PrecheckDraft(on: Boolean, command: String, fireWhen: FireWhen, secrets: String):
   def toSpec: Either[String, Option[PrecheckSpec]] =
     if !on then Right(None)
-    else Either.cond(command.trim.nonEmpty, Some(PrecheckSpec(command, fireWhen.id, SecretList.parse(secrets))), "请填前置检查的命令")
+    else Either.cond(command.trim.nonEmpty, Some(PrecheckSpec(command, fireWhen, SecretList.parse(secrets))), "请填前置检查的命令")
 
 object PrecheckDraft:
   val off: PrecheckDraft = PrecheckDraft(on = false, "", FireWhen.Output, "")
 
   def of(p: Option[PrecheckSpec]): PrecheckDraft =
-    p.fold(off)(s => PrecheckDraft(on = true, s.command, FireWhen.of(s.fireWhen), SecretList.show(s.secrets)))
+    p.fold(off)(s => PrecheckDraft(on = true, s.command, s.fireWhen, SecretList.show(s.secrets)))
 
 /** 新建表单里填的东西。 */
 final case class NewDraft(name: String, agent: Option[AgentId], config: ConfigDraft, precheck: PrecheckDraft, prompt: String):
@@ -117,13 +116,13 @@ final case class NewDraft(name: String, agent: Option[AgentId], config: ConfigDr
       c   <- config.toConfig
       pc  <- precheck.toSpec
       p   <- Either.cond(prompt.trim.nonEmpty, prompt, "请填处理说明")
-    yield NewTrigger(n, a, config.kind.id, c, p, precheck = pc)
+    yield NewTrigger(n, a, config.kind, c, p, precheck = pc)
 
 /** 编辑：与开始编辑时的触发器比，只把改过的字段放进 Patch（没动的字段别人可能改过；前置检查改了还会重置 changed 模式的基线）。 */
 object Edit:
-  def patch(base: TriggerView, prompt: String, config: Option[ConfigDraft], precheck: PrecheckDraft): Either[String, TriggerPatch] =
+  def patch(base: TriggerView, prompt: String, config: ConfigDraft, precheck: PrecheckDraft): Either[String, TriggerPatch] =
     for
-      cfg <- config.fold[Either[String, Option[TriggerConfig]]](Right(None))(_.toConfig.map(Some(_)))
+      cfg <- config.toConfig
       pc  <- precheck.toSpec
     yield
       val configChanged = config != ConfigDraft.of(base)
@@ -133,7 +132,7 @@ object Edit:
         case _                                  => (None, false)
       TriggerPatch(
         prompt = Option.when(prompt != base.prompt)(prompt),
-        config = cfg.filter(_ => configChanged),
+        config = Option.when(configChanged)(cfg),
         precheck = newPrecheck,
         removePrecheck = remove
       )
@@ -152,19 +151,18 @@ object Show:
     t.nextAt.map(fmt).orElse(t.config.at.map(WallClock.show)).getOrElse("—")
 
   /** 卡片上的一行配置摘要，完整内容在详情里。 */
-  def summary(t: TriggerView, fmt: Long => String): String = Kind.of(t.kind) match
-    case Some(Kind.Schedule) =>
+  def summary(t: TriggerView, fmt: Long => String): String = t.kind match
+    case TriggerKind.Schedule =>
       val cron = t.config.cron.getOrElse("")
       t.nextAt.filter(_ => t.enabled).fold(cron)(n => s"$cron · 下次 ${fmt(n)}")
-    case Some(Kind.Once)   => s"计划 ${when(t, fmt)}"
-    case Some(Kind.Stream) => t.config.command.getOrElse("")
-    case None              => t.kind
+    case TriggerKind.Once   => s"计划 ${when(t, fmt)}"
+    case TriggerKind.Stream => t.config.command.getOrElse("")
 
   def planned(t: TriggerView, fmt: Long => String): String = when(t, fmt)
 
   /** 需要人注意的状态：卡片上只给一句话，原因在详情里。 */
   def warning(t: TriggerView): Option[String] =
-    t.faults.headOption.map(FaultSource.short).orElse(Option.when(t.skipped > 0)(s"已连续跳过 ${t.skipped} 次"))
+    t.faults.headOption.map(_.source.short).orElse(Option.when(t.skipped > 0)(s"已连续跳过 ${t.skipped} 次"))
 
   /** 常驻命令的标准错误日志（工作目录里的相对路径，与服务端 Streams.logName 一致）。 */
   def stderrLog(t: TriggerView): String = s"trigger-logs/${t.name.value}.stderr.log"

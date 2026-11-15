@@ -7,6 +7,35 @@ import zio.json.*
 
 // ---- 触发器 ----
 
+/** 触发器的种类。 */
+enum TriggerKind(val label: String) extends Labeled:
+  /** 按 cron 定时 */
+  case Schedule extends TriggerKind("schedule")
+  /** 到点一次 */
+  case Once     extends TriggerKind("once")
+  /** 平台托管一条常驻命令，每行输出一个事件 */
+  case Stream   extends TriggerKind("stream")
+
+object TriggerKind extends Labels[TriggerKind]("触发器种类", TriggerKind.values)
+
+/** 前置检查什么时候触发。 */
+enum FireWhen(val label: String) extends Labeled:
+  /** 有输出就触发，输出作为事件 */
+  case Output  extends FireWhen("output")
+  /** 输出与上一次不同才触发，附 diff（第一次只记基线） */
+  case Changed extends FireWhen("changed")
+
+object FireWhen extends Labels[FireWhen]("fire_when", FireWhen.values)
+
+/** 脚本故障的来源。 */
+enum FaultSource(val label: String) extends Labeled:
+  /** 前置检查出错 */
+  case Precheck extends FaultSource("precheck")
+  /** 常驻命令连续很快退出 */
+  case Stream   extends FaultSource("stream")
+
+object FaultSource extends Labels[FaultSource]("故障来源", FaultSource.values)
+
 /** 触发器的配置：哪些字段有意义由种类定（`kind`）。
   *   - schedule：`cron`（5 段 cron，按服务器时区）
   *   - once：`at`（ISO 8601 时刻，不带时区按服务器时区，须在将来）
@@ -20,11 +49,11 @@ final case class TriggerConfig(
     debounceSeconds: Option[Double] = None
 ) derives JsonCodec, Schema
 
-/** 前置检查。`fireWhen`：output（有输出才触发，输出作为事件）/ changed（输出变了才触发，附 diff）。 */
-final case class PrecheckSpec(command: String, fireWhen: String = "output", secrets: List[String] = Nil) derives JsonCodec, Schema
+/** 前置检查。 */
+final case class PrecheckSpec(command: String, fireWhen: FireWhen = FireWhen.Output, secrets: List[String] = Nil) derives JsonCodec, Schema
 
-/** 脚本故障。`source`：precheck（前置检查）/ stream（常驻命令连续失败）。 */
-final case class FaultView(source: String, error: String, at: Long) derives JsonCodec, Schema
+/** 脚本故障。 */
+final case class FaultView(source: FaultSource, error: String, at: Long) derives JsonCodec, Schema
 
 /** 一个触发器。
   * @param nextAt       下次触发时间（定时、一次性）
@@ -37,7 +66,7 @@ final case class TriggerView(
     name: TriggerName,
     agent: AgentId,
     agentName: String,
-    kind: String,
+    kind: TriggerKind,
     config: TriggerConfig,
     prompt: String,
     enabled: Boolean,
@@ -56,7 +85,7 @@ final case class TriggerView(
 final case class NewTrigger(
     name: String,
     agent: AgentId,
-    kind: String,
+    kind: TriggerKind,
     config: TriggerConfig,
     prompt: String,
     enabled: Boolean = true,
@@ -75,7 +104,7 @@ final case class TriggerPatch(
 /** 立即运行的结果：开出的会话，或没开的原因。 */
 final case class FireResult(session: Option[SessionId], note: String) derives JsonCodec, Schema
 
-final case class TriggerKindView(kind: String, description: String) derives JsonCodec, Schema
+final case class TriggerKindView(kind: TriggerKind, description: String) derives JsonCodec, Schema
 
 object TriggersApi:
   private val triggers = Api.secure.in("triggers")

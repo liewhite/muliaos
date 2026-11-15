@@ -40,7 +40,7 @@ private[sessions] object Prompt:
   private val timeFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mmxxx")
 
   /** 回答交给谁。 */
-  def replyNote(targets: List[ReplyTo], requesters: Map[Long, String]): String =
+  def replyNote(targets: List[ReplyTo], requesters: Map[DelegationId, String]): String =
     val parts = targets.distinct.map {
       case ReplyTo.User          => "用户（回答完会推送通知）"
       case ReplyTo.Delegation(d) => s"委派方（${requesters.getOrElse(d, "另一个会话")}），你的最后一条回答会交回给它"

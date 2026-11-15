@@ -32,26 +32,16 @@ object CronSpec:
       .map(c => CronSpec(t, ExecutionTime.forCron(c)))
 
 /** 触发器的种类。加一种 = 这里加一项、[[Mode]] 加一个变体，编译器会列出要补的地方。 */
-enum Kind(val label: String, val description: String):
-  case Schedule
-      extends Kind(
-        "schedule",
-        "按 cron 定时触发：config {\"cron\": \"<5 段 cron>\"}，按服务器时区解释，如 {\"cron\": \"*/5 * * * *\"}。上一次触发开的会话还没做完（运行中，或在等后台任务、委派、唤醒、用户回答）就跳过这一次，status.skipped 记连续跳过的次数；那个会话在等待时通知用户一次。停机期间错过的只补一次，停用期间的不补。只做一次的事用 once：带日期的 cron 每年都会再触发。"
-      )
-  case Once
-      extends Kind(
-        "once",
-        "到点触发一次然后结束：config {\"at\": \"<ISO 8601 时刻>\"}，如 {\"at\": \"2026-10-22T10:30\"}，不带时区按服务器时区，必须在将来。它开一个新会话；要以后接着当前会话（如正在做的 issue）用 wake_me。结束后不在默认列表里，用 trigger_list(finished=true) 能查到它开的会话。agent 到点时已归档或前置检查失败，会推送告诉用户没做。"
-      )
-  case Stream
-      extends Kind(
-        "stream",
-        "平台托管一条常驻命令，标准输出每行一个事件：config {\"command\": \"<bash 命令>\", \"secrets\": [\"VAULT_KEY\", ...], \"debounce_seconds\": 5}。命令在 agent 的工作目录里跑，secret 作为环境变量注入；退出后按退避（1 秒起翻倍、最长 5 分钟）重启，连续 3 次在 60 秒内退出记为脚本故障；停用、删除或改 config 时结束它，改了它跑的脚本要重启就先停用再启用（status.running_since 为空表示还没起来）。第一行到达后 debounce_seconds 内的行合在一起触发一次；上一次开的会话没做完时事件排队，做完后合并成一次触发。标准错误写进工作目录 trigger-logs/<名字>.stderr.log。排队的事件在服务重启时丢失，所以重连、去重、游标由命令自己负责。"
-      )
+/** 各种类给 agent 的说明（`trigger_kinds`）。加一种种类 = contract 的 [[TriggerKind]] 加一项、[[Mode]] 加一个变体，编译器会列出要补的地方。 */
+object Kinds:
+  def description(k: TriggerKind): String = k match
+    case TriggerKind.Schedule =>
+      "按 cron 定时触发：config {\"cron\": \"<5 段 cron>\"}，按服务器时区解释，如 {\"cron\": \"*/5 * * * *\"}。上一次触发开的会话还没做完（运行中，或在等后台任务、委派、唤醒、用户回答）就跳过这一次，status.skipped 记连续跳过的次数；那个会话在等待时通知用户一次。停机期间错过的只补一次，停用期间的不补。只做一次的事用 once：带日期的 cron 每年都会再触发。"
+    case TriggerKind.Once =>
+      "到点触发一次然后结束：config {\"at\": \"<ISO 8601 时刻>\"}，如 {\"at\": \"2026-10-22T10:30\"}，不带时区按服务器时区，必须在将来。它开一个新会话；要以后接着当前会话（如正在做的 issue）用 wake_me。结束后不在默认列表里，用 trigger_list(finished=true) 能查到它开的会话。agent 到点时已归档或前置检查失败，会推送告诉用户没做。"
+    case TriggerKind.Stream =>
+      "平台托管一条常驻命令，标准输出每行一个事件：config {\"command\": \"<bash 命令>\", \"secrets\": [\"VAULT_KEY\", ...], \"debounce_seconds\": 5}。命令在 agent 的工作目录里跑，secret 作为环境变量注入；退出后按退避（1 秒起翻倍、最长 5 分钟）重启，连续 3 次在 60 秒内退出记为脚本故障；停用、删除或改 config 时结束它，改了它跑的脚本要重启就先停用再启用（status.running_since 为空表示还没起来）。第一行到达后 debounce_seconds 内的行合在一起触发一次；上一次开的会话没做完时事件排队，做完后合并成一次触发。标准错误写进工作目录 trigger-logs/<名字>.stderr.log。排队的事件在服务重启时丢失，所以重连、去重、游标由命令自己负责。"
 
-object Kind:
-  def parse(s: String): Either[String, Kind] =
-    values.find(_.label == s).toRight(s"没有这种触发器：$s（只有 ${values.map(_.label).mkString("、")}）")
 
 /** 怎么触发：每个种类只带自己的配置，都是校验过的值。 */
 enum Mode:
@@ -59,10 +49,10 @@ enum Mode:
   case Once(at: Instant)
   case Stream(command: String, secrets: List[String], debounce: Duration)
 
-  def kind: Kind = this match
-    case _: Schedule => Kind.Schedule
-    case _: Once     => Kind.Once
-    case _: Stream   => Kind.Stream
+  def kind: TriggerKind = this match
+    case _: Schedule => TriggerKind.Schedule
+    case _: Once     => TriggerKind.Once
+    case _: Stream   => TriggerKind.Stream
 
   /** 给界面与工具看的配置（一次性的时刻按 `zone` 写成带偏移的 ISO 8601）。 */
   def config(zone: ZoneId): TriggerConfig = this match
@@ -86,7 +76,7 @@ object Mode:
   val DefaultDebounce: Duration = 5.seconds
 
   /** 按种类解读配置：只认这个种类用得上的字段，多给了别的字段也报错（多半是种类写错了）。 */
-  def parse(kind: Kind, c: TriggerConfig, zone: ZoneId): Either[String, Mode] =
+  def parse(kind: TriggerKind, c: TriggerConfig, zone: ZoneId): Either[String, Mode] =
     def only(allowed: Set[String]): Either[String, Unit] =
       val present = List("cron" -> c.cron, "at" -> c.at, "command" -> c.command, "secrets" -> c.secrets, "debounce_seconds" -> c.debounceSeconds)
         .collect { case (k, Some(_)) => k }
@@ -94,11 +84,11 @@ object Mode:
       Either.cond(extra.isEmpty, (), s"${kind.label} 的 config 不用 ${extra.mkString("、")}（只有 ${allowed.mkString("、")}）")
     def need[A](name: String, v: Option[A]): Either[String, A] = v.toRight(s"${kind.label} 的 config 缺少 $name")
     kind match
-      case Kind.Schedule =>
+      case TriggerKind.Schedule =>
         only(Set("cron")).flatMap(_ => need("cron", c.cron)).flatMap(CronSpec.parse).map(Schedule(_))
-      case Kind.Once =>
+      case TriggerKind.Once =>
         only(Set("at")).flatMap(_ => need("at", c.at)).flatMap(parseTime(_, zone)).map(Once(_))
-      case Kind.Stream =>
+      case TriggerKind.Stream =>
         for
           _       <- only(Set("command", "secrets", "debounce_seconds"))
           command <- need("command", c.command).filterOrElse(_.trim.nonEmpty, "command 不能为空")
@@ -119,38 +109,19 @@ object Mode:
         case e                         => s"时刻不对：$t（${e.getMessage}）"
       }
 
-/** 前置检查什么时候触发。 */
-enum FireWhen(val label: String):
-  /** 有输出就触发，输出作为事件 */
-  case Output extends FireWhen("output")
-  /** 输出与上一次不同才触发，附 diff（第一次只记基线） */
-  case Changed extends FireWhen("changed")
-
-object FireWhen:
-  def parse(s: String): Either[String, FireWhen] =
-    values.find(_.label == s).toRight(s"fire_when 只能是 output 或 changed：$s")
-
 /** 前置检查：触发前先跑的一条命令（有时限），决定触发不触发。 */
 final case class Precheck(command: String, fireWhen: FireWhen, secrets: List[String]):
-  def spec: PrecheckSpec = PrecheckSpec(command, fireWhen.label, secrets)
+  def spec: PrecheckSpec = PrecheckSpec(command, fireWhen, secrets)
 
 object Precheck:
   def parse(p: PrecheckSpec): Either[String, Precheck] =
     for
       command <- Either.cond(p.command.trim.nonEmpty, p.command, "前置检查的 command 不能为空")
-      when    <- FireWhen.parse(p.fireWhen)
-    yield Precheck(command, when, p.secrets.distinct)
+    yield Precheck(command, p.fireWhen, p.secrets.distinct)
 
-/** 脚本故障的来源。同一触发器、同一来源只留最新一条。 */
-enum FaultSource(val label: String):
-  case Precheck extends FaultSource("precheck")
-  case Stream   extends FaultSource("stream")
-
-object FaultSource:
-  def parse(s: String): Option[FaultSource] = values.find(_.label == s)
-
+/** 一条脚本故障。同一触发器、同一来源只留最新一条。 */
 final case class Fault(source: FaultSource, error: String, at: Long):
-  def view: FaultView = FaultView(source.label, error, at)
+  def view: FaultView = FaultView(source, error, at)
 
 /** 一个触发器。
   * @param nextAt       下次到期（定时、一次性；停用时不看它，重新启用时重算）

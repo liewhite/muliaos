@@ -28,10 +28,10 @@ final case class SessionsHttp(sessions: Sessions, files: Files, agents: Agents, 
       .name("sessionLive")
       .description("会话页的实时事件（SSE），事件 data 为 LiveView 的 JSON。")
 
-  private def display: UIO[String => String] =
-    hooks.tools.map(ts => ts.map(t => t.spec.name -> t.spec.display.toString).toMap).map(m => n => m.getOrElse(n, "Plain"))
+  private def display: UIO[String => Display] =
+    hooks.tools.map(ts => ts.map(t => t.spec.name -> t.spec.display).toMap).map(m => n => m.getOrElse(n, Display.Plain))
 
-  private def view(e: LiveEvent, d: String => String): LiveView = e match
+  private def view(e: LiveEvent, d: String => Display): LiveView = e match
     case LiveEvent.Begin      => LiveView("begin")
     case LiveEvent.Part(i, p) => LiveView("part", index = Some(i), part = Some(Timeline.part(p, Map.empty, d)))
     case LiveEvent.Grew(i, g, t) =>
@@ -64,10 +64,10 @@ final case class SessionsHttp(sessions: Sessions, files: Files, agents: Agents, 
     ZIO.when(m.text.isBlank && m.files.isEmpty)(ZIO.fail(AppError.invalid("消息不能为空"))) *>
       sessions.deliver(Address.To(id), Letter(Source.User, m.text, Chunk.fromIterable(m.files), Some(ReplyTo.User))).unit
 
-  private def answer(id: SessionId, entry: Long, call: String, a: AnswerIn): IO[AppError, Unit] =
+  private def answer(id: SessionId, entry: Long, call: CallId, a: AnswerIn): IO[AppError, Unit] =
     (a.answers, a.approved) match
-      case (Some(as), None) => sessions.answer(id, entry, call, Answer.Answers(as))
-      case (None, Some(ok)) => sessions.answer(id, entry, call, Answer.Decision(ok, a.always))
+      case (Some(as), None) => sessions.answer(id, CallKey(entry, call), Answer.Answers(as))
+      case (None, Some(ok)) => sessions.answer(id, CallKey(entry, call), Answer.Decision(ok, a.always))
       case _                => ZIO.fail(AppError.invalid("answers 与 approved 给且只给一个"))
 
   private def compact(id: SessionId): IO[AppError, Unit] =
@@ -81,9 +81,9 @@ final case class SessionsHttp(sessions: Sessions, files: Files, agents: Agents, 
     if inlineTypes(mediaType) then (mediaType, s"inline; filename*=UTF-8''$encoded")
     else ("application/octet-stream", s"attachment; filename*=UTF-8''$encoded")
 
-  private def download(id: String): IO[AppError, (String, String, Array[Byte])] =
+  private def download(id: FileId): IO[AppError, (String, String, Array[Byte])] =
     for
-      u     <- files.find(List(FileId.wrap(id))).map(_.head).mapError(_ => AppError.notFound("没有这个附件"))
+      u     <- files.find(List(id)).map(_.head).mapError(_ => AppError.notFound("没有这个附件"))
       bytes <- files.read(u.sha256)
       (t, d) = disposition(u.mediaType, u.name)
     yield (t, d, bytes.toArray)

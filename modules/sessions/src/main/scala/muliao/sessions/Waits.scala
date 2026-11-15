@@ -9,107 +9,136 @@ import zio.*
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 
+/** 等待的种类（存库）。 */
+enum WaitKind(val label: String) extends Labeled:
+  case Job        extends WaitKind("job")
+  case Wake       extends WaitKind("wake")
+  case Delegation extends WaitKind("delegation")
+
+object WaitKind extends Labels[WaitKind]("等待种类", WaitKind.values)
+
+/** 会话在等的一项异步工作。 */
+enum WaitRef:
+  /** 后台任务（工作区领域开的；状态与取消经 [[JobControl]]） */
+  case Job(id: JobId)
+  /** 约好的唤醒：到 `due` 投一条提醒。一个会话至多一个 */
+  case Wake(due: Long)
+  /** `report_back` 的委派：thread 交回结局时结束 */
+  case Delegation(id: DelegationId)
+
+  def kind: WaitKind = this match
+    case Job(_)        => WaitKind.Job
+    case Wake(_)       => WaitKind.Wake
+    case Delegation(_) => WaitKind.Delegation
+
+/** 一项等待在库里的键（种类 + 引用，全库唯一）。唤醒的引用是会话编号，所以一个会话至多一个。 */
+private[sessions] final case class WaitKey(kind: WaitKind, ref: String)
+
+private[sessions] object WaitKey:
+  def of(session: SessionId, ref: WaitRef): WaitKey = ref match
+    case WaitRef.Job(id)        => job(id)
+    case WaitRef.Wake(_)        => wake(session)
+    case WaitRef.Delegation(id) => delegation(id)
+
+  def job(id: JobId): WaitKey               = WaitKey(WaitKind.Job, id.value.toString)
+  def delegation(id: DelegationId): WaitKey = WaitKey(WaitKind.Delegation, id.value.toString)
+  def wake(session: SessionId): WaitKey     = WaitKey(WaitKind.Wake, session.value)
+
 /** 一项进行中的异步工作（会话因此「等待中」）。 */
-final case class WaitView(id: Long, session: SessionId, kind: String, ref: String, label: String, heartbeat: Option[Int], dueAt: Option[Long], createdAt: Long)
+final case class Wait(id: WaitId, session: SessionId, ref: WaitRef, label: String, heartbeat: Option[Int], createdAt: Long)
 
-/** 异步工作的登记与结局交回：后台任务、带回报的委派、定时唤醒。结局作为事件投回发起会话；可配心跳检查。 */
-private[sessions] trait WaitsPart:
-  this: Engine =>
-  import deps.*
+private[sessions] object Wait:
+  def decode(r: WaitRow): Either[String, Wait] =
+    def id[A](make: Long => Either[String, A]): Either[String, A] = r.ref.toLongOption.toRight(s"引用 ${r.ref} 不是数字").flatMap(make)
+    val ref: Either[String, WaitRef] = r.kind match
+      case WaitKind.Job        => id(JobId.make).map(WaitRef.Job(_))
+      case WaitKind.Delegation => id(DelegationId.make).map(WaitRef.Delegation(_))
+      case WaitKind.Wake       => r.dueAt.toRight("唤醒没有时间").map(WaitRef.Wake(_))
+    ref.map(Wait(r.id, r.sessionId, _, r.label, r.heartbeatSeconds, r.createdAt)).left.map(e => s"等待 ${r.id.value}（${r.kind.label} ${r.ref}）记录坏了：$e")
 
-  /** 调度多久看一次（唤醒到点、心跳到点）。 */
-  val Tick: Duration = 1.second
+  def row(session: SessionId, ref: WaitRef, label: String, heartbeat: Option[Duration], t: Long): WaitRow =
+    val key = WaitKey.of(session, ref)
+    val due = ref match
+      case WaitRef.Wake(d) => Some(d)
+      case _               => None
+    WaitRow(WaitId.wrap(0L), session, key.kind, key.ref, label, heartbeat.map(_.toSeconds.toInt.max(1)), due, t)
 
-  def openWait(session: SessionId, kind: String, ref: String, label: String, heartbeat: Option[Duration], due: Option[Long]): IO[AppError, Long] =
-    now.flatMap(t => db.write(openWaitTx(session, kind, ref, label, heartbeat, due, t)))
+/** 异步工作的登记与结局交回：后台任务、带回报的委派、定时唤醒。结局作为事件投回发起会话。
+  * 进行中的等待在内存里有一份（[[cached]]），供 [[WaitClock]] 每秒看一遍，不必每秒查库。
+  */
+private[sessions] final class Waits(kernel: Kernel, mailbox: Mailbox, doorbell: Doorbell, cache: Ref[Map[WaitId, Wait]]):
+  import kernel.*
 
-  def openWaitTx(session: SessionId, kind: String, ref: String, label: String, heartbeat: Option[Duration], due: Option[Long], t: Long): Tx[Long] =
-    val row = WaitRow(0L, session, kind, ref, label, heartbeat.map(_.toSeconds.toInt.max(1)), due, t)
+  def open(session: SessionId, ref: WaitRef, label: String, heartbeat: Option[Duration]): IO[AppError, WaitId] =
+    now.flatMap(t => db.write(openTx(session, ref, label, heartbeat, t)))
+
+  def openTx(session: SessionId, ref: WaitRef, label: String, heartbeat: Option[Duration], t: Long): Tx[WaitId] =
+    val row = Wait.row(session, ref, label, heartbeat, t)
     for
       _  <- Repo.session(session).someOrFail(AppError.notFound(s"会话 ${session.value} 不存在"))
       id <- Repo.insertWait(row)
-      _  <- afterCommit(waitCache.update(_.updated(id, row.copy(id = id))) *> beats.update(_.updated(id, t)) *> live.publish(session, LiveEvent.Changed))
+      w   = Wait(id, session, ref, label, row.heartbeatSeconds, t)
+      _  <- afterCommit(cache.update(_.updated(id, w)) *> live.publish(session, LiveEvent.Changed))
       _  <- changed
     yield id
 
   /** 结束一项等待；`letter` 给出时作为事件投回发起会话。已结束的返回 false。 */
-  def closeWait(kind: String, ref: String, letter: Option[Letter]): IO[AppError, Boolean] =
-    now.flatMap(t => db.write(closeWaitTx(kind, ref, letter, t))).flatMap {
-      case Some(session) => kick(session).as(true)
+  def close(key: WaitKey, letter: Option[Letter]): IO[AppError, Boolean] =
+    now.flatMap(t => db.write(closeTx(key, letter, t))).flatMap {
+      case Some(session) => doorbell.ring(session).as(true)
       case None          => ZIO.succeed(false)
     }
 
-  /** 在写事务里结束一项等待；返回发起会话（提交后由调用方踢）。 */
-  def closeWaitTx(kind: String, ref: String, letter: Option[Letter], t: Long): Tx[Option[SessionId]] =
-    Repo.waitByRef(kind, ref).flatMap {
+  /** 在写事务里结束一项等待；返回发起会话（提交后由调用方按门铃）。 */
+  def closeTx(key: WaitKey, letter: Option[Letter], t: Long): Tx[Option[SessionId]] =
+    Repo.waitByKey(key.kind, key.ref).flatMap {
       case None => ZIO.none
       case Some(w) =>
         for
           _ <- Repo.deleteWait(w.id)
-          _ <- ZIO.foreachDiscard(letter)(l => deliverTx(Address.To(w.sessionId), l, None, t))
-          _ <- afterCommit(waitCache.update(_ - w.id) *> beats.update(_ - w.id) *> live.publish(w.sessionId, LiveEvent.Changed))
+          _ <- ZIO.foreachDiscard(letter)(l => mailbox.deliverTx(Address.To(w.sessionId), l, None, t))
+          _ <- afterCommit(forget(List(w.id)) *> live.publish(w.sessionId, LiveEvent.Changed))
           _ <- Repo.touch(w.sessionId, t) *> changed
         yield Some(w.sessionId)
     }
 
-  def waitsOf(session: SessionId): IO[AppError, List[WaitView]] =
-    db.read(Repo.waitsOf(session)).map(_.map(w => WaitView(w.id, w.sessionId, w.kind, w.ref, w.label, w.heartbeatSeconds, w.dueAt, w.createdAt)))
-
-  /** 载入全部等待，起调度（到点唤醒、心跳检查）。 */
-  def startWaits: IO[AppError, Unit] =
+  /** 在写事务里删掉一个会话的全部等待（停止时），返回删掉的。提交后由调用方 [[forget]] 并放弃这些工作。 */
+  def dropTx(session: SessionId): Tx[List[Wait]] =
     for
-      all <- db.read(Repo.allWaits)
-      t   <- now
-      _   <- waitCache.set(all.map(w => w.id -> w).toMap)
-      _   <- beats.set(all.map(w => w.id -> t).toMap)
-      _   <- tickLoop.forkIn(scope)
-    yield ()
+      rows <- Repo.waitsOf(session)
+      ws   <- ZIO.foreach(rows)(decodeTx)
+      _    <- ZIO.foreachDiscard(rows)(r => Repo.deleteWait(r.id))
+    yield ws
 
-  private def tickLoop: UIO[Unit] = (tick.catchAllCause(c => ZIO.logErrorCause("等待调度出错", c)) *> ZIO.sleep(Tick)).forever
+  /** 不再调度这些等待（已删掉，或投递失败暂停到重启）。 */
+  def forget(ids: List[WaitId]): UIO[Unit] = cache.update(_ -- ids)
 
-  private def tick: IO[AppError, Unit] =
-    for
-      t  <- now
-      ws <- waitCache.get.map(_.values.toList)
-      bs <- beats.get
-      _ <- ZIO.foreachDiscard(ws.filter(_.dueAt.exists(_ <= t)))(w =>
-             guarded(w)(closeWait(w.kind, w.ref, Some(Letter(Source.Event("wake"), s"[唤醒] ${w.label}"))).unit)
-           )
-      _ <- ZIO.foreachDiscard(ws.filter(w => w.dueAt.isEmpty && w.heartbeatSeconds.exists(h => t - bs.getOrElse(w.id, t) >= h * 1000L)))(w =>
-             beats.update(_.updated(w.id, t)) *> guarded(w)(checkIn(w))
-           )
-    yield ()
+  def forgetSession(session: SessionId): UIO[Unit] = cache.update(_.filterNot(_._2.session == session))
 
-  /** 一项等待投不进（会话没了、agent 停用了）：记错误，这次运行期间不再调度它（库里的记录留着，重启后再试），免得每秒刷日志。 */
-  private def guarded(w: WaitRow)(effect: IO[AppError, Unit]): UIO[Unit] =
-    effect.catchAll(e =>
-      ZIO.logError(s"等待 ${w.id}（${w.kind} ${w.ref}，会话 ${w.sessionId.value}）投递失败，暂停调度到重启：${e.message}") *>
-        waitCache.update(_ - w.id)
-    )
+  def list(session: SessionId): IO[AppError, List[Wait]] = db.read(Repo.waitsOf(session)).flatMap(ZIO.foreach(_)(decodeTx))
 
-  /** 心跳检查：投一条「还在进行」的检查（不推送）；已有检查在排队就不重复投。 */
-  private def checkIn(w: WaitRow): IO[AppError, Unit] =
-    for
-      status <- hooks.workKind(w.kind).flatMap(_.fold(ZIO.succeed("（状态未知）"))(_.status(w.ref)))
-      text = s"[检查] ${w.label}：$status\n还在进行。没有要做的就只回复「…」；不再需要它就停掉（委派用 stop_thread，后台任务用 job_kill）。"
-      _ <- deliver(Address.To(w.sessionId), Letter(Source.Event("check-in"), text, checkIn = true), Some(s"check-in:${w.id}"))
-    yield ()
+  def cached: UIO[List[Wait]] = cache.get.map(_.values.toList)
+
+  /** 从库里载入全部等待（启动时）。 */
+  def load: IO[AppError, List[Wait]] =
+    db.read(Repo.allWaits).flatMap(ZIO.foreach(_)(decodeTx)).tap(all => cache.set(all.map(w => w.id -> w).toMap))
+
+  private def decodeTx(r: WaitRow): IO[AppError, Wait] = ZIO.fromEither(Wait.decode(r)).mapError(AppError.Internal(_))
 
   // ---- 定时唤醒 ----
-
-  val WakeKind = "wake"
 
   private val timeFormat = DateTimeFormatter.ofPattern("MM-dd HH:mm:ss")
 
   /** 约一次唤醒（一个会话至多一个，再约就替换）；`at` 为 None 时取消。返回说明。 */
   def wake(session: SessionId, at: Option[Long], note: String): IO[AppError, String] =
+    val key = WaitKey.wake(session)
     for
-      t <- now
-      old <- db.read(Repo.waitByRef(WakeKind, session.value))
+      t   <- now
+      old <- db.read(Repo.waitByKey(key.kind, key.ref))
       _ <- db.write(
              for
-               _ <- ZIO.foreachDiscard(old)(w => Repo.deleteWait(w.id) *> afterCommit(waitCache.update(_ - w.id)))
-               _ <- ZIO.foreachDiscard(at)(due => openWaitTx(session, WakeKind, session.value, note, None, Some(due), t))
+               _ <- ZIO.foreachDiscard(old)(w => Repo.deleteWait(w.id) *> afterCommit(forget(List(w.id))))
+               _ <- ZIO.foreachDiscard(at)(due => openTx(session, WaitRef.Wake(due), note, None, t))
                _ <- changed
              yield ()
            )
@@ -120,14 +149,13 @@ private[sessions] trait WaitsPart:
         s"已约好 $when 唤醒${if old.isDefined then "（替换了之前约的）" else ""}。到时提醒会作为事件投到这里。"
       case None => if old.isDefined then "已取消唤醒。" else "本来就没有约唤醒。"
 
-  /** 本领域自己的异步工作种类：唤醒、委派。 */
-  def registerKinds: UIO[Unit] =
-    hooks.addWorkKind(new WorkKind:
-      val kind = WakeKind
-      def status(ref: String): UIO[String] = ZIO.succeed("等到点唤醒")
-      def cancel(ref: String): UIO[Unit]   = ZIO.unit
-    ) *> hooks.addWorkKind(new WorkKind:
-      val kind = DelegationKind
-      def status(ref: String): UIO[String] = delegationStatus(ref.toLong).catchAll(e => ZIO.succeed(s"（查不到：${e.message}）"))
-      def cancel(ref: String): UIO[Unit]   = cancelDelegation(ref.toLong).catchAll(e => ZIO.logWarning(s"放弃委派 $ref 失败：${e.message}"))
+private[sessions] object Waits:
+  val layer: URLayer[Kernel & Mailbox & Doorbell, Waits] =
+    ZLayer(
+      for
+        k     <- ZIO.service[Kernel]
+        m     <- ZIO.service[Mailbox]
+        d     <- ZIO.service[Doorbell]
+        cache <- Ref.make(Map.empty[WaitId, Wait])
+      yield Waits(k, m, d, cache)
     )

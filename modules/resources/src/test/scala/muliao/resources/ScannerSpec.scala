@@ -1,7 +1,7 @@
 package muliao.resources
 
+import muliao.contract.{Thinking, AssetKind}
 import muliao.contract.AgentName
-import muliao.resources.access.Kind
 import muliao.resources.tree.*
 import zio.*
 import zio.test.*
@@ -101,7 +101,7 @@ object ScannerSpec extends ZIOSpecDefault:
         s.secret("K").isEmpty,
         s.problems.exists(p => p.path == root.resolve("alice/skills/shared/SKILL.md") && p.reason.contains("平台已有")),
         s.problems.count(_.reason.contains("都不加载")) == 4,
-        s.occupied(Kind.Skill -> "dup").toSet == Set(Owner.Agent(AgentName.wrap("alice")), Owner.Agent(AgentName.wrap("bob")))
+        s.occupied(AssetKind.Skill -> "dup").toSet == Set(Owner.Agent(AgentName.wrap("alice")), Owner.Agent(AgentName.wrap("bob")))
       )
     },
     test("指纹：内容、增删、隐藏文件之外的任何变化都会变；隐藏文件不影响") {

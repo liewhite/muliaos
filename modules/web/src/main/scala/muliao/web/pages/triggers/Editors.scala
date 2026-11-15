@@ -1,6 +1,7 @@
 package muliao.web.pages.triggers
 
 import com.raquo.laminar.api.L.*
+import muliao.contract.FireWhen
 import muliao.web.ui.*
 
 /** 配置与前置检查的编辑器：各输入框自己的 Var 只在挂上时从草稿初始化，之后把编辑中的内容写回草稿（草稿可能不合法，由提交方校验）。 */
@@ -79,7 +80,7 @@ object Editors:
               "触发条件",
               fireWhen.signal.map(Some(_)),
               fireWhen.set,
-              Val(FireWhen.values.toList.map(f => Opt(f, f.label, Some(f.description))))
+              Val(FireWhen.values.toList.map(f => Opt(f, f.title, Some(f.description))))
             ),
             Fields.text("secret（可选）", secrets, hint = Some("vault 里的 key，逗号分隔，作为同名环境变量传给命令"), mono = true)
           )

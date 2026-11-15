@@ -1,6 +1,6 @@
 package muliao.migrate
 
-import muliao.contract.{AgentId, SessionId}
+import muliao.contract.{AgentId, AgentName, CallId, CallState, FileId, IssueId, OriginKind, RunState, SessionId}
 import muliao.sessions.*
 import muliao.sessions.store.{EntryRow, SessionRow}
 import zio.Chunk
@@ -36,9 +36,9 @@ object MigrateSpec extends ZIOSpecDefault:
   def spec = suite("迁移")(
     test("会话来源：issue 会话、来信按标记换成新版来源") {
       assertTrue(
-        origin.row == SessionRow(SessionId.wrap("s1"), AgentId.wrap("a1"), "issue", Some("7"), None, "#7 修 bug", "[]", 1000L, 2000L),
-        origin.sources.of("issue") == Source.Issue(7),
-        origin.sources.default == Source.Issue(7)
+        origin.row == SessionRow(SessionId.wrap("s1"), AgentId.wrap("a1"), OriginKind.Issue, Some("7"), None, "#7 修 bug", "[]", 1000L, 2000L),
+        origin.sources.of("issue") == Source.Issue(IssueId.wrap(7)),
+        origin.sources.default == Source.Issue(IssueId.wrap(7))
       )
     },
     test("已删触发器的会话按标题取名字；委派会话挂在发起会话下") {
@@ -46,10 +46,10 @@ object MigrateSpec extends ZIOSpecDefault:
       val d = Transcript.origin(session.copy(origin = "delegation", originRef = None, parent = Some("p"), thread = Some("review")), Map.empty, Map("p" -> "boss"))
       assertTrue(
         t.row.originRef.contains("selfcheck-1"),
-        d.row.origin == "thread",
+        d.row.origin == OriginKind.Thread,
         d.row.originRef.contains("review"),
         d.row.parentId.contains(SessionId.wrap("p")),
-        d.sources.default == Source.Delegation("p", "boss")
+        d.sources.default == Source.Delegation(SessionId.wrap("p"), AgentName.wrap("boss"))
       )
     },
     test("上下文、来信（带附件、事件）、回复与调用结果、失败运行的提示；每个调用都有结果") {
@@ -57,24 +57,24 @@ object MigrateSpec extends ZIOSpecDefault:
       val ms   = List(msg(1, 1, request), msg(2, 1, assistantWithCall), msg(3, 1, results))
       val c    = Transcript.convert(origin, runs, ms, Nil, files, 100)
       val bs   = bodies(c.entries)
-      val call1 = c.calls.find(_.callId == "c1").get
-      val call2 = c.calls.find(_.callId == "c2").get
+      val call1 = c.calls.find(_.callId == CallId.wrap("c1")).get
+      val call2 = c.calls.find(_.callId == CallId.wrap("c2")).get
       assertTrue(
         c.entries.map(_.id) == List(100L, 101, 102, 103, 104, 105),
         bs(0) == EntryBody.Context("[Current local time]"),
-        bs(1) == EntryBody.Mail(Letter(Source.Issue(7), "看下 #7", Chunk("f1"))),
-        bs(2) == EntryBody.Mail(Letter(Source.Event("job"), "<event>job 结束", checkIn = true)),
+        bs(1) == EntryBody.Mail(Letter(Source.Issue(IssueId.wrap(7)), "看下 #7", Chunk(FileId.wrap("f1")))),
+        bs(2) == EntryBody.Mail(Letter(Source.Event(EventKind.Job), "<event>job 结束", checkIn = true)),
         bs(3).isInstanceOf[EntryBody.Reply],
         bs(4) == EntryBody.Notice(NoticeKind.Failed, "模型挂了"),
         bs(5) == EntryBody.Notice(NoticeKind.Stopped, Transcript.unfinishedRun),
-        c.runs.map(_.state) == List("failed", "stopped"),
+        c.runs.map(_.state) == List(RunState.Failed, RunState.Stopped),
         c.runs.forall(_.finishedAt.isDefined),
         call1.result.flatMap(_.fromJson[CallResult].toOption).contains(
           CallResult(Chunk(StoredPart.Text("ok"), StoredPart.Image("image/png", "ab" * 32)), isError = false)
         ),
         call1.finishedAt.contains(Old.millis("2026-11-14T10:56:08.690143Z")),
         call2.result.flatMap(_.fromJson[CallResult].toOption).contains(CallResult.error(Transcript.missingResult)),
-        c.calls.forall(_.state == CallState.Done.label),
+        c.calls.forall(_.state == CallState.Done),
         c.callEntry == Map("c1" -> 103L, "c2" -> 103L),
         c.stats.missingResults == 1L
       )
@@ -98,10 +98,10 @@ object MigrateSpec extends ZIOSpecDefault:
       val ms   = List(msg(1, 1, text), msg(2, 1, text), msg(3, 1, text))
       val c    = Transcript.convert(origin, runs, ms, List(Old.Compaction(1, "s1", through = 1, at = 2, "摘要", 5)), files, 10)
       assertTrue(bodies(c.entries) == List(
-        EntryBody.Mail(Letter(Source.Issue(7), "hi")),
-        EntryBody.Mail(Letter(Source.Issue(7), "hi")),
+        EntryBody.Mail(Letter(Source.Issue(IssueId.wrap(7)), "hi")),
+        EntryBody.Mail(Letter(Source.Issue(IssueId.wrap(7)), "hi")),
         EntryBody.Compaction("摘要", 11),
-        EntryBody.Mail(Letter(Source.Issue(7), "hi"))
+        EntryBody.Mail(Letter(Source.Issue(IssueId.wrap(7)), "hi"))
       ))
     },
     test("看板动态：早期状态与指派写法") {

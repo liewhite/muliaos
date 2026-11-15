@@ -31,15 +31,15 @@ final case class ResourcesHttp(
 
   private def summary(a: AgentRecord, snap: Snapshot): AgentSummary =
     val p = snap.profiles.get(a.name)
-    AgentSummary(a.id, a.name, p.map(_.description), p.flatMap(_.group), p.map(_.model), a.state.label, a.isDefault)
+    AgentSummary(a.id, a.name, p.map(_.description), p.flatMap(_.group), p.map(_.model), a.state, a.isDefault)
 
-  private def grantView(item: String, kind: String, name: String, owner: Option[Owner], use: Grant, write: Option[Grant]) =
+  private def grantView(item: String, kind: AssetKind, name: String, owner: Option[Owner], use: Grant, write: Option[Grant]) =
     GrantView(item, kind, name, owner.map(_.label), use.label, write.map(_.label))
 
-  private def toolViews(e: Effective) = e.tools.map(t => grantView(t.name, Kind.Tool.label, t.name, None, t.by, None))
+  private def toolViews(e: Effective) = e.tools.map(t => grantView(t.name, AssetKind.Tool, t.name, None, t.by, None))
 
   private def assetViews(e: Effective) =
-    e.assets.map(g => grantView(s"${g.kind.label}:${g.name}", g.kind.label, g.name, Some(g.owner), g.use, g.write))
+    e.assets.map(g => grantView(s"${g.kind.label}:${g.name}", g.kind, g.name, Some(g.owner), g.use, g.write))
 
   private def problemView(p: Problem) = ProblemView(rel(p.path), p.reason, p.owner.map(_.label))
 
@@ -57,7 +57,7 @@ final case class ResourcesHttp(
                 )
     yield AgentDetail(
       summary = summary(a, snap),
-      thinking = snap.profiles.get(a.name).map(_.thinking.label),
+      thinking = snap.profiles.get(a.name).map(_.thinking),
       roles = grants.roles.map(_.value),
       allow = grants.allow.map(_.text),
       deny = grants.deny.map(_.text),
@@ -71,11 +71,6 @@ final case class ResourcesHttp(
       accessBroken = access.broken
     )
 
-  private def thinking(s: Option[String]): IO[AppError, Option[Thinking]] =
-    ZIO.foreach(s)(t =>
-      ZIO.fromOption(Thinking.parse(t)).orElseFail(AppError.invalid(s"思考档位只能是 ${Thinking.values.map(_.label).mkString(" / ")}"))
-    )
-
   // ---- agent ----
 
   private def listAgents: IO[AppError, List[AgentSummary]] =
@@ -86,23 +81,21 @@ final case class ResourcesHttp(
 
   private def createAgent(req: AgentCreate): IO[AppError, AgentDetail] =
     for
-      th <- thinking(req.thinking)
       a <- agents.create(
-             NewAgent(req.name, req.description, req.model, th.getOrElse(Thinking.Default), req.group, req.roles.map(RoleName.wrap), req.allow, req.deny)
+             NewAgent(req.name, req.description, req.model, req.thinking.getOrElse(Thinking.Default), req.group, req.roles.map(RoleName.wrap), req.allow, req.deny)
            )
       d <- detail(a.id)
     yield d
 
   private def updateAgent(id: AgentId, req: AgentUpdate): IO[AppError, AgentDetail] =
     for
-      th <- thinking(req.thinking)
       _ <- agents.update(
              id,
              AgentPatch(
                name = req.name,
                description = req.description,
                model = req.model,
-               thinking = th,
+               thinking = req.thinking,
                group = req.group.map(g => Option(g.trim).filter(_.nonEmpty)),
                roles = req.roles.map(_.map(RoleName.wrap)),
                allow = req.allow,
@@ -171,7 +164,7 @@ final case class ResourcesHttp(
         Rule.parse(t) match
           case Left(e) => RuleCheck(t, Some(e), Nil)
           case Right(r) =>
-            val tools = catalog.tools.map(_.name).filter(n => r.selects(Action.Use, Kind.Tool, n))
+            val tools = catalog.tools.map(_.name).filter(n => r.selects(Action.Use, AssetKind.Tool, n))
             val named = snap.named.collect {
               case (k, n, _) if Action.values.exists(a => r.selects(a, k, n)) => s"${k.label}:$n"
             }
@@ -189,7 +182,7 @@ final case class ResourcesHttp(
       as     <- agents.list
       perms   = as.map(a => a -> Permissions.of(a.id, a.name, access.config))
     yield
-      def usedBy(k: Kind, n: String, o: Owner): List[AgentName] =
+      def usedBy(k: AssetKind, n: String, o: Owner): List[AgentName] =
         perms.collect {
           case (a, p) if (p.decide(Action.Use, k, n, o) match
                 case Decision.Allowed(Grant.ByRule(_, _)) | Decision.Allowed(Grant.Ownership) | Decision.Allowed(Grant.GlobalMemory) => true
@@ -198,19 +191,19 @@ final case class ResourcesHttp(
         }
       val memories = snap.memories.map {
         case MemoryDoc(MemoryScope.Shared(n), f, _) =>
-          AssetItem(Kind.Memory.label, n, Owner.PlatformDir, rel(f), usedBy(Kind.Memory, n, Owner.Platform), None, None, None)
+          AssetItem(AssetItemKind.Memory, n, Owner.PlatformDir, rel(f), usedBy(AssetKind.Memory, n, Owner.Platform), None, None, None)
         case MemoryDoc(MemoryScope.Private(a), f, _) =>
-          AssetItem(Kind.Memory.label, a.value, a.value, rel(f), List(a), Some("私有记忆"), None, None)
+          AssetItem(AssetItemKind.Memory, a.value, a.value, rel(f), List(a), Some("私有记忆"), None, None)
       }
-      val skills = snap.skills.map(s => AssetItem(Kind.Skill.label, s.name, s.owner.label, rel(s.main), usedBy(Kind.Skill, s.name, s.owner), Some(s.description), None, None))
-      val mcps = snap.mcps.map(m => AssetItem(Kind.Mcp.label, m.name, m.owner.label, rel(m.file), usedBy(Kind.Mcp, m.name, m.owner), None, Some(m.config.enabled), None))
+      val skills = snap.skills.map(s => AssetItem(AssetItemKind.Skill, s.name, s.owner.label, rel(s.main), usedBy(AssetKind.Skill, s.name, s.owner), Some(s.description), None, None))
+      val mcps = snap.mcps.map(m => AssetItem(AssetItemKind.Mcp, m.name, m.owner.label, rel(m.file), usedBy(AssetKind.Mcp, m.name, m.owner), None, Some(m.config.enabled), None))
       val secrets = snap.secrets.map(s =>
-        AssetItem(Kind.Secret.label, s.key, s.owner.label, rel(s.file), usedBy(Kind.Secret, s.key, s.owner), Some(s.content.description), None, Some(s.content.allowShell))
+        AssetItem(AssetItemKind.Secret, s.key, s.owner.label, rel(s.file), usedBy(AssetKind.Secret, s.key, s.owner), Some(s.content.description), None, Some(s.content.allowShell))
       )
       val agentFiles = as.filter(a => snap.profiles.contains(a.name)).map(a =>
-        AssetItem("agent", a.name.value, a.name.value, s"${a.name.value}/agent.toml", List(a.name), snap.profiles.get(a.name).map(_.description), None, None)
+        AssetItem(AssetItemKind.Agent, a.name.value, a.name.value, s"${a.name.value}/agent.toml", List(a.name), snap.profiles.get(a.name).map(_.description), None, None)
       )
-      val accessFile = AssetItem("access", "access.toml", Owner.PlatformDir, "platform/access.toml", Nil, Some("角色与各 agent 的权限"), None, None)
+      val accessFile = AssetItem(AssetItemKind.Access, "access.toml", Owner.PlatformDir, "platform/access.toml", Nil, Some("角色与各 agent 的权限"), None, None)
       AssetIndex(paths.assets.toString, accessFile :: memories ++ skills ++ mcps ++ secrets ++ agentFiles, snap.problems.map(problemView), access.broken)
 
   /** 界面传来的相对路径：不能走出资源目录，不能碰隐藏文件。 */
@@ -267,35 +260,37 @@ final case class ResourcesHttp(
                yield ()
     yield ()
 
-  private def locate(kind: String, name: String): IO[AppError, (Kind, Path, Owner)] =
+  /** 找到的一项资源：它的文件（skill 是目录）与归谁。 */
+  private final case class Found(path: Path, owner: Owner)
+
+  private def locate(kind: AssetKind, name: String): IO[AppError, Found] =
     store.snapshot.flatMap { snap =>
-      Kind.parse(kind) match
-        case Some(Kind.Skill)  => ZIO.fromOption(snap.skill(name).map(s => (Kind.Skill, s.dir, s.owner))).orElseFail(AppError.notFound(s"没有已加载的 skill $name"))
-        case Some(Kind.Mcp)    => ZIO.fromOption(snap.mcp(name).map(m => (Kind.Mcp, m.file, m.owner))).orElseFail(AppError.notFound(s"没有已加载的 MCP $name"))
-        case Some(Kind.Secret) => ZIO.fromOption(snap.secret(name).map(s => (Kind.Secret, s.file, s.owner))).orElseFail(AppError.notFound(s"没有已加载的 secret $name"))
-        case Some(Kind.Memory) =>
+      def found[A](a: Option[A], what: String)(f: A => Found) = ZIO.fromOption(a.map(f)).orElseFail(AppError.notFound(s"没有已加载的 $what $name"))
+      kind match
+        case AssetKind.Skill  => found(snap.skill(name), "skill")(s => Found(s.dir, s.owner))
+        case AssetKind.Mcp    => found(snap.mcp(name), "MCP")(m => Found(m.file, m.owner))
+        case AssetKind.Secret => found(snap.secret(name), "secret")(s => Found(s.file, s.owner))
+        case AssetKind.Memory =>
           if name == MemoryDoc.GlobalName then ZIO.fail(AppError.invalid("全局记忆总是存在，不能删或转移"))
-          else ZIO.fromOption(snap.sharedMemory(name).map(m => (Kind.Memory, m.file, Owner.Platform))).orElseFail(AppError.notFound(s"没有共享记忆 $name"))
-        case _ => ZIO.fail(AppError.invalid(s"种类只能是 skill、mcp、secret、memory"))
+          else found(snap.sharedMemory(name), "共享记忆")(m => Found(m.file, Owner.Platform))
+        case AssetKind.Tool => ZIO.fail(AppError.invalid("工具不是资源文件，种类只能是 skill、mcp、secret、memory"))
     }
 
-  private def transfer(kind: String, name: String, req: AssetTransfer): IO[AppError, Unit] =
+  private def transfer(kind: AssetKind, name: String, req: AssetTransfer): IO[AppError, Unit] =
     for
-      (k, from, owner) <- locate(kind, name)
-      _  <- ZIO.when(k == Kind.Memory)(ZIO.fail(AppError.invalid("共享记忆只能归平台；私有记忆跟着 agent")))
+      at <- locate(kind, name)
       to <- ownerOf(req.to)
-      _ <- ZIO.unless(to == owner) {
-             val dir = paths.assets.resolve(to.label)
-             val target = k match
-               case Kind.Skill  => dir.resolve("skills").resolve(name)
-               case Kind.Mcp    => dir.resolve("mcp").resolve(s"$name.json")
-               case _           => dir.resolve("secrets").resolve(s"$name.toml")
-             store.move(from, target)
-           }
+      dir = paths.assets.resolve(to.label)
+      target <- kind match
+                  case AssetKind.Skill                   => ZIO.succeed(dir.resolve("skills").resolve(name))
+                  case AssetKind.Mcp                     => ZIO.succeed(dir.resolve("mcp").resolve(s"$name.json"))
+                  case AssetKind.Secret                  => ZIO.succeed(dir.resolve("secrets").resolve(s"$name.toml"))
+                  case AssetKind.Memory | AssetKind.Tool => ZIO.fail(AppError.invalid("共享记忆只能归平台；私有记忆跟着 agent"))
+      _ <- store.move(at.path, target).unless(to == at.owner)
     yield ()
 
-  private def deleteAsset(kind: String, name: String): IO[AppError, Unit] =
-    locate(kind, name).flatMap((_, p, _) => store.delete(p))
+  private def deleteAsset(kind: AssetKind, name: String): IO[AppError, Unit] =
+    locate(kind, name).flatMap(at => store.delete(at.path))
 
   def endpoints(auth: Auth): List[ApiEndpoint] =
     List(
@@ -305,7 +300,7 @@ final case class ResourcesHttp(
       ResourcesApi.updateAgent.secured(auth)(_ => (id, req) => updateAgent(id, req)),
       ResourcesApi.deleteAgent.secured(auth)(_ => agents.delete),
       ResourcesApi.previewAgent.secured(auth)(_ => preview),
-      ResourcesApi.agentDefaults.secured(auth)(_ => _ => ZIO.succeed(AgentDefaults(models.defaultModel, Thinking.values.map(_.label).toList))),
+      ResourcesApi.agentDefaults.secured(auth)(_ => _ => ZIO.succeed(AgentDefaults(models.defaultModel, Thinking.values.toList))),
       ResourcesApi.listRoles.secured(auth)(_ => _ => listRoles),
       ResourcesApi.putRole.secured(auth)(_ => (n, r) => putRole(n, r)),
       ResourcesApi.deleteRole.secured(auth)(_ => deleteRole),

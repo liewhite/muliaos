@@ -164,9 +164,9 @@ object NotificationsSpec extends ZIOSpecDefault:
           s      <- ZIO.service[Sessions]
           user   <- userSession(alice, "你好")
           _      <- idle(user)
-          trig   <- s.deliver(Address.Fresh(alice, Origin.Trigger(TriggerName.wrap("daily")), "日报"), Letter(Source.Trigger("daily"), "跑一下")).map(_.get.session)
+          trig   <- s.deliver(Address.Fresh(alice, Origin.Trigger(TriggerName.wrap("daily")), "日报"), Letter(Source.Trigger(TriggerName.wrap("daily")), "跑一下")).map(_.get.session)
           _      <- idle(trig)
-          appr   <- s.deliver(Address.Fresh(alice, Origin.Trigger(TriggerName.wrap("deploy")), "部署"), Letter(Source.Trigger("deploy"), "要批准")).map(_.get.session)
+          appr   <- s.deliver(Address.Fresh(alice, Origin.Trigger(TriggerName.wrap("deploy")), "部署"), Letter(Source.Trigger(TriggerName.wrap("deploy")), "要批准")).map(_.get.session)
           _      <- eventually("等批准")(stateOf(appr))(_ == WorkState.Waiting)
           remind <- userSession(alice, "提醒我")
           _      <- eventually("提醒完")(timeline(remind))(_.exists(_.parts.exists(_.text.contains("提醒好了"))))

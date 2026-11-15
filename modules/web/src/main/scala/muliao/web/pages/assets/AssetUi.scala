@@ -53,7 +53,7 @@ object AssetUi:
     )
 
   /** 能转移归属的种类。 */
-  def transferable(kind: String): Boolean = Set("skill", "mcp", "secret")(kind)
+  def transferable(kind: AssetItemKind): Boolean = kind.asset.exists(k => k == AssetKind.Skill || k == AssetKind.Mcp || k == AssetKind.Secret)
 
   /** 资源归谁、被谁用；能转的可以转移归属（挪文件，内容不变）。 */
   def access(item: Signal[AssetItem], agents: Signal[List[AgentSummary]]): HtmlElement =
@@ -97,7 +97,7 @@ object AssetUi:
         submit("转移", act.busy.signal, target.signal.combineWith(item).map((t, i) => t.exists(_ != i.owner)), size = Size.Sm)(
           onClick --> { _ =>
             for i <- now.now(); to <- target.now() do
-              act.run(Http.call(ResourcesApi.transferAsset)((i.kind, i.name, AssetTransfer(to)))).foreach(ok => if ok then done())(using Http.ec)
+              i.kind.asset.foreach(k => act.run(Http.call(ResourcesApi.transferAsset)((k, i.name, AssetTransfer(to)))).foreach(ok => if ok then done())(using Http.ec))
           }
         )
       ),

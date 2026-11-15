@@ -2,16 +2,21 @@ package muliao.sessions
 
 import muliao.contract.*
 import muliao.platform.{AppError, Retry}
+import muliao.platform.db.Tx
 import muliao.sessions.store.*
 import muliao.toolkit.*
 import zio.*
 import zio.json.*
 import zio.json.ast.Json
 
+/** 把一个调用标成做完并写结果。 */
+private[sessions] object CallTx:
+  def finish(c: Call, r: CallResult, t: Long): Tx[Unit] =
+    Repo.setCall(c.entryId, c.callId, CallState.Done, c.pause.map(_.toJson), Some(r.toJson), c.startedAt, Some(t))
+
 /** 执行一条回复里的工具调用：`Ordered` 的工具与其他调用保持先后顺序，相邻的 `Concurrent` 调用并发执行；每个调用开始与结束都落库。 */
-private[sessions] trait CallsPart:
-  this: Engine =>
-  import deps.*
+private[sessions] final case class CallRunner(kernel: Kernel, files: Files, delegations: Delegations):
+  import kernel.*
 
   /** 一个调用的结局。 */
   private enum Fate:
@@ -42,18 +47,18 @@ private[sessions] trait CallsPart:
 
   /** 前面的调用出了系统错误：后面的不执行。 */
   private def skipRest(id: SessionId, cs: List[Call]): IO[AppError, Unit] =
-    now.flatMap(t => db.write(ZIO.foreachDiscard(cs)(c => setResult(c, CallResult.error("[没有执行：同一回复里前面的调用出了系统错误。]"), t)) *> changed)).unit
+    now.flatMap(t => db.write(ZIO.foreachDiscard(cs)(c => CallTx.finish(c, CallResult.error("[没有执行：同一回复里前面的调用出了系统错误。]"), t)) *> changed)).unit
 
   /** 执行一个调用；系统性失败时返回原因。 */
   private def one(kit: Kit, run: RunId, c: Call, rejects: Ref[Map[String, Int]], slot: Slot): IO[AppError, Option[String]] =
     val id = kit.info.id
     for
       t0 <- now
-      _  <- db.write(Repo.setCall(c.entryId, c.callId, CallState.Running.label, c.pause.map(_.toJson), None, Some(t0), None) *> changed)
+      _  <- db.write(Repo.setCall(c.entryId, c.callId, CallState.Running, c.pause.map(_.toJson), None, Some(t0), None) *> changed)
       _  <- live.publish(id, LiveEvent.Changed)
       waiting <- info(id).map(_.userWaiting) // 运行中用户可能插话，按调用时的算
-      ctx = RunContext(kit.info.agent, kit.res.agent.name, id, run, CallId.wrap(c.callId), kit.info.origin, kit.workspace, kit.res, waiting)
-      args    <- slot.secrets.get.map(_.getOrElse((c.entryId, c.callId), c.args))
+      ctx = RunContext(kit.info.agent, kit.res.agent.name, id, run, c.callId, kit.info.origin, kit.workspace, kit.res, waiting)
+      args    <- slot.secrets.get.map(_.getOrElse(CallKey(c.entryId, c.callId), c.args))
       outcome <- invoke(kit, c.copy(args = args), ctx)
       fate    <- toFate(kit, c, outcome, rejects)
       t1 <- now
@@ -70,7 +75,7 @@ private[sessions] trait CallsPart:
           case Some(Pause.Approval(handler, _, payload)) =>
             hooks.approval(handler).flatMap {
               case Some(h) => h.approved(payload, c.state == CallState.ApprovedAlways, ctx)
-              case None    => ZIO.fail(ToolFailure.Aborted(s"批准后的执行者 $handler 没有登记"))
+              case None    => ZIO.fail(ToolFailure.Aborted(s"批准后的执行者 ${handler.value} 没有登记"))
             }
           case _ => ZIO.fail(ToolFailure.Aborted("批准了的调用没有记下要执行什么"))
       case _ =>
@@ -130,14 +135,14 @@ private[sessions] trait CallsPart:
   private def save(kit: Kit, c: Call, fate: Fate, t0: Long, t1: Long): IO[AppError, Unit] =
     val i = kit.info
     fate match
-      case Fate.Result(r)   => db.write(Repo.setCall(c.entryId, c.callId, CallState.Done.label, c.pause.map(_.toJson), Some(r.toJson), Some(t0), Some(t1)) *> changed)
-      case Fate.Abort(r, _) => db.write(Repo.setCall(c.entryId, c.callId, CallState.Done.label, c.pause.map(_.toJson), Some(r.toJson), Some(t0), Some(t1)) *> changed)
+      case Fate.Result(r)   => db.write(CallTx.finish(c.copy(startedAt = Some(t0)), r, t1) *> changed)
+      case Fate.Abort(r, _) => db.write(CallTx.finish(c.copy(startedAt = Some(t0)), r, t1) *> changed)
       case Fate.Wait(p) =>
         db.write(
           for
-            _ <- Repo.setCall(c.entryId, c.callId, CallState.Suspended.label, Some((p: Pause).toJson), None, Some(t0), None)
+            _ <- Repo.setCall(c.entryId, c.callId, CallState.Suspended, Some((p: Pause).toJson), None, Some(t0), None)
             _ <- p match
-                   case Pause.AwaitThread(d, _, _) => linkDelegation(d, c.entryId, c.callId, t1)
+                   case Pause.AwaitThread(d, _, _) => delegations.linkTx(d, CallKey(c.entryId, c.callId), t1)
                    case _                          => ZIO.unit
             _ <- changed
           yield ()
@@ -149,3 +154,6 @@ private[sessions] trait CallsPart:
               hooks.emit(SessionEvent.NeedsUser(i.id, i.agent, UserNeed.Approval(summary), waiting))
             case _: Pause.AwaitThread => ZIO.unit
         }
+
+private[sessions] object CallRunner:
+  val layer: URLayer[Kernel & Files & Delegations, CallRunner] = ZLayer.derive[CallRunner]

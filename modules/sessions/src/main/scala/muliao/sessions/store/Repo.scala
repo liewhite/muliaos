@@ -1,17 +1,17 @@
 package muliao.sessions.store
 
 import io.getquill.*
-import muliao.contract.{AgentId, RunId, SessionId}
+import muliao.contract.*
 import muliao.platform.db.*
 import muliao.platform.db.Sql.*
-import muliao.sessions.FileId
+import muliao.sessions.{DelegationId, EntryKind, TrackedMode, WaitId, WaitKind}
 
 // ---- 行 ----
 
 final case class SessionRow(
     id: SessionId,
     agentId: AgentId,
-    origin: String,
+    origin: OriginKind,
     originRef: Option[String],
     parentId: Option[SessionId],
     title: String,
@@ -25,7 +25,7 @@ final case class InboxRow(id: Long, sessionId: SessionId, letter: String, dedupe
 final case class RunRow(
     id: RunId,
     sessionId: SessionId,
-    state: String,
+    state: RunState,
     error: Option[String],
     retryAt: Option[Long],
     retryNote: Option[String],
@@ -37,7 +37,7 @@ final case class EntryRow(
     id: Long,
     sessionId: SessionId,
     runId: Option[RunId],
-    kind: String,
+    kind: EntryKind,
     body: String,
     search: String,
     startedAt: Long,
@@ -46,22 +46,23 @@ final case class EntryRow(
 
 final case class ToolCallRow(
     entryId: Long,
-    callId: String,
+    callId: CallId,
     sessionId: SessionId,
     seq: Int,
     name: String,
     args: String,
-    state: String,
+    state: CallState,
     pause: Option[String],
     result: Option[String],
     startedAt: Option[Long],
     finishedAt: Option[Long]
 )
 
+/** `kind` 与 `ref` 合起来是 [[muliao.sessions.WaitRef]]（见 `WaitRef.key` / `WaitRef.of`）。 */
 final case class WaitRow(
-    id: Long,
+    id: WaitId,
     sessionId: SessionId,
-    kind: String,
+    kind: WaitKind,
     ref: String,
     label: String,
     heartbeatSeconds: Option[Int],
@@ -70,12 +71,12 @@ final case class WaitRow(
 )
 
 final case class DelegationRow(
-    id: Long,
+    id: DelegationId,
     requesterId: SessionId,
     threadId: SessionId,
-    mode: String,
+    mode: TrackedMode,
     callEntry: Option[Long],
-    callId: Option[String],
+    callId: Option[CallId],
     done: Boolean,
     result: Option[String],
     createdAt: Long
@@ -118,27 +119,30 @@ private[sessions] object Repo:
   def sessionsOfAgent(agent: AgentId): Read[List[SessionRow]] =
     Sql.run(sessions.filter(_.agentId == lift(agent))).orInternal
 
-  def issueSession(agent: AgentId, ref: String): Read[Option[SessionRow]] =
-    Sql.run(sessions.filter(s => s.agentId == lift(agent) && s.origin == "issue" && s.originRef.exists(_ == lift(ref))))
+  def issueSession(agent: AgentId, issue: IssueId): Read[Option[SessionRow]] =
+    val ref = issue.value.toString
+    Sql.run(sessions.filter(s => s.agentId == lift(agent) && s.origin == lift(OriginKind.Issue) && s.originRef.exists(_ == lift(ref))))
       .map(_.headOption)
       .orInternal
 
   /** 这些 issue（`origin_ref` 是 issue 号）的全部 issue 会话。 */
-  def issueSessions(refs: List[String]): Read[List[SessionRow]] =
-    Sql.run(sessions.filter(s => s.origin == "issue" && s.originRef.exists(r => liftQuery(refs).contains(r)))).orInternal
+  def issueSessions(issues: List[IssueId]): Read[List[SessionRow]] =
+    val refs = issues.map(_.value.toString)
+    Sql.run(sessions.filter(s => s.origin == lift(OriginKind.Issue) && s.originRef.exists(r => liftQuery(refs).contains(r)))).orInternal
 
-  def thread(parent: SessionId, agent: AgentId, name: String): Read[Option[SessionRow]] =
+  def thread(parent: SessionId, agent: AgentId, name: ThreadName): Read[Option[SessionRow]] =
+    val ref = name.value
     Sql.run(
-      sessions.filter(s => s.parentId.exists(_ == lift(parent)) && s.agentId == lift(agent) && s.origin == "thread" && s.originRef.exists(_ == lift(name)))
+      sessions.filter(s => s.parentId.exists(_ == lift(parent)) && s.agentId == lift(agent) && s.origin == lift(OriginKind.Thread) && s.originRef.exists(_ == lift(ref)))
     ).map(_.headOption).orInternal
 
   def threadsOf(parent: SessionId): Read[List[SessionRow]] =
     Sql.run(sessions.filter(s => s.parentId.exists(_ == lift(parent))).sortBy(_.createdAt)).orInternal
 
   /** 会话列表：按最近活动倒序。`agent` 筛选，`origins` 只要这些来源（空是不限），`text`（不分大小写的子串）搜来信、回复与工具调用参数。 */
-  def listSessions(agent: Option[AgentId], origins: List[String], text: Option[String], before: Long, limit: Int): Read[List[SessionRow]] =
+  def listSessions(agent: Option[AgentId], origins: List[OriginKind], text: Option[String], before: Long, limit: Int): Read[List[SessionRow]] =
     val anyOrigin = origins.isEmpty
-    val os        = if anyOrigin then List("") else origins
+    val os        = if anyOrigin then OriginKind.values.toList else origins
     (agent, text) match
       case (None, None) =>
         Sql.run(
@@ -189,7 +193,7 @@ private[sessions] object Repo:
   val busySessions: Read[List[SessionRow]] =
     Sql.run(
       sessions.filter(s =>
-        runs.filter(r => r.sessionId == s.id && (r.state == "running" || r.state == "suspended")).nonEmpty ||
+        runs.filter(r => r.sessionId == s.id && liftQuery(RunState.activeOnes).contains(r.state)).nonEmpty ||
           waits.filter(_.sessionId == s.id).nonEmpty || inbox.filter(_.sessionId == s.id).nonEmpty
       )
     ).orInternal
@@ -256,17 +260,17 @@ private[sessions] object Repo:
       )
     ).orInternal
 
-  def runsIn(states: List[String]): Read[List[RunRow]] =
+  def runsIn(states: List[RunState]): Read[List[RunRow]] =
     Sql.run(runs.filter(r => liftQuery(states).contains(r.state))).orInternal
 
   /** 这些会话里没结束的运行（运行中或挂起）。 */
   def activeRuns(ids: List[SessionId]): Read[List[RunRow]] =
-    Sql.run(runs.filter(r => liftQuery(ids).contains(r.sessionId) && (r.state == "running" || r.state == "suspended"))).orInternal
+    Sql.run(runs.filter(r => liftQuery(ids).contains(r.sessionId) && liftQuery(RunState.activeOnes).contains(r.state))).orInternal
 
   def insertRun(session: SessionId, at: Long): Tx[RunId] =
-    Sql.run(runs.insertValue(lift(RunRow(RunId.wrap(1L), session, "running", None, None, None, at, None))).returningGenerated(_.id)).orInternal
+    Sql.run(runs.insertValue(lift(RunRow(RunId.wrap(1L), session, RunState.Running, None, None, None, at, None))).returningGenerated(_.id)).orInternal
 
-  def setRunState(id: RunId, state: String, error: Option[String], finishedAt: Option[Long]): Tx[Unit] =
+  def setRunState(id: RunId, state: RunState, error: Option[String], finishedAt: Option[Long]): Tx[Unit] =
     Sql.run(
       runs
         .filter(_.id == lift(id))
@@ -294,7 +298,10 @@ private[sessions] object Repo:
   def messagesBetween(ids: List[SessionId], from: Long, to: Long): Read[List[EntryRow]] =
     Sql.run(
       entries
-        .filter(e => liftQuery(ids).contains(e.sessionId) && e.startedAt >= lift(from) && e.startedAt < lift(to) && (e.kind == "letter" || e.kind == "reply"))
+        .filter(e =>
+          liftQuery(ids).contains(e.sessionId) && e.startedAt >= lift(from) && e.startedAt < lift(to) &&
+            liftQuery(List(EntryKind.Letter, EntryKind.Reply)).contains(e.kind)
+        )
         .sortBy(_.id)
     ).orInternal
 
@@ -302,7 +309,7 @@ private[sessions] object Repo:
     Sql.run(entries.filter(_.id == lift(id))).map(_.headOption).orInternal
 
   /** 最近一条某种类的。 */
-  def lastEntry(session: SessionId, kind: String): Read[Option[EntryRow]] =
+  def lastEntry(session: SessionId, kind: EntryKind): Read[Option[EntryRow]] =
     Sql.run(entries.filter(e => e.sessionId == lift(session) && e.kind == lift(kind)).sortBy(_.id)(using Ord.desc).take(1))
       .map(_.headOption)
       .orInternal
@@ -318,16 +325,16 @@ private[sessions] object Repo:
   def callsOfSession(session: SessionId): Read[List[ToolCallRow]] =
     Sql.run(calls.filter(_.sessionId == lift(session))).orInternal
 
-  def call(entryId: Long, callId: String): Read[Option[ToolCallRow]] =
+  def call(entryId: Long, callId: CallId): Read[Option[ToolCallRow]] =
     Sql.run(calls.filter(c => c.entryId == lift(entryId) && c.callId == lift(callId))).map(_.headOption).orInternal
 
   def openCalls(session: SessionId): Read[List[ToolCallRow]] =
-    Sql.run(calls.filter(c => c.sessionId == lift(session) && c.state != "done").sortBy(c => (c.entryId, c.seq))).orInternal
+    Sql.run(calls.filter(c => c.sessionId == lift(session) && c.state != lift(CallState.Done)).sortBy(c => (c.entryId, c.seq))).orInternal
 
-  def callsInState(state: String): Read[List[ToolCallRow]] =
-    Sql.run(calls.filter(_.state == lift(state))).orInternal
+  def callsIn(states: List[CallState]): Read[List[ToolCallRow]] =
+    Sql.run(calls.filter(c => liftQuery(states).contains(c.state))).orInternal
 
-  def setCall(entryId: Long, callId: String, state: String, pause: Option[String], result: Option[String], startedAt: Option[Long], finishedAt: Option[Long]): Tx[Unit] =
+  def setCall(entryId: Long, callId: CallId, state: CallState, pause: Option[String], result: Option[String], startedAt: Option[Long], finishedAt: Option[Long]): Tx[Unit] =
     Sql.run(
       calls
         .filter(c => c.entryId == lift(entryId) && c.callId == lift(callId))
@@ -340,33 +347,30 @@ private[sessions] object Repo:
     Sql.run(waits.filter(_.sessionId == lift(session)).sortBy(_.id)).orInternal
 
   def waitCounts(ids: List[SessionId]): Read[Map[SessionId, Long]] =
-    Sql.run(waits.filter(w => liftQuery(ids).contains(w.sessionId)).groupByMap(_.sessionId)(w => (w.sessionId, count(w.id))))
+    Sql.run(waits.filter(w => liftQuery(ids).contains(w.sessionId)).groupByMap(_.sessionId)(w => (w.sessionId, count(w.createdAt))))
       .map(_.toMap)
       .orInternal
 
   val allWaits: Read[List[WaitRow]] = Sql.run(waits).orInternal
 
-  def waitByRef(kind: String, ref: String): Read[Option[WaitRow]] =
+  def waitByKey(kind: WaitKind, ref: String): Read[Option[WaitRow]] =
     Sql.run(waits.filter(w => w.kind == lift(kind) && w.ref == lift(ref))).map(_.headOption).orInternal
 
-  def waitById(id: Long): Read[Option[WaitRow]] =
-    Sql.run(waits.filter(_.id == lift(id))).map(_.headOption).orInternal
-
-  def insertWait(r: WaitRow): Tx[Long] =
+  def insertWait(r: WaitRow): Tx[WaitId] =
     Sql.run(waits.insertValue(lift(r)).returningGenerated(_.id)).orInternal
 
-  def deleteWait(id: Long): Tx[Long] =
+  def deleteWait(id: WaitId): Tx[Long] =
     Sql.run(waits.filter(_.id == lift(id)).delete).orInternal
 
   // ---- 委派 ----
 
-  def insertDelegation(r: DelegationRow): Tx[Long] =
+  def insertDelegation(r: DelegationRow): Tx[DelegationId] =
     Sql.run(delegations.insertValue(lift(r)).returningGenerated(_.id)).orInternal
 
-  def delegation(id: Long): Read[Option[DelegationRow]] =
+  def delegation(id: DelegationId): Read[Option[DelegationRow]] =
     Sql.run(delegations.filter(_.id == lift(id))).map(_.headOption).orInternal
 
-  def delegationsOf(ids: List[Long]): Read[List[DelegationRow]] =
+  def delegationsOf(ids: List[DelegationId]): Read[List[DelegationRow]] =
     Sql.run(delegations.filter(d => liftQuery(ids).contains(d.id))).orInternal
 
   def openDelegationsTo(thread: SessionId): Read[List[DelegationRow]] =
@@ -376,10 +380,10 @@ private[sessions] object Repo:
     Sql.run(delegations.filter(d => d.requesterId == lift(requester) && !d.done)).orInternal
 
   /** 交回结局；已交回过的不再改（返回 0）。 */
-  def finishDelegation(id: Long, result: String): Tx[Long] =
+  def finishDelegation(id: DelegationId, result: String): Tx[Long] =
     Sql.run(delegations.filter(d => d.id == lift(id) && !d.done).update(_.done -> true, _.result -> lift(Option(result)))).orInternal
 
-  def setDelegationCall(id: Long, entry: Long, call: String): Tx[Unit] =
+  def setDelegationCall(id: DelegationId, entry: Long, call: CallId): Tx[Unit] =
     Sql.run(delegations.filter(_.id == lift(id)).update(_.callEntry -> lift(Option(entry)), _.callId -> lift(Option(call)))).unit.orInternal
 
   // ---- 附件 ----

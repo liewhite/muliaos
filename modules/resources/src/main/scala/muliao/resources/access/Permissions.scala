@@ -1,6 +1,6 @@
 package muliao.resources.access
 
-import muliao.contract.{AgentId, AgentName, RoleName}
+import muliao.contract.{AgentId, AgentName, RoleName, AssetKind}
 import muliao.resources.tree.Owner
 import muliao.toolkit.Access
 
@@ -55,19 +55,19 @@ final case class Permissions(
   val isAdmin: Boolean = roles.contains(BuiltinRole.Admin.roleName)
 
   /** 能否对某工具（`toolAccess` 是它的类别）或某资源（主人 `owner`）做 `action`。 */
-  def decide(action: Action, kind: Kind, name: String, owner: Owner, toolAccess: Option[Access] = None): Decision =
-    if owner == Owner.Agent(this.name) && kind != Kind.Tool then Decision.Allowed(Grant.Ownership)
-    else if kind == Kind.Memory && name == Permissions.GlobalMemory && action == Action.Use then Decision.Allowed(Grant.GlobalMemory)
+  def decide(action: Action, kind: AssetKind, name: String, owner: Owner, toolAccess: Option[Access] = None): Decision =
+    if owner == Owner.Agent(this.name) && kind != AssetKind.Tool then Decision.Allowed(Grant.Ownership)
+    else if kind == AssetKind.Memory && name == Permissions.GlobalMemory && action == Action.Use then Decision.Allowed(Grant.GlobalMemory)
     else
       deny.find(_._1.selects(action, kind, name)) match
         case Some((r, s)) => Decision.Denied(r, s)
         case None =>
           if isAdmin then Decision.Allowed(Grant.Everything)
-          else if kind == Kind.Tool && action == Action.Use && toolAccess.exists(_ != Access.Admin) then Decision.Allowed(Grant.NonAdminTools)
+          else if kind == AssetKind.Tool && action == Action.Use && toolAccess.exists(_ != Access.Admin) then Decision.Allowed(Grant.NonAdminTools)
           else allow.find(_._1.selects(action, kind, name)).fold(Decision.NotGranted)((r, s) => Decision.Allowed(Grant.ByRule(r, s)))
 
   def canUseTool(name: String, access: Access): Boolean =
-    decide(Action.Use, Kind.Tool, name, Owner.Platform, Some(access)).allowed
+    decide(Action.Use, AssetKind.Tool, name, Owner.Platform, Some(access)).allowed
 
   /** `write:path` 给的目录（被 deny 的 `write:path` 收回的在 [[deniedPaths]]）。 */
   def writablePaths: List[Path] = allow.flatMap((r, _) => Rule.pathOf(r)).distinct

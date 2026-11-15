@@ -1,5 +1,6 @@
 package muliao.resources.tree
 
+import muliao.contract.Thinking
 import org.snakeyaml.engine.v2.api.{Load, LoadSettings}
 import zio.json.*
 import zio.json.ast.Json
@@ -23,7 +24,7 @@ object Formats:
       _        <- Either.cond(model.trim.nonEmpty, (), "model 不能为空")
       thinkingS <- t.string("thinking")
       thinking <- thinkingS.fold(Right(Thinking.Default))(s =>
-                    Thinking.parse(s).toRight(s"thinking 只能是 ${Thinking.values.map(_.label).mkString(" / ")}")
+                    Thinking.parse(s)
                   )
       group <- t.string("group")
     yield AgentProfile(desc, model, thinking, group.filter(_.nonEmpty))

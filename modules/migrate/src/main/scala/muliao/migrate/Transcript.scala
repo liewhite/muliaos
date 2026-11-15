@@ -1,6 +1,6 @@
 package muliao.migrate
 
-import muliao.contract.{AgentId, RunId, SessionId}
+import muliao.contract.*
 import muliao.migrate.OldPayload.{Content, Mark, Part}
 import muliao.models.llm.{Protocol, ReplyPart, Seal, Usage}
 import muliao.sessions.*
@@ -91,11 +91,12 @@ object Transcript:
     case Some("stopped") => RunState.Stopped
     case _               => RunState.Stopped // 没结束的、认不出的：记成被停止，新版不续跑
 
-  def eventKind(event: String): String = event.takeWhile(_ != ':') match
-    case "job"     => "job"
-    case "thread"  => "delegation"
-    case "wake_me" => "wake"
-    case other     => other
+  /** 旧版事件的种类（只用于展示）：后台任务、委派、唤醒，其余（心跳检查）记成检查。 */
+  def eventKind(event: String): EventKind = event.takeWhile(_ != ':') match
+    case "job"     => EventKind.Job
+    case "thread"  => EventKind.Delegation
+    case "wake_me" => EventKind.Wake
+    case _         => EventKind.CheckIn
 
   private final class Builder(origin: SessionOrigin, files: Map[String, FileInfo], firstId: Long):
     private val sid: SessionId = origin.row.id
@@ -112,7 +113,7 @@ object Transcript:
     private def add(run: Option[Long], body: EntryBody, search: String, at: Long): Long =
       val id = nextId
       nextId += 1
-      entries += EntryRow(id, sid, run.map(RunId.wrap), body.tag, body.encode, search, at, at)
+      entries += EntryRow(id, sid, run.map(RunId.wrap), body.entryKind, body.encode, search, at, at)
       id
 
     def run(runs: List[Old.Run], messages: List[Old.Message], compactions: List[Old.Compaction]): Converted =
@@ -151,7 +152,7 @@ object Transcript:
           stats = stats.copy(notices = stats.notices + 1)
         }
         if r.outcome.isEmpty then stats = stats.copy(unfinishedRuns = stats.unfinishedRuns + 1)
-        RunRow(RunId.wrap(r.id), sid, state.label, r.error.filter(_ => state == RunState.Failed), None, None, r.startedAt, Some(end))
+        RunRow(RunId.wrap(r.id), sid, state, r.error.filter(_ => state == RunState.Failed), None, None, r.startedAt, Some(end))
       }
       pending.foreach(compaction)
 
@@ -199,7 +200,7 @@ object Transcript:
       val id    = add(Some(m.runId), body, searchText(parts), m.createdAt)
       stats = stats.copy(replies = stats.replies + 1)
       parts.collect { case c: ReplyPart.ToolCall => c }.zipWithIndex.foreach { (c, seq) =>
-        calls.update((id, c.id), ToolCallRow(id, c.id, sid, seq, c.name, c.args, CallState.Done.label, None, None, Some(m.createdAt), None))
+        calls.update((id, c.id), ToolCallRow(id, CallId.wrap(c.id), sid, seq, c.name, c.args, CallState.Done, None, None, Some(m.createdAt), None))
         openCalls.update(c.id, (id, c.id))
         callEntry.update(c.id, id)
         stats = stats.copy(calls = stats.calls + 1)
@@ -233,9 +234,9 @@ object Transcript:
           val id = OldPayload.fileId(url).getOrElse(url)
           stats = stats.copy(attachments = stats.attachments + 1)
           letter match
-            case Some(l) => letter = Some(l.copy(files = l.files :+ id))
+            case Some(l) => letter = Some(l.copy(files = l.files :+ FileId.wrap(id)))
             case None =>
-              letter = Some(newLetter(marks.get(i), "").copy(files = Chunk(id)))
+              letter = Some(newLetter(marks.get(i), "").copy(files = Chunk(FileId.wrap(id))))
               stats = stats.copy(fileOnlyLetters = stats.fileOnlyLetters + 1)
         case (_: Part.Thinking | _: Part.ToolCall, _) => () // 用户一方不会有
       }
@@ -269,12 +270,18 @@ object Transcript:
       .orElse(Option.when(s.title.contains(" · "))(s.title.takeWhile(_ != ' ')).filter(_.nonEmpty))
       .getOrElse(s"trigger-${s.originRef.getOrElse("?")}")
     val parentAgent = s.parent.flatMap(sessionAgent.get).getOrElse("?")
-    val delegation  = Source.Delegation(s.parent.getOrElse(""), parentAgent)
-    val issue       = s.originRef.flatMap(_.toLongOption).map(Source.Issue(_)).getOrElse(Source.User)
-    val (o, ref, parent, default) = s.origin match
-      case "trigger"    => ("trigger", Some(trigger), None, Source.Trigger(trigger))
-      case "issue"      => ("issue", s.originRef, None, issue)
-      case "delegation" => ("thread", Some(s.thread.getOrElse("thread")), s.parent, delegation)
-      case _            => ("user", None, None, Source.User)
-    val row = SessionRow(SessionId.wrap(s.id), AgentId.wrap(s.agentId), o, ref, parent.map(SessionId.wrap), s.title, "[]", s.createdAt, s.updatedAt)
-    SessionOrigin(row, Senders(Source.User, Source.Trigger(trigger), issue, delegation, default))
+    val delegation  = Source.Delegation(SessionId.wrap(s.parent.getOrElse("")), AgentName.wrap(parentAgent))
+    val issue       = s.originRef.flatMap(_.toLongOption).map(i => Source.Issue(IssueId.wrap(i))).getOrElse(Source.User)
+    val byTrigger   = Source.Trigger(TriggerName.wrap(trigger))
+    val origin: Origin = s.origin match
+      case "trigger"    => Origin.Trigger(TriggerName.wrap(trigger))
+      case "issue"      => s.originRef.flatMap(_.toLongOption).fold(Origin.User)(i => Origin.Issue(IssueId.wrap(i)))
+      case "delegation" => Origin.Thread(s.parent.map(SessionId.wrap), ThreadName.wrap(s.thread.getOrElse("thread")))
+      case _            => Origin.User
+    val default = origin match
+      case Origin.User         => Source.User
+      case Origin.Trigger(_)   => byTrigger
+      case Origin.Issue(_)     => issue
+      case Origin.Thread(_, _) => delegation
+    val row = SessionRow(SessionId.wrap(s.id), AgentId.wrap(s.agentId), origin.kind, origin.ref, origin.parentId, s.title, "[]", s.createdAt, s.updatedAt)
+    SessionOrigin(row, Senders(Source.User, byTrigger, issue, delegation, default))

@@ -136,7 +136,7 @@ object Board:
         r      <- render(List(issue), events)
         _ <- ZIO.foreachDiscard(targets) { a =>
                sessions
-                 .deliverIn(Address.IssueOf(a, issue.id, s"#${issue.id.value} ${issue.title}"), Letter(Source.Issue(issue.id.value), r.letter(issue, st.get, events)))
+                 .deliverIn(Address.IssueOf(a, issue.id, s"#${issue.id.value} ${issue.title}"), Letter(Source.Issue(issue.id), r.letter(issue, st.get, events)))
                  .zipRight(Repo.clearNudge(issue.id, a))
                  .catchSome { case AppError.Domain(_, why) =>
                    record(issue.id, Actor.System(None), List(Activity.DeliveryFailed(a, why))).unit
@@ -207,7 +207,7 @@ object Board:
             case Assignee.User     => Assignee.UserKey
             case Assignee.Agent(a) => ns.getOrElse(a, a.value)
           },
-          assigneeState = state.map(_.label),
+          assigneeState = state,
           stalled = Rules.stalled(i, waiting, state),
           dependsOn = i.dependsOn,
           waitingOn = waiting,
@@ -227,9 +227,9 @@ object Board:
     def show(id: IssueId): IO[AppError, IssueDetail] =
       for
         (issue, events, downs) <- db.read(Repo.require(id).zip(Repo.eventsOf(id)).zip(Repo.downstream(id)))
-        ups   <- db.read(Repo.titles(issue.dependsOn))
-        blk   <- db.read(Repo.titles(downs))
-        st     = ups.flatMap((i, _, s) => IssueStatus.parse(s).map(i -> _)).toMap
+        ups   <- db.read(Repo.links(issue.dependsOn))
+        blk   <- db.read(Repo.links(downs))
+        st     = ups.map(l => l.id -> l.status).toMap
         ns    <- names(agentsIn(List(issue), events))
         r      = Render(a => ns.getOrElse(a, a.value), zone)
         sum   <- summaries(List(issue), st.get, ns).map(_.head)
@@ -237,20 +237,18 @@ object Board:
         lns   <- names(links.map(_.agent).toSet)
         sts   <- sessions.states(links.map(_.session))
       yield
-        def link(rows: List[(IssueId, String, String)]) =
-          rows.flatMap((i, t, s) => IssueStatus.parse(s).map(IssueLink(i, t, _))).sortBy(_.id.value)
         IssueDetail(
           summary = sum,
           description = issue.description,
           createdBy = r.actor(issue.createdBy),
           createdAt = issue.createdAt,
-          dependsOn = link(ups),
-          blocks = link(blk),
+          dependsOn = ups,
+          blocks = blk,
           events = events.map { e =>
             val (text, body) = r.activity(e.activity)
             IssueEventView(e.id, e.at, r.actor(e.actor), e.actor.where, text, body)
           },
-          sessions = links.map(l => IssueSessionView(l.agent, lns.getOrElse(l.agent, l.agent.value), l.session, sts.get(l.session).fold("idle")(_.label)))
+          sessions = links.map(l => IssueSessionView(l.agent, lns.getOrElse(l.agent, l.agent.value), l.session, sts.getOrElse(l.session, WorkState.Idle)))
         )
 
     def activity(agent: Option[AgentId], from: Long, to: Long): IO[AppError, List[IssueActivity]] =
@@ -264,7 +262,7 @@ object Board:
                       case (Actor.Agent(id, _), Some(a))  => id == a
                       case (Actor.User, Some(_))          => mine.exists(_(e.issue))
                   }
-        titles <- db.read(Repo.titles(picked.map(_.issue).distinct)).map(_.map((i, t, _) => i -> t).toMap)
+        titles <- db.read(Repo.links(picked.map(_.issue).distinct)).map(_.map(l => l.id -> l.title).toMap)
         r      <- render(Nil, picked)
       yield picked.map { e =>
         val (text, body) = r.activity(e.activity)
@@ -445,7 +443,7 @@ object Board:
             asked <- Repo.nudged(id, agent)
             r     <- render(List(i), Nil)
             _ <- ZIO.when(Rules.worker(i, Rules.waitingOn(i, st.get)).contains(agent) && !asked) {
-                   sessions.deliverIn(Address.IssueOf(agent, id, s"#${id.value} ${i.title}"), Letter(Source.Issue(id.value), r.nudge(i))) *>
+                   sessions.deliverIn(Address.IssueOf(agent, id, s"#${id.value} ${i.title}"), Letter(Source.Issue(id), r.nudge(i))) *>
                      Repo.markNudged(id, agent)
                  }
           yield ()

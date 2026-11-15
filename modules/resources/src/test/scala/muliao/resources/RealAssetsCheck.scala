@@ -1,9 +1,10 @@
 package muliao.resources
 
-import muliao.contract.{AgentId, AgentName}
+import muliao.contract.{AgentId, AgentName, AssetKind}
 import muliao.platform.AppError
-import muliao.resources.access.{AccessValidation, Kind}
-import muliao.resources.agents.{AgentRecord, AgentRepo, AgentState}
+import muliao.resources.access.AccessValidation
+import muliao.contract.AgentState
+import muliao.resources.agents.{AgentRecord, AgentRepo}
 import muliao.resources.tree.{AssetStore, Owner}
 import muliao.resources.vault.{Fernet, Vault}
 import muliao.toolkit.Access
@@ -107,5 +108,5 @@ object RealAssetsCheck extends ZIOAppDefault:
              res.forRun(id).flatMap(rr => Console.printLine(s"slack-hub：工具 ${rr.tools.toList.sorted.mkString(",")}；skill ${rr.skills.map(_.doc.name).mkString(",")}"))
            }
       perOwner = snap.named.groupBy(_._3).view.mapValues(_.size).toMap
-      _ <- Console.printLine(s"平台名下资源 ${perOwner.getOrElse(Owner.Platform, 0)} 项；按种类：" + Kind.values.map(k => s"${k.label} ${snap.named.count(_._1 == k)}").mkString("，"))
+      _ <- Console.printLine(s"平台名下资源 ${perOwner.getOrElse(Owner.Platform, 0)} 项；按种类：" + AssetKind.values.map(k => s"${k.label} ${snap.named.count(_._1 == k)}").mkString("，"))
     yield ()

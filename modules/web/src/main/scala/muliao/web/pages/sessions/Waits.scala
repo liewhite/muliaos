@@ -11,8 +11,8 @@ import scala.scalajs.js
 
 /** 等待面板：会话在等的后台任务、委派、到点唤醒、提问与批准——让人看得出它为什么挂起、在等谁。 */
 object Waits:
-  def askAnchor(call: String): String      = s"ask-$call"
-  def approvalAnchor(call: String): String = s"approval-$call"
+  def askAnchor(call: CallId): String      = s"ask-${call.value}"
+  def approvalAnchor(call: CallId): String = s"approval-${call.value}"
 
   private def scrollTo(id: String): Unit =
     Option(dom.document.getElementById(id)).foreach(_.asInstanceOf[js.Dynamic].scrollIntoView(js.Dynamic.literal(behavior = "smooth")))
@@ -25,9 +25,8 @@ object Waits:
   private def row(mods: Modifier[HtmlElement]*): HtmlElement = div(cls := "flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5", mods)
 
   /** 一个后台任务：命令说明、日志最后几行（展开时取）、结束任务。 */
-  private def job(w: WaitItem, now: Signal[Double], action: Action): HtmlElement =
+  private def job(w: WaitItem, id: JobId, now: Signal[Double], action: Action): HtmlElement =
     val open = Var(false)
-    val jobId = w.ref.toLongOption.map(JobId.wrap)
     div(
       cls := "rounded-xl border border-dashed border-separator px-3 py-1.5",
       div(
@@ -46,7 +45,7 @@ object Waits:
         Option.when(o)(
           div(
             cls := "flex flex-col gap-2 pt-1",
-            jobId.map { id =>
+            {
               val log = Remote("sessions")(Http.call(WorkspaceApi.jobLog)((id, Some(40))))
               Seq[Modifier[HtmlElement]](
                 div(cls := "text-xs text-muted", "日志最后几行："),
@@ -65,17 +64,17 @@ object Waits:
     )
 
   private def item(w: WaitItem, pending: List[PendingCall], now: Signal[Double], action: Action): HtmlElement =
-    w.kind match
-      case "job" => job(w, now, action)
-      case "delegation" =>
+    w.target match
+      case WaitTarget.Job(id) => job(w, id, now, action)
+      case WaitTarget.Delegation(thread) =>
         row(
           Icon("GitBranch", "size-3.5 shrink-0 text-muted"),
-          w.thread match
+          thread match
             case Some(t) => Ui.appLink(Route.Session(t.value).url)(cls := "max-w-full truncate text-accent hover:underline", w.label)
             case None    => span(cls := "max-w-full truncate", w.label)
           ,
           span(cls := "text-muted", child.text <-- now.map(since(w.createdAt, _))),
-          w.thread.map(t =>
+          thread.map(t =>
             Ui.btn(Variant.Ghost, Size.Sm, disabledIf = action.busy.signal)(
               cls := "ml-auto shrink-0",
               title := "停止做这项委派的 thread，结局以「被停止」交回",
@@ -85,35 +84,33 @@ object Waits:
             )
           )
         )
-      case "wake" =>
+      case WaitTarget.Wake(due) =>
         row(
           title := w.label,
           Icon("AlarmClock", "size-3.5 shrink-0 text-muted"),
-          span(cls := "shrink-0", "到点唤醒 ", span(cls := "text-muted", child.text <-- now.map(n => w.dueAt.fold(since(w.createdAt, n))(until(_, n))))),
+          span(cls := "shrink-0", "到点唤醒 ", span(cls := "text-muted", child.text <-- now.map(until(due, _)))),
           span(cls := "max-w-full truncate text-muted", w.label)
         )
-      case _ =>
-        row(Icon("Hourglass", "size-3.5 shrink-0 text-muted"), span(cls := "truncate", w.label), span(cls := "text-muted", child.text <-- now.map(since(w.createdAt, _))))
 
-  private def pendingRow(p: PendingCall): HtmlElement = p.pending.kind match
-    case "question" =>
+  private def pendingRow(p: PendingCall): HtmlElement = p.pending match
+    case PendingView.Question(_) =>
       row(
         Icon("MessageCircleQuestion", "size-3.5 shrink-0 text-muted"),
         span(cls := "shrink-0", "等你回答"),
         Ui.btn(Variant.Ghost, Size.Sm)(cls := "ml-auto shrink-0", "跳到提问", onClick --> (_ => scrollTo(askAnchor(p.call))))
       )
-    case "approval" =>
+    case PendingView.Approval(_) =>
       row(
         Icon("ShieldQuestion", "size-3.5 shrink-0 text-muted"),
         span(cls := "shrink-0", "等你批准"),
         span(cls := "font-mono text-muted", p.name),
         Ui.btn(Variant.Ghost, Size.Sm)(cls := "ml-auto shrink-0", "去批准", onClick --> (_ => scrollTo(approvalAnchor(p.call))))
       )
-    case _ =>
+    case PendingView.Agent(thread, agent) =>
       row(
         Icon("GitBranch", "size-3.5 shrink-0 text-muted"),
-        span(cls := "shrink-0", s"等 ${p.pending.agent.getOrElse("agent")} 回答"),
-        p.pending.thread.map(t => span(cls := "truncate text-muted", s"thread「$t」"))
+        span(cls := "shrink-0", s"等 ${agent.value} 回答"),
+        span(cls := "truncate text-muted", s"thread「${thread.value}」")
       )
 
   def panel(detail: Signal[SessionDetail], action: Action): HtmlElement =

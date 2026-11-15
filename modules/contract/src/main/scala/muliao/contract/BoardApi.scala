@@ -8,7 +8,7 @@ import zio.json.*
 // ---- issue 看板 ----
 
 /** issue 的状态。`done`、`cancelled` 是「结束了」：下游只在全部上游结束后才开工。 */
-enum IssueStatus(val label: String):
+enum IssueStatus(val label: String) extends Labeled:
   /** 以后再做 */
   case Backlog extends IssueStatus("backlog")
   /** 在做：指派给 agent 时，每条新动态投进它处理这个 issue 的会话 */
@@ -22,28 +22,16 @@ enum IssueStatus(val label: String):
 
   def finished: Boolean = this == Done || this == Cancelled
 
-object IssueStatus:
-  def parse(s: String): Option[IssueStatus] = values.find(_.label == s)
+object IssueStatus extends Labels[IssueStatus]("issue 状态", IssueStatus.values)
 
-  given JsonCodec[IssueStatus] =
-    JsonCodec.string.transformOrFail(s => parse(s).toRight(s"未知的 issue 状态 $s"), _.label)
-  given Schema[IssueStatus] = Schema.string[IssueStatus].description(values.map(_.label).mkString(" / "))
-  given Codec[String, IssueStatus, CodecFormat.TextPlain] =
-    Codec.string.mapEither(s => parse(s).toRight(s"未知的 issue 状态 $s"))(_.label)
-
-enum Priority(val label: String):
+enum Priority(val label: String) extends Labeled:
   case Unset extends Priority("none")
   case Urgent extends Priority("urgent")
   case High extends Priority("high")
   case Medium extends Priority("medium")
   case Low extends Priority("low")
 
-object Priority:
-  def parse(s: String): Option[Priority] = values.find(_.label == s)
-
-  given JsonCodec[Priority] =
-    JsonCodec.string.transformOrFail(s => parse(s).toRight(s"未知的优先级 $s"), _.label)
-  given Schema[Priority] = Schema.string[Priority].description(values.map(_.label).mkString(" / "))
+object Priority extends Labels[Priority]("优先级", Priority.values)
 
 /** 指派给谁：用户，或某个 agent。JSON 里写 `"user"` 或 agent 编号（agent 编号与名字都不会是 `user`）。 */
 enum Assignee:
@@ -67,7 +55,7 @@ object Assignee:
   given Schema[Assignee]    = Schema.string[Assignee].description("`user` 或 agent 编号")
 
 /** 列表里的一个 issue。
-  * @param assigneeState 指派的 agent 处理它的会话在做什么：running / waiting / idle；没指派 agent 或还没有会话时为空
+  * @param assigneeState 指派的 agent 处理它的会话在做什么；没指派 agent 或还没有会话时为空
   * @param stalled       在做（in_progress）、指派给 agent、不等上游，但它的 issue 会话空闲或还没有：没人在处理
   * @param waitingOn     还没结束的上游
   */
@@ -80,7 +68,7 @@ final case class IssueSummary(
     ownerName: Option[String],
     assignee: Option[Assignee],
     assigneeName: Option[String],
-    assigneeState: Option[String],
+    assigneeState: Option[WorkState],
     stalled: Boolean,
     dependsOn: List[IssueId],
     waitingOn: List[IssueId],
@@ -106,7 +94,7 @@ final case class IssueEventView(
 ) derives JsonCodec, Schema
 
 /** 处理这个 issue 的一个会话。 */
-final case class IssueSessionView(agent: AgentId, agentName: String, session: SessionId, state: String) derives JsonCodec, Schema
+final case class IssueSessionView(agent: AgentId, agentName: String, session: SessionId, state: WorkState) derives JsonCodec, Schema
 
 final case class IssueDetail(
     summary: IssueSummary,

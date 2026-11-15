@@ -1,11 +1,13 @@
 package muliao.resources.tools
 
-import muliao.contract.RoleName
+import muliao.contract.{RoleName, AssetKind}
 import muliao.platform.AppError
 import muliao.resources.*
-import muliao.resources.access.{BuiltinRole, Kind}
-import muliao.resources.agents.{AgentRecord, AgentState, Agents, NewAgent}
-import muliao.resources.tree.{Owner, Thinking}
+import muliao.resources.access.BuiltinRole
+import muliao.contract.AgentState
+import muliao.resources.agents.{AgentRecord, Agents, NewAgent}
+import muliao.contract.Thinking
+import muliao.resources.tree.Owner
 import muliao.resources.vault.{Actor, Vault}
 import muliao.toolkit.*
 import zio.*
@@ -122,7 +124,7 @@ object AgentTools:
         allow = grants.allow.map(_.text),
         deny = grants.deny.map(_.text),
         tools = eff.tools.map(_.name).sorted,
-        assets = eff.assets.map(g => s"${g.kind.label}:${g.name}") ++ List(s"${Kind.Memory.label}:${a.name.value}（私有）"),
+        assets = eff.assets.map(g => s"${g.kind.label}:${g.name}") ++ List(s"${AssetKind.Memory.label}:${a.name.value}（私有）"),
         availableRoles = roles.flatten,
         allTools = catalog.tools.map(_.name).sorted,
         problems = snap.problems.filter(_.owner.contains(Owner.Agent(a.name))).map(p => s"${p.path}：${p.reason}")
@@ -145,7 +147,7 @@ object AgentTools:
       Display.JsonData
     ) { (in, _) =>
       (for
-        thinking <- ZIO.fromOption(Thinking.parse(in.thinking)).orElseFail(AppError.invalid(s"thinking 只能是 ${Thinking.values.map(_.label).mkString(" / ")}"))
+        thinking <- ZIO.fromEither(Thinking.parse(in.thinking)).mapError(AppError.invalid)
         rec <- agents.create(NewAgent(in.name, in.description, in.model, thinking, in.group, in.roles.map(RoleName.wrap), in.allow, in.deny))
       yield json(Created(rec.name.value, rec.id.value, paths.workspace(rec.id).toString, paths.assets.resolve(rec.name.value).toString)))
         .mapError(fail)

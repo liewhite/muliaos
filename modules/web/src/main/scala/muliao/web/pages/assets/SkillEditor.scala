@@ -80,8 +80,8 @@ object SkillEditor:
       case Some(o) => Val(Load.Ready(Some(o)))
       case None =>
         index.map {
-          case Load.Ready(i)    => Load.Ready(i.items.find(x => x.kind == "skill" && x.name == name).map(_.owner))
-          case Load.Stale(i, e) => Load.Stale(i.items.find(x => x.kind == "skill" && x.name == name).map(_.owner), e)
+          case Load.Ready(i)    => Load.Ready(i.items.find(x => x.kind == AssetItemKind.Skill && x.name == name).map(_.owner))
+          case Load.Stale(i, e) => Load.Stale(i.items.find(x => x.kind == AssetItemKind.Skill && x.name == name).map(_.owner), e)
           case Load.Failed(m)   => Load.Failed(m)
           case Load.Pending     => Load.Pending
         }
@@ -99,7 +99,7 @@ object SkillEditor:
     def remove(): Unit =
       Confirm
         .ask(s"删除 skill「$name」？", Some("整个 skill 目录（含附件）都会删除；用它的 agent 从下一次运行起就没有它了。"), "删除", danger = true)
-        .foreach(ok => if ok then act.run(Http.call(ResourcesApi.deleteAsset)(("skill", name)), leave = Some(() => Router.go(SkillsUrl))): Unit)
+        .foreach(ok => if ok then act.run(Http.call(ResourcesApi.deleteAsset)((AssetKind.Skill, name)), leave = Some(() => Router.go(SkillsUrl))): Unit)
     div(
       cls := "flex flex-col gap-4",
       Ui.card(

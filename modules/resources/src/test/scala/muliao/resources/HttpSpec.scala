@@ -59,7 +59,7 @@ object HttpSpec extends ZIOSpecDefault:
           val err     = dup.body.fromJson[ApiError].toOption.get
           assertTrue(
             mk.status == 201,
-            d.thinking.contains("low"),
+            d.thinking.contains(Thinking.Low),
             d.roles == List("admin"),
             d.tools.exists(_.name == "create_agent"),
             dup.status == 409,
@@ -139,11 +139,11 @@ object HttpSpec extends ZIOSpecDefault:
             sec.status == 204,
             sec2.status == 204,
             !idx.body.contains("s3cret"),
-            index.items.exists(i => i.kind == "secret" && i.name == "API_TOKEN" && i.owner == "alice" && i.allowShell.contains(false) && i.description.contains("测试")),
+            index.items.exists(i => i.kind == AssetItemKind.Secret && i.name == "API_TOKEN" && i.owner == "alice" && i.allowShell.contains(false) && i.description.contains("测试")),
             files.body.fromJson[SkillFiles].toOption.exists(_.files == List("SKILL.md", "scripts/x.sh")),
             tr.status == 204,
-            index.items.exists(i => i.kind == "skill" && i.name == "tool-a" && i.owner == "platform"),
-            index.items.exists(i => i.kind == "memory" && i.name == "global" && i.usedBy.map(_.value) == List("alice")),
+            index.items.exists(i => i.kind == AssetItemKind.Skill && i.name == "tool-a" && i.owner == "platform"),
+            index.items.exists(i => i.kind == AssetItemKind.Memory && i.name == "global" && i.usedBy.map(_.value) == List("alice")),
             dl.status == 400,
             dl2.status == 204,
             !idx2.body.contains("API_TOKEN")

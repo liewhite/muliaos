@@ -1,5 +1,6 @@
 package muliao.migrate
 
+import muliao.contract.OriginKind
 import zio.*
 
 import java.nio.file.{Files, Path, Paths}
@@ -147,11 +148,11 @@ object Main extends ZIOAppDefault:
 
     // 委派
     val threadCalls = src.threadCalls
-    val delegations = threadCalls.map { t =>
+    val delegations = threadCalls.flatMap { t =>
       val hit = callAt.get((t.parent, t.callId))
       Convert.delegation(t, hit.map(_._1), hit.map(_._2).getOrElse(0L))
     }
-    report.table("thread_calls", threadCalls.size, "delegation", dst.insert("delegation", delegations), "都记成已交回")
+    report.table("thread_calls", threadCalls.size, "delegation", dst.insert("delegation", delegations), "都记成已交回；回答推给用户的不记")
 
     // 看板
     val issues = src.issues.map(Convert.issue)
@@ -191,15 +192,15 @@ object Main extends ZIOAppDefault:
   /** 新版每个 (agent, issue) 只有一个 issue 会话：旧版重复的，保留最近更新的那个，其余记成用户会话。 */
   private def dedupeIssueSessions(origins: List[SessionOrigin], report: Report): List[SessionOrigin] =
     val keep = origins
-      .filter(_.row.origin == "issue")
+      .filter(_.row.origin == OriginKind.Issue)
       .groupBy(o => (o.row.agentId, o.row.originRef))
       .values
       .map(_.maxBy(_.row.updatedAt).row.id)
       .toSet
     origins.map { o =>
-      if o.row.origin == "issue" && !keep(o.row.id) then
+      if o.row.origin == OriginKind.Issue && !keep(o.row.id) then
         report.problem(s"会话 ${o.row.id.value}：同一 agent 处理 issue #${o.row.originRef.getOrElse("?")} 有多个会话，较早的这个记成用户会话")
-        o.copy(row = o.row.copy(origin = "user", originRef = None))
+        o.copy(row = o.row.copy(origin = OriginKind.User, originRef = None))
       else o
     }
 

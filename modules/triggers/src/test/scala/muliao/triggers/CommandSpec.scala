@@ -2,7 +2,7 @@ package muliao.triggers
 
 import muliao.contract.*
 import muliao.platform.AppError
-import muliao.sessions.{SessionHooks, WorkState}
+import muliao.sessions.SessionHooks
 import muliao.triggers.TestEnv.*
 import zio.*
 import zio.test.*
@@ -61,7 +61,7 @@ object CommandSpec extends ZIOSpecDefault:
           ws <- workspaceOf(a)
           tg <- triggers
           _  <- write(ws.resolve("state.txt"), "a\n")
-          t  <- tg.create(schedule("watch", a, yearly, "变了", Some(PrecheckSpec("cat state.txt", "changed"))))
+          t  <- tg.create(schedule("watch", a, yearly, "变了", Some(PrecheckSpec("cat state.txt", FireWhen.Changed))))
           r1 <- tg.run(t.id)
           r2 <- tg.run(t.id)
           _  <- write(ws.resolve("state.txt"), "a\nb\n")
@@ -109,7 +109,7 @@ object CommandSpec extends ZIOSpecDefault:
           v2 <- eventually("恢复后清除")(tg.view(t.id))(_.faults.isEmpty)
           _  <- tg.delete(t.id)
         yield assertTrue(
-          v1.faults.map(_.source) == List("precheck"),
+          v1.faults.map(_.source) == List(FaultSource.Precheck),
           v1.faults.head.error.contains("退出码 1"),
           s1.head.title.contains("出错"),
           s2.size == 1,
@@ -149,15 +149,15 @@ object CommandSpec extends ZIOSpecDefault:
           a   <- agent("bot")
           ws  <- workspaceOf(a)
           tg  <- triggers
-          t   <- tg.create(streamOf("flaky", a, "echo started >&2; if [ -f stable ]; then sleep 30; else exit 3; fi"))
-          v1  <- eventually("记下故障")(tg.view(t.id))(_.faults.exists(_.source == "stream"))
+          t   <- tg.create(streamOf("flaky", a, "echo started >&2; if [ -f stable ]; then sleep 30.0879; else exit 3; fi"))
+          v1  <- eventually("记下故障")(tg.view(t.id))(_.faults.exists(_.source == FaultSource.Stream))
           al  <- eventually("告警会话")(triggerSessions(a))(_.nonEmpty)
           log <- eventually("标准错误进日志")(read(ws.resolve(Streams.logName(TriggerName.wrap("flaky")))))(_.linesIterator.count(_ == "started") >= 3)
           _   <- write(ws.resolve("stable"), "")
           v2  <- eventually("跑稳后清除")(tg.view(t.id))(v => v.faults.isEmpty && v.runningSince.nonEmpty)
           _   <- tg.update(t.id, TriggerPatch(enabled = Some(false)))
           v3  <- eventually("停用后结束")(tg.view(t.id))(_.runningSince.isEmpty)
-          ps  <- ZIO.attemptBlocking(scala.sys.process.Process(Seq("pgrep", "-f", s"[s]leep 30")).lazyLines_!.toList).orDie
+          ps  <- eventually("命令进程结束")(ZIO.attemptBlocking(scala.sys.process.Process(Seq("pgrep", "-f", s"[s]leep 30.0879")).lazyLines_!.toList).orDie)(_.isEmpty)
         yield assertTrue(
           v1.faults.head.error.contains("退出码 3"),
           al.head.title.contains("出错"),

@@ -1,7 +1,6 @@
 package muliao.resources.tree
 
-import muliao.contract.AgentName
-import muliao.resources.access.Kind
+import muliao.contract.{AgentName, Thinking, AssetKind}
 
 import java.nio.file.Path
 
@@ -18,23 +17,11 @@ object Owner:
   /** 资源目录下归平台的那个子目录名；agent 不能叫这个名字。 */
   val PlatformDir = "platform"
 
-/** 思考档位：照发给服务商。 */
-enum Thinking(val label: String):
-  case Default extends Thinking("default")
-  case Off     extends Thinking("off")
-  case Low     extends Thinking("low")
-  case Medium  extends Thinking("medium")
-  case High    extends Thinking("high")
-  case Xhigh   extends Thinking("xhigh")
-
-object Thinking:
-  def parse(s: String): Option[Thinking] = values.find(_.label == s)
-
 /** `agent.toml`：agent 的可编辑配置（名字、归档、权限不在这里）。 */
 final case class AgentProfile(description: String, model: String, thinking: Thinking, group: Option[String])
 
 /** 没加载的文件和原因。`subject` 是能认出来的资源（种类、名字），用来判断告诉谁。 */
-final case class Problem(path: Path, reason: String, owner: Option[Owner], subject: Option[(Kind, String)])
+final case class Problem(path: Path, reason: String, owner: Option[Owner], subject: Option[(AssetKind, String)])
 
 /** 记忆的范围：平台的（全局记忆与各共享记忆，按名字分发）或某 agent 私有的。 */
 enum MemoryScope:

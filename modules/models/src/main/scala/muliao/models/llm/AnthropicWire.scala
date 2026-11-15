@@ -53,7 +53,7 @@ object AnthropicWire extends Wire:
     val (thinking, effort) = req.thinking match
       case Thinking.Default => (summarized, None)
       case Thinking.Off     => (obj("type" -> s("disabled")), None)
-      case other            => (summarized, Some(obj("effort" -> s(other.id))))
+      case other            => (summarized, Some(obj("effort" -> s(other.label))))
     objOpt(
       "model"         -> Some(s(model)),
       "max_tokens"    -> Some(n(maxTokens.getOrElse(DefaultMaxTokens).toLong)),

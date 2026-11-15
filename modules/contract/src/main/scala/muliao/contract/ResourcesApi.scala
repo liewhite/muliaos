@@ -7,19 +7,58 @@ import zio.json.*
 
 // ---- agent ----
 
-/** agent 列表里的一行。`state`：active / archived。 */
+/** agent 的生命周期状态。 */
+enum AgentState(val label: String) extends Labeled:
+  /** 正常接活 */
+  case Active   extends AgentState("active")
+  /** 停用但保留全部数据，不接新工作 */
+  case Archived extends AgentState("archived")
+  /** 正在删除（服务重启后接着删） */
+  case Deleting extends AgentState("deleting")
+  /** 已删除：只留编号与名字，供用量和工作历史显示 */
+  case Deleted  extends AgentState("deleted")
+
+  /** 还存在（没删、没在删）。 */
+  def live: Boolean = this match
+    case Active | Archived  => true
+    case Deleting | Deleted => false
+
+object AgentState extends Labels[AgentState]("agent 状态", AgentState.values)
+
+/** 思考档位：`default` 照模型平时的做法并要回思考摘要；`off` 不思考；其余按这个力度思考，也要摘要。照发给服务商。 */
+enum Thinking(val label: String) extends Labeled:
+  case Default extends Thinking("default")
+  case Off     extends Thinking("off")
+  case Low     extends Thinking("low")
+  case Medium  extends Thinking("medium")
+  case High    extends Thinking("high")
+  case XHigh   extends Thinking("xhigh")
+
+object Thinking extends Labels[Thinking]("思考档位", Thinking.values)
+
+/** agent 列表里的一行（只列还存在的：`state` 是 active 或 archived）。 */
 final case class AgentSummary(
     id: AgentId,
     name: AgentName,
     description: Option[String],
     group: Option[String],
     model: Option[String],
-    state: String,
+    state: AgentState,
     isDefault: Boolean
 ) derives JsonCodec, Schema
 
+/** 权限规则能指到的资源种类。 */
+enum AssetKind(val label: String) extends Labeled:
+  case Tool   extends AssetKind("tool")
+  case Skill  extends AssetKind("skill")
+  case Mcp    extends AssetKind("mcp")
+  case Secret extends AssetKind("secret")
+  case Memory extends AssetKind("memory")
+
+object AssetKind extends Labels[AssetKind]("资源种类", AssetKind.values)
+
 /** 一项能用的工具或资源。`item` 形如 `skill:x`（工具就是工具名）；`use`/`write` 是凭哪条规则（没有写权限时 write 为空）。 */
-final case class GrantView(item: String, kind: String, name: String, owner: Option[String], use: String, write: Option[String])
+final case class GrantView(item: String, kind: AssetKind, name: String, owner: Option[String], use: String, write: Option[String])
     derives JsonCodec, Schema
 
 /** 没加载的资源文件。 */
@@ -27,7 +66,7 @@ final case class ProblemView(path: String, reason: String, owner: Option[String]
 
 final case class AgentDetail(
     summary: AgentSummary,
-    thinking: Option[String],
+    thinking: Option[Thinking],
     roles: List[String],
     allow: List[String],
     deny: List[String],
@@ -47,7 +86,7 @@ final case class AgentCreate(
     name: String,
     description: String,
     model: Option[String] = None,
-    thinking: Option[String] = None,
+    thinking: Option[Thinking] = None,
     group: Option[String] = None,
     roles: List[String] = Nil,
     allow: List[String] = Nil,
@@ -59,7 +98,7 @@ final case class AgentUpdate(
     name: Option[String] = None,
     description: Option[String] = None,
     model: Option[String] = None,
-    thinking: Option[String] = None,
+    thinking: Option[Thinking] = None,
     group: Option[String] = None,
     roles: Option[List[String]] = None,
     allow: Option[List[String]] = None,
@@ -74,7 +113,7 @@ final case class PreviewRequest(agent: Option[AgentId] = None, roles: List[Strin
 
 final case class PreviewResult(tools: List[GrantView], assets: List[GrantView], writablePaths: List[String]) derives JsonCodec, Schema
 
-final case class AgentDefaults(model: String, thinking: List[String]) derives JsonCodec, Schema
+final case class AgentDefaults(model: String, thinking: List[Thinking]) derives JsonCodec, Schema
 
 // ---- 角色 ----
 
@@ -89,9 +128,30 @@ final case class RulesRequest(rules: List[String]) derives JsonCodec, Schema
 
 // ---- AI 资源 ----
 
-/** 一项资源。`kind`：memory / skill / mcp / secret / agent（agent.toml）/ access；`owner`：platform 或 agent 名；`path` 相对资源目录。 */
+/** 资源目录里一项的种类。 */
+enum AssetItemKind(val label: String) extends Labeled:
+  case Memory extends AssetItemKind("memory")
+  case Skill  extends AssetItemKind("skill")
+  case Mcp    extends AssetItemKind("mcp")
+  case Secret extends AssetItemKind("secret")
+  /** agent.toml */
+  case Agent  extends AssetItemKind("agent")
+  /** access.toml */
+  case Access extends AssetItemKind("access")
+
+  /** 是能删、能转移归属的资源时，它在权限规则里的种类（配置文件不是）。 */
+  def asset: Option[AssetKind] = this match
+    case Memory        => Some(AssetKind.Memory)
+    case Skill         => Some(AssetKind.Skill)
+    case Mcp           => Some(AssetKind.Mcp)
+    case Secret        => Some(AssetKind.Secret)
+    case Agent | Access => None
+
+object AssetItemKind extends Labels[AssetItemKind]("资源项种类", AssetItemKind.values)
+
+/** 一项资源。`owner`：platform 或 agent 名；`path` 相对资源目录。 */
 final case class AssetItem(
-    kind: String,
+    kind: AssetItemKind,
     name: String,
     owner: String,
     path: String,
@@ -170,12 +230,12 @@ object ResourcesApi:
     assets.put.in("secrets" / path[String]("key")).in(jsonBody[SecretWrite]).out(statusCode(StatusCode.NoContent)).name("putSecret")
 
   val transferAsset =
-    assets.post.in(path[String]("kind") / path[String]("name") / "transfer").in(jsonBody[AssetTransfer])
+    assets.post.in(path[AssetKind]("kind") / path[String]("name") / "transfer").in(jsonBody[AssetTransfer])
       .out(statusCode(StatusCode.NoContent)).name("transferAsset")
       .description("转移归属：把 skill、MCP 或 secret 挪到另一主人（platform 或 agent 名）的目录。")
 
   val deleteAsset =
-    assets.delete.in(path[String]("kind") / path[String]("name")).out(statusCode(StatusCode.NoContent)).name("deleteAsset")
+    assets.delete.in(path[AssetKind]("kind") / path[String]("name")).out(statusCode(StatusCode.NoContent)).name("deleteAsset")
       .description("删除 skill、MCP、secret 或共享记忆（全局记忆不能删）。")
 
   val all = List(

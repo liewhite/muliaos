@@ -1,5 +1,6 @@
 package muliao.resources.agents
 
+import muliao.contract.{AgentState, Thinking, AssetKind}
 import muliao.contract.{AgentId, AgentName, RoleName}
 import muliao.platform.AppError
 import muliao.platform.db.Database
@@ -371,15 +372,15 @@ object Agents:
         others <- list.map(_.filterNot(_.id == a.id))
         perms   = others.map(o => Permissions.of(o.id, o.name, access.config))
         owner   = Owner.Agent(a.name)
-        usedByOthers = (kind: Kind, name: String) =>
+        usedByOthers = (kind: AssetKind, name: String) =>
                          perms.exists(p =>
                            p.decide(Action.Use, kind, name, owner) match
                              case Decision.Allowed(Grant.ByRule(_, _)) => true
                              case _                                    => false
                          )
-        moves = snap.skills.filter(s => s.owner == owner && usedByOthers(Kind.Skill, s.name)).map(s => s.dir -> paths.assets.resolve(s"platform/skills/${s.name}")) ++
-                  snap.mcps.filter(m => m.owner == owner && usedByOthers(Kind.Mcp, m.name)).map(m => m.file -> paths.assets.resolve(s"platform/mcp/${m.name}.json")) ++
-                  snap.secrets.filter(s => s.owner == owner && usedByOthers(Kind.Secret, s.key)).map(s => s.file -> paths.assets.resolve(s"platform/secrets/${s.key}.toml"))
+        moves = snap.skills.filter(s => s.owner == owner && usedByOthers(AssetKind.Skill, s.name)).map(s => s.dir -> paths.assets.resolve(s"platform/skills/${s.name}")) ++
+                  snap.mcps.filter(m => m.owner == owner && usedByOthers(AssetKind.Mcp, m.name)).map(m => m.file -> paths.assets.resolve(s"platform/mcp/${m.name}.json")) ++
+                  snap.secrets.filter(s => s.owner == owner && usedByOthers(AssetKind.Secret, s.key)).map(s => s.file -> paths.assets.resolve(s"platform/secrets/${s.key}.toml"))
         _ <- ZIO.foreachDiscard(moves) { (from, to) =>
                ZIO.whenZIO(ZIO.attemptBlocking(Files.exists(to)).orDie.negate)(
                  store.move(from, to) *> ZIO.logInfo(s"删除 agent ${a.name.value}：$from 仍有人用，转给平台")

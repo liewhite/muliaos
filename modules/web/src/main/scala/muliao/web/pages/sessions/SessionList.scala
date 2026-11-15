@@ -43,10 +43,10 @@ object SessionList:
         }
     loop(None, Nil)
 
-  private def stateCard(w: Work): String = w match
-    case Work.Running => "border-l-4 border-accent bg-accent/5"
-    case Work.Waiting => "border-l-4 border-accent/40"
-    case Work.Idle    => ""
+  private def stateCard(w: WorkState): String = w match
+    case WorkState.Running => "border-l-4 border-accent bg-accent/5"
+    case WorkState.Waiting => "border-l-4 border-accent/40"
+    case WorkState.Idle    => ""
 
   /** 一张会话卡片；`withAgent` 时（置顶区）带上 agent 名与它现在配置的模型。 */
   private def card(id: SessionId, s: Signal[SessionSummary], withAgent: Boolean, models: Signal[Map[AgentId, String]]): HtmlElement =
@@ -54,7 +54,7 @@ object SessionList:
       cls := "block",
       div(
         cls <-- s.combineWith(Router.location).map((x, l) =>
-          s"card card--default transition-colors hover:bg-surface-hover ${stateCard(Work.of(x.state))} " +
+          s"card card--default transition-colors hover:bg-surface-hover ${stateCard(x.state)} " +
             (if l.route.contains(Route.Session(id.value)) then "ring-2 ring-accent" else "")
         ),
         div(
@@ -64,10 +64,10 @@ object SessionList:
             div(
               cls := "flex items-center gap-2 font-medium",
               child.maybe <-- s.map(x =>
-                Work.of(x.state) match
-                  case Work.Running => Some(Ui.spinner("spinner--sm spinner--accent"))
-                  case Work.Waiting => Some(span(aria.label := "等待中", Icon("Hourglass", "size-4 shrink-0 text-muted")))
-                  case Work.Idle    => None
+                x.state match
+                  case WorkState.Running => Some(Ui.spinner("spinner--sm spinner--accent"))
+                  case WorkState.Waiting => Some(span(aria.label := "等待中", Icon("Hourglass", "size-4 shrink-0 text-muted")))
+                  case WorkState.Idle    => None
               ),
               child.maybe <-- s.map(x => Option.when(x.unread)(span(cls := "size-2 shrink-0 rounded-full bg-accent", aria.label := "未读"))),
               span(cls := "truncate", child.text <-- s.map(_.title))
@@ -75,12 +75,12 @@ object SessionList:
             div(
               cls := "mt-1 flex flex-wrap gap-1.5",
               children <-- s.combineWith(models).map { (x, ms) =>
-                (Option.when(withAgent)(x.agentName).toList ++ Option.when(withAgent)(ms.get(x.agent)).flatten.toList ++ List(Origin.of(x.origin).label))
+                (Option.when(withAgent)(x.agentName).toList ++ Option.when(withAgent)(ms.get(x.agent)).flatten.toList ++ List(originTag(x.origin)))
                   .map(t => Ui.chip(t, soft = false)(cls := "chip--secondary")) ++
-                  (Work.of(x.state) match
-                    case Work.Running => List(Ui.chip("运行中", Tone.Accent)())
-                    case Work.Waiting => List(Ui.chip("等待中")())
-                    case Work.Idle    => Nil
+                  (x.state match
+                    case WorkState.Running => List(Ui.chip("运行中", Tone.Accent)())
+                    case WorkState.Waiting => List(Ui.chip("等待中")())
+                    case WorkState.Idle    => Nil
                   )
               }
             )

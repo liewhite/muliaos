@@ -1,6 +1,6 @@
 package muliao.sessions
 
-import muliao.contract.{AgentId, AgentName, CallId, RunId, SessionId}
+import muliao.contract.{AgentId, AgentName, CallId, FileId, JobId, RunId, SessionId}
 import muliao.platform.config.ConfigSection
 import muliao.resources.RunResources
 import muliao.toolkit.{Tool, ToolContext, ToolFailure, ToolOutcome}
@@ -75,17 +75,21 @@ enum UserNeed:
 trait SessionListener:
   def on(event: SessionEvent): UIO[Unit]
 
-/** 异步工作的一种（后台任务、委派、唤醒……），由登记方实现：停止或删除会话时取消，心跳检查时报告状态。 */
-trait WorkKind:
-  def kind: String
+/** 后台任务（工作区领域实现）：会话在等它时，心跳检查报告状态，会话被停止时结束它。 */
+trait JobControl:
   /** 心跳检查里写的一句现状。 */
-  def status(ref: String): UIO[String]
-  /** 会话被停止或删除时放弃这件工作（如结束后台任务）。 */
-  def cancel(ref: String): UIO[Unit]
+  def status(job: JobId): UIO[String]
+  /** 会话被停止，放弃这个任务。 */
+  def cancel(job: JobId): UIO[Unit]
+
+object JobControl:
+  val none: JobControl = new JobControl:
+    def status(job: JobId): UIO[String] = ZIO.succeed("（状态未知）")
+    def cancel(job: JobId): UIO[Unit]   = ZIO.unit
 
 /** 用户批准后接着执行挂起的调用（如 skill 脚本）。 */
 trait ApprovalHandler:
-  def name: String
+  def name: ApproverName
   /** `always`：用户选了「以后同样的调用不再问」。 */
   def approved(payload: Json, always: Boolean, ctx: RunContext): IO[ToolFailure, ToolOutcome]
 
@@ -99,25 +103,25 @@ object UnreadSource:
     def unread(ids: List[SessionId]): UIO[Set[SessionId]] = ZIO.succeed(Set.empty)
     def markRead(id: SessionId): UIO[Unit]                = ZIO.unit
 
-/** 别的领域在组装时接进来的东西：工具、事件订阅、异步工作种类、批准后的执行者、未读来源。 */
+/** 别的领域在组装时接进来的东西：工具、事件订阅、后台任务、批准后的执行者、未读来源。 */
 final class SessionHooks private (
     toolsRef: Ref[List[Tool[RunContext]]],
     listenersRef: Ref[List[SessionListener]],
-    kindsRef: Ref[Map[String, WorkKind]],
-    approvalsRef: Ref[Map[String, ApprovalHandler]],
+    jobsRef: Ref[JobControl],
+    approvalsRef: Ref[Map[ApproverName, ApprovalHandler]],
     unreadRef: Ref[UnreadSource]
 ):
   def addTools(ts: List[Tool[RunContext]]): UIO[Unit] = toolsRef.update(_ ++ ts)
   def addListener(l: SessionListener): UIO[Unit]       = listenersRef.update(_ :+ l)
-  def addWorkKind(k: WorkKind): UIO[Unit]              = kindsRef.update(_.updated(k.kind, k))
+  def setJobs(j: JobControl): UIO[Unit]                = jobsRef.set(j)
   def addApproval(h: ApprovalHandler): UIO[Unit]       = approvalsRef.update(_.updated(h.name, h))
   def setUnread(u: UnreadSource): UIO[Unit]            = unreadRef.set(u)
 
-  def tools: UIO[List[Tool[RunContext]]]          = toolsRef.get
-  def listeners: UIO[List[SessionListener]]       = listenersRef.get
-  def workKind(k: String): UIO[Option[WorkKind]]  = kindsRef.get.map(_.get(k))
-  def approval(n: String): UIO[Option[ApprovalHandler]] = approvalsRef.get.map(_.get(n))
-  def unread: UIO[UnreadSource]                   = unreadRef.get
+  def tools: UIO[List[Tool[RunContext]]]                      = toolsRef.get
+  def listeners: UIO[List[SessionListener]]                   = listenersRef.get
+  def jobs: UIO[JobControl]                                   = jobsRef.get
+  def approval(n: ApproverName): UIO[Option[ApprovalHandler]] = approvalsRef.get.map(_.get(n))
+  def unread: UIO[UnreadSource]                               = unreadRef.get
 
   def emit(e: SessionEvent): UIO[Unit] =
     listeners.flatMap(ZIO.foreachDiscard(_)(l => l.on(e).catchAllCause(c => ZIO.logErrorCause("会话事件订阅方出错", c))))
@@ -127,8 +131,8 @@ object SessionHooks:
     for
       t <- Ref.make(List.empty[Tool[RunContext]])
       l <- Ref.make(List.empty[SessionListener])
-      k <- Ref.make(Map.empty[String, WorkKind])
-      a <- Ref.make(Map.empty[String, ApprovalHandler])
+      k <- Ref.make(JobControl.none)
+      a <- Ref.make(Map.empty[ApproverName, ApprovalHandler])
       u <- Ref.make(UnreadSource.none)
     yield SessionHooks(t, l, k, a, u)
   )

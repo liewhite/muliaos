@@ -13,10 +13,10 @@ final case class IssueRow(
     id: IssueId,
     title: String,
     description: String,
-    status: String,
-    priority: String,
+    status: IssueStatus,
+    priority: Priority,
     ownerId: Option[AgentId],
-    assignee: Option[String],
+    assignee: Option[Assignee],
     createdBy: String,
     createdAt: Long,
     updatedAt: Long
@@ -37,16 +37,17 @@ private[board] object Repo:
 
   // ---- 行 ↔ 领域 ----
 
+  /** 指派存成 `user` 或 agent 编号。 */
+  private implicit val assigneeEncode: MappedEncoding[Assignee, String] = MappedEncoding(Assignee.encode)
+  private implicit val assigneeDecode: MappedEncoding[String, Assignee] = MappedEncoding(Assignee.decode)
+
   private def corrupt(what: String): AppError = AppError.Internal(s"库里的 issue 数据坏了：$what")
 
-  private def decode(r: IssueRow, upstream: List[IssueId]): IO[AppError, Issue] =
-    for
-      st <- ZIO.fromOption(IssueStatus.parse(r.status)).orElseFail(corrupt(s"#${r.id.value} 状态 ${r.status}"))
-      pr <- ZIO.fromOption(Priority.parse(r.priority)).orElseFail(corrupt(s"#${r.id.value} 优先级 ${r.priority}"))
-    yield Issue(r.id, r.title, r.description, st, pr, r.ownerId, r.assignee.map(Assignee.decode), upstream.sortBy(_.value), Actor.decode(r.createdBy, None), r.createdAt, r.updatedAt)
+  private def decode(r: IssueRow, upstream: List[IssueId]): Issue =
+    Issue(r.id, r.title, r.description, r.status, r.priority, r.ownerId, r.assignee, upstream.sortBy(_.value), Actor.decode(r.createdBy, None), r.createdAt, r.updatedAt)
 
   private def encode(i: Issue): IssueRow =
-    IssueRow(i.id, i.title, i.description, i.status.label, i.priority.label, i.owner, i.assignee.map(Assignee.encode), Actor.encode(i.createdBy), i.createdAt, i.updatedAt)
+    IssueRow(i.id, i.title, i.description, i.status, i.priority, i.owner, i.assignee, Actor.encode(i.createdBy), i.createdAt, i.updatedAt)
 
   private def decodeEvent(r: EventRow): IO[AppError, IssueEvent] =
     ZIO
@@ -59,8 +60,7 @@ private[board] object Repo:
     for
       row <- Sql.run(issues.filter(_.id == lift(id))).orInternal
       up  <- Sql.run(deps.filter(_.issueId == lift(id)).map(_.upstreamId)).orInternal
-      i   <- ZIO.foreach(row.headOption)(decode(_, up))
-    yield i
+    yield row.headOption.map(decode(_, up))
 
   def require(id: IssueId): Read[Issue] =
     get(id).someOrFail(AppError.notFound(s"issue #${id.value} 不存在"))
@@ -71,19 +71,17 @@ private[board] object Repo:
       rows <- Sql.run(issues.sortBy(_.updatedAt)(using Ord.desc)).orInternal
       ds   <- Sql.run(deps).orInternal
       up    = ds.groupMap(_.issueId)(_.upstreamId)
-      is   <- ZIO.foreach(rows)(r => decode(r, up.getOrElse(r.id, Nil)))
-    yield is
+    yield rows.map(r => decode(r, up.getOrElse(r.id, Nil)))
 
   def statuses(ids: List[IssueId]): Read[Map[IssueId, IssueStatus]] =
     if ids.isEmpty then ZIO.succeed(Map.empty)
     else
-      Sql.run(issues.filter(i => liftQuery(ids).contains(i.id)).map(i => (i.id, i.status))).orInternal.flatMap { rows =>
-        ZIO.foreach(rows)((id, s) => ZIO.fromOption(IssueStatus.parse(s)).orElseFail(corrupt(s"#${id.value} 状态 $s")).map(id -> _)).map(_.toMap)
-      }
+      Sql.run(issues.filter(i => liftQuery(ids).contains(i.id)).map(i => (i.id, i.status))).orInternal.map(_.toMap)
 
-  def titles(ids: List[IssueId]): Read[List[(IssueId, String, String)]] =
+  /** 这些 issue 的编号、标题与状态，按编号排。 */
+  def links(ids: List[IssueId]): Read[List[IssueLink]] =
     if ids.isEmpty then ZIO.succeed(Nil)
-    else Sql.run(issues.filter(i => liftQuery(ids).contains(i.id)).map(i => (i.id, i.title, i.status))).orInternal
+    else Sql.run(issues.filter(i => liftQuery(ids).contains(i.id)).map(i => IssueLink(i.id, i.title, i.status))).orInternal.map(_.sortBy(_.id.value))
 
   /** 依赖它的 issue。 */
   def downstream(id: IssueId): Read[List[IssueId]] =
@@ -115,7 +113,7 @@ private[board] object Repo:
 
   /** 负责或指派给这个 agent 的 issue。 */
   def ofAgent(agent: AgentId): Read[List[IssueId]] =
-    val key = Assignee.encode(Assignee.Agent(agent))
+    val key: Assignee = Assignee.Agent(agent)
     Sql.run(issues.filter(i => i.ownerId.exists(_ == lift(agent)) || i.assignee.exists(_ == lift(key))).map(_.id)).orInternal
 
   // ---- 时间线 ----

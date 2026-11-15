@@ -18,7 +18,7 @@ final case class TranscriptCtx(
     session: SessionId,
     runActive: Boolean,
     threads: List[SessionSummary],
-    answer: (Long, String, AnswerIn) => Future[Unit]
+    answer: (Long, CallId, AnswerIn) => Future[Unit]
 ):
   /** 委派调用开出（或续写）的 thread。 */
   def threadOf(c: CallView): Option[SessionSummary] =
@@ -97,7 +97,7 @@ final class TranscriptView:
   /** 参数与结果：按工具的展示方式画；可切到原文。 */
   private def toolDetail(c: CallView): HtmlElement =
     val raw     = Var(false)
-    val display = Display.of(c.display)
+    val display = c.display
     val result  = c.result
     def rendered: Modifier[HtmlElement] = display match
       case Display.Terminal if argString(c.args, "command").isDefined =>
@@ -255,7 +255,7 @@ final class TranscriptView:
 
   private def askBlock(entry: Long, c: CallView, ctx: TranscriptCtx): HtmlElement =
     c.pending match
-      case Some(p) if c.state == "suspended" => questionForm(entry, c, p.questions, ctx)
+      case Some(PendingView.Question(qs)) if c.state == CallState.Suspended => questionForm(entry, c, qs, ctx)
       case _ =>
         c.result match
           case Some(r) if !r.isError => div(cls := "flex max-w-[88%] flex-col gap-1.5 self-start rounded-2xl border border-dashed border-separator px-3.5 py-2.5 text-sm whitespace-pre-wrap", r.text)
@@ -264,20 +264,20 @@ final class TranscriptView:
 
   /** 停下来等用户批准的调用：显示工具与参数，待批准时给出拒绝、始终允许、批准（始终允许：以后同样的调用不再问，设置页可撤销）。 */
   private def approvalBlock(entry: Long, c: CallView, ctx: TranscriptCtx): HtmlElement =
-    val pendingNow = c.state == "suspended"
+    val pendingNow = c.state == CallState.Suspended
     val action     = new Action
     def decide(ok: Boolean, always: Boolean): Unit = action.run(ctx.answer(entry, c.id, AnswerIn(approved = Some(ok), always = always))): Unit
     val stateText = c.state match
-      case "suspended"       => "这次调用要你批准才执行"
-      case "approved"        => "已批准"
-      case "approved-always" => "已始终允许"
+      case CallState.Suspended      => "这次调用要你批准才执行"
+      case CallState.Approved       => "已批准"
+      case CallState.ApprovedAlways => "已始终允许"
       case _ if c.result.exists(_.isError) => "已拒绝或没执行"
       case _                 => "已提交决定"
     div(
       idAttr := Waits.approvalAnchor(c.id),
       cls := "flex scroll-mt-4 flex-col gap-2 self-stretch rounded-xl border border-warning/40 bg-surface p-3 shadow-sm",
       div(cls := "flex items-center gap-1.5 text-sm", Icon("ShieldQuestion", "size-4 shrink-0 text-warning"), span(stateText), span(cls := "font-mono text-muted", c.name)),
-      c.pending.flatMap(_.summary).map(s => div(cls := "text-sm whitespace-pre-wrap", s)),
+      c.pending.collect { case PendingView.Approval(s) => div(cls := "text-sm whitespace-pre-wrap", s) },
       toolDetail(c),
       action.errorView(),
       Option.when(pendingNow)(

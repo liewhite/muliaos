@@ -1,6 +1,6 @@
 package muliao.resources
 
-import muliao.contract.{AgentId, AgentName, RoleName}
+import muliao.contract.{AgentId, AgentName, RoleName, AssetKind}
 import muliao.exec.{RealPath, Sandbox}
 import muliao.platform.AppError
 import muliao.resources.access.*
@@ -14,7 +14,7 @@ import java.nio.file.Path
 final case class ToolGrant(name: String, access: muliao.toolkit.Access, by: Grant)
 
 /** 一项按名字分发的资源能不能用、能不能改，以及凭哪条规则。 */
-final case class AssetGrant(kind: Kind, name: String, owner: Owner, use: Grant, write: Option[Grant])
+final case class AssetGrant(kind: AssetKind, name: String, owner: Owner, use: Grant, write: Option[Grant])
 
 /** 一个 agent 最终能用的工具与资源（界面详情、get_agent、新建前预览）。 */
 final case class Effective(
@@ -117,7 +117,7 @@ object Resources:
 
     private def compute(p: Permissions, snap: Snapshot, broken: Option[String]): Effective =
       val tools = catalog.tools.flatMap { t =>
-        p.decide(Action.Use, Kind.Tool, t.name, Owner.Platform, Some(t.access)) match
+        p.decide(Action.Use, AssetKind.Tool, t.name, Owner.Platform, Some(t.access)) match
           case Decision.Allowed(g) => Some(ToolGrant(t.name, t.access, g))
           case _                   => None
       }
@@ -143,9 +143,9 @@ object Resources:
         usable   = eff.assets.map(g => (g.kind, g.name) -> g).toMap
       yield
         val shared = snap.memories.collect {
-          case m @ MemoryDoc(MemoryScope.Shared(n), file, content) if usable.contains(Kind.Memory -> n) =>
+          case m @ MemoryDoc(MemoryScope.Shared(n), file, content) if usable.contains(AssetKind.Memory -> n) =>
             val kind = if n == MemoryDoc.GlobalName then MemoryKind.Global else MemoryKind.Shared
-            MemoryBlock(n, kind, file, content, usable(Kind.Memory -> n).write.isDefined)
+            MemoryBlock(n, kind, file, content, usable(AssetKind.Memory -> n).write.isDefined)
         }.sortBy(b => (b.kind != MemoryKind.Global, b.name))
         val own = snap.privateMemory(a.name).map(m => MemoryBlock(a.name.value, MemoryKind.Private, m.file, m.content, editable = true))
         RunResources(
@@ -154,9 +154,9 @@ object Resources:
           permissions = p,
           tools = eff.tools.map(_.name).toSet,
           memories = shared ++ own,
-          skills = snap.skills.filter(s => usable.contains(Kind.Skill -> s.name)).map(s => SkillEntry(s, s.owner == Owner.Agent(a.name))).sortBy(_.doc.name),
-          mcps = snap.mcps.filter(m => usable.contains(Kind.Mcp -> m.name)).sortBy(_.name),
-          secrets = snap.secrets.filter(s => usable.contains(Kind.Secret -> s.key)).sortBy(_.key),
+          skills = snap.skills.filter(s => usable.contains(AssetKind.Skill -> s.name)).map(s => SkillEntry(s, s.owner == Owner.Agent(a.name))).sortBy(_.doc.name),
+          mcps = snap.mcps.filter(m => usable.contains(AssetKind.Mcp -> m.name)).sortBy(_.name),
+          secrets = snap.secrets.filter(s => usable.contains(AssetKind.Secret -> s.key)).sortBy(_.key),
           problems = snap.problems.filter(relevant(p, _)),
           accessBroken = access.broken.filter(_ => p.isAdmin),
           memoryLimit = settings.memoryLimit
@@ -176,7 +176,7 @@ object Resources:
           snap   <- store.snapshot
           p       = permsOf(a, access.config)
           ownDir  = paths.assets.resolve(a.name.value)
-          resourcePaths = (k: Kind, n: String, o: Owner) => resourcePath(snap, k, n, o).toList
+          resourcePaths = (k: AssetKind, n: String, o: Owner) => resourcePath(snap, k, n, o).toList
           granted =
             if p.isAdmin then List(paths.assets)
             else
@@ -193,12 +193,12 @@ object Resources:
     private def resolveAll(ps: List[Path]): IO[AppError, Chunk[RealPath]] =
       ZIO.foreachPar(Chunk.fromIterable(ps.distinct))(RealPath.resolve(_)).map(_.distinct)
 
-    private def resourcePath(snap: Snapshot, k: Kind, n: String, o: Owner): Option[Path] = k match
-      case Kind.Memory => snap.sharedMemory(n).map(_.file)
-      case Kind.Skill  => snap.skill(n).filter(_.owner == o).map(_.dir)
-      case Kind.Mcp    => snap.mcp(n).filter(_.owner == o).map(_.file)
-      case Kind.Secret => snap.secret(n).filter(_.owner == o).map(_.file)
-      case Kind.Tool   => None
+    private def resourcePath(snap: Snapshot, k: AssetKind, n: String, o: Owner): Option[Path] = k match
+      case AssetKind.Memory => snap.sharedMemory(n).map(_.file)
+      case AssetKind.Skill  => snap.skill(n).filter(_.owner == o).map(_.dir)
+      case AssetKind.Mcp    => snap.mcp(n).filter(_.owner == o).map(_.file)
+      case AssetKind.Secret => snap.secret(n).filter(_.owner == o).map(_.file)
+      case AssetKind.Tool   => None
 
     def admins: IO[AppError, List[AgentName]] =
       for

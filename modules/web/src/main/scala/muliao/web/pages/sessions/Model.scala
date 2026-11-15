@@ -5,39 +5,22 @@ import muliao.contract.*
 import scala.scalajs.js
 import scala.util.Try
 
-/** 会话时间线到展示块的整理：纯函数，与渲染分开。接口里的字符串状态在这里转成 enum。 */
+/** 会话时间线到展示块的整理：纯函数，与渲染分开。 */
 object Model:
 
-  /** 会话的工作状态。 */
-  enum Work:
-    case Running, Waiting, Idle
-
-  object Work:
-    def of(s: String): Work = s match
-      case "running" => Running
-      case "waiting" => Waiting
-      case _         => Idle
-
-  /** 会话来源（列表上的标签）。 */
-  enum Origin(val label: String):
-    case User    extends Origin("对话")
-    case Trigger extends Origin("触发")
-    case Thread  extends Origin("委派")
-    case Issue   extends Origin("Issue")
-
-  object Origin:
-    def of(s: String): Origin = s match
-      case "trigger" => Trigger
-      case "thread"  => Thread
-      case "issue"   => Issue
-      case _         => User
+  /** 会话来源在列表上的标签。 */
+  def originTag(o: OriginKind): String = o match
+    case OriginKind.User    => "对话"
+    case OriginKind.Trigger => "触发"
+    case OriginKind.Thread  => "委派"
+    case OriginKind.Issue   => "Issue"
 
   /** 会话列表的分类：每个来源恰好属于一类；「全部」不筛。 */
-  enum Filter(val label: String, val origins: List[String]):
+  enum Filter(val label: String, val origins: List[OriginKind]):
     case All  extends Filter("全部", Nil)
-    case Chat extends Filter("对话", List("user", "thread"))
-    case Iss  extends Filter("issue", List("issue"))
-    case Auto extends Filter("自动任务", List("trigger"))
+    case Chat extends Filter("对话", List(OriginKind.User, OriginKind.Thread))
+    case Iss  extends Filter("issue", List(OriginKind.Issue))
+    case Auto extends Filter("自动任务", List(OriginKind.Trigger))
 
   object Filter:
     def parse(s: String): Filter = values.find(_.toString == s).getOrElse(Chat)
@@ -57,7 +40,7 @@ object Model:
 
   /** 进行中（运行或等待）的会话置顶，其余按 agent 分组。 */
   def splitActive(list: List[SessionSummary]): (List[SessionSummary], List[SessionSummary]) =
-    list.partition(s => Work.of(s.state) != Work.Idle)
+    list.partition(_.state != WorkState.Idle)
 
   // ---- 工具调用 ----
 
@@ -75,15 +58,8 @@ object Model:
     case Some(_)              => ToolStatus.Done
     case None =>
       c.state match
-        case "running" | "approved" | "approved-always" | "pending" if live || runActive => ToolStatus.Running
-        case _                                                                        => ToolStatus.Unfinished
-
-  /** 结果怎么展示（后端按工具给出）。 */
-  enum Display:
-    case Plain, Terminal, Code, Diff, JsonData, Markdown, SharedFile
-
-  object Display:
-    def of(s: String): Display = values.find(_.toString == s).getOrElse(Plain)
+        case CallState.Running | CallState.Approved | CallState.ApprovedAlways | CallState.Pending if live || runActive => ToolStatus.Running
+        case _                                                                                                       => ToolStatus.Unfinished
 
   /** 调用参数里的一个字符串字段（命令、路径……）；不是 JSON 或没有就是 None。 */
   def argString(args: String, key: String): Option[String] =
@@ -106,7 +82,7 @@ object Model:
   /** share_file 一类工具的结果：交给用户的文件。 */
   def sharedFile(c: CallView): Option[FileView] =
     import zio.json.*
-    Option.when(Display.of(c.display) == Display.SharedFile)(c.result).flatten.filterNot(_.isError).flatMap(_.text.fromJson[FileView].toOption)
+    Option.when(c.display == Display.SharedFile)(c.result).flatten.filterNot(_.isError).flatMap(_.text.fromJson[FileView].toOption)
 
   // ---- 展示块 ----
 
@@ -147,9 +123,9 @@ object Model:
     case Notice(kind: String, text: String, at: Long)
     case Interrupted
 
-  private def isAsk(c: CallView): Boolean = c.name == "ask_user" && c.pending.forall(_.kind == "question")
+  private def isAsk(c: CallView): Boolean = c.name == "ask_user" && c.pending.forall(_.isInstanceOf[PendingView.Question])
   private def isApproval(c: CallView): Boolean =
-    c.pending.exists(_.kind == "approval") || c.state == "approved" || c.state == "approved-always"
+    c.pending.exists(_.isInstanceOf[PendingView.Approval]) || c.state == CallState.Approved || c.state == CallState.ApprovedAlways
 
   /** 一条时间线到展示块（工具调用与结果已由后端合在一起）。 */
   def blocks(item: TimelineItem): List[Block] = item.kind match

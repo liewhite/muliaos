@@ -2,7 +2,7 @@ package muliao.migrate
 
 import muliao.platform.AppError
 import muliao.platform.db.Database
-import muliao.resources.agents.AgentState
+import muliao.contract.{Assignee, Labeled}
 import zio.*
 
 import java.nio.file.Path
@@ -66,7 +66,8 @@ object NewDb:
       case Some(x)       => set(st, i, x)
       case null          => st.setNull(i, Types.NULL)
       case b: Boolean    => st.setInt(i, if b then 1 else 0)
-      case s: AgentState => st.setString(i, s.label)
+      case s: Labeled    => st.setString(i, s.label)
+      case a: Assignee   => st.setString(i, Assignee.encode(a))
       case x             => st.setObject(i, x)
 
   private def snake(name: String): String = name.flatMap(c => if c.isUpper then s"_${c.toLower}" else c.toString)

@@ -78,15 +78,13 @@ object AgentJobs:
     case Exited      extends State("已结束", Tone.Default)
     case Killed      extends State("被结束", Tone.Warning)
     case Interrupted extends State("被中断", Tone.Warning)
-    case Unknown(raw: String) extends State(raw, Tone.Default)
 
   object State:
-    def of(s: String): State = s match
-      case "running"     => Running
-      case "exited"      => Exited
-      case "killed"      => Killed
-      case "interrupted" => Interrupted
-      case other         => Unknown(other)
+    def of(s: JobStatus): State = s match
+      case JobStatus.Running     => Running
+      case JobStatus.Exited      => Exited
+      case JobStatus.Killed      => Killed
+      case JobStatus.Interrupted => Interrupted
 
   def view(id: AgentId): HtmlElement =
     val jobs = Remote("sessions")(Http.call(WorkspaceApi.listJobs)(id))
