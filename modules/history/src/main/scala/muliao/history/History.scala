@@ -34,7 +34,7 @@ trait History:
   def read(session: String): IO[AppError, SessionRead]
 
   /** agent 编号到显示名（删除了的也有名字；查不到用编号）。 */
-  def names(ids: Iterable[AgentId]): UIO[Map[AgentId, String]]
+  def names(ids: Iterable[AgentId]): UIO[AgentId => String]
 
   def zone: ZoneId
 
@@ -87,4 +87,4 @@ object History:
         tl   <- sessions.timeline(info.id)
       yield SessionRead(info, Reading.items(tl))
 
-    def names(ids: Iterable[AgentId]): UIO[Map[AgentId, String]] = agents.names(ids)
+    def names(ids: Iterable[AgentId]): UIO[AgentId => String] = agents.names(ids)

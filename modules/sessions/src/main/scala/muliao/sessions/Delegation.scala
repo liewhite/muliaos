@@ -75,7 +75,7 @@ private[sessions] final case class Delegations(kernel: Kernel, mailbox: Mailbox,
   def finish(d: DelegationId, thread: SessionInfo, outcome: Outcome): IO[AppError, Unit] =
     for
       row   <- db.read(Repo.delegation(d))
-      agent <- agents.get(thread.agent).map(_.name.value).orElseSucceed("?")
+      agent <- agents.names(List(thread.agent)).map(_(thread.agent))
       name   = threadName(thread)
       result = outcome match
                  case Outcome.Answered(a) => CallResult.ok(if a.isEmpty then "（没有文字回答）" else a)
@@ -161,10 +161,11 @@ private[sessions] final case class Delegations(kernel: Kernel, mailbox: Mailbox,
     for
       rows <- db.read(Repo.threadsOf(requester))
       st   <- states.states(rows.map(_.id))
+      ns   <- agents.names(rows.map(_.agentId))
       out <- ZIO.foreach(rows) { r =>
                for
                  i      <- SessionInfo.decode(r)
-                 agent  <- agents.get(r.agentId).map(_.name.value).orElseSucceed(r.agentId.value)
+                 agent   = ns(r.agentId)
                  run    <- db.read(Repo.lastRun(r.id))
                  answer <- lastAnswer(r.id)
                yield ThreadView(

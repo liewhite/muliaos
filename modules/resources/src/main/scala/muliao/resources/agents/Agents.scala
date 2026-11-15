@@ -46,8 +46,8 @@ trait Agents:
   /** 按编号取（含已删除的，供历史显示名字）。 */
   def get(id: AgentId): IO[AppError, AgentRecord]
 
-  /** 编号对应的显示名（含已删除的）；查不到的编号（含查询失败）显示编号本身，所以对任何编号取值都有结果。 */
-  def names(ids: Iterable[AgentId]): UIO[Map[AgentId, String]]
+  /** 编号对应的显示名（含已删除的）；查不到的编号（含查询失败）显示编号本身。 */
+  def names(ids: Iterable[AgentId]): UIO[AgentId => String]
 
   /** 按名字找现存的 agent（不分大小写）。 */
   def find(name: String): IO[AppError, Option[AgentRecord]]
@@ -124,11 +124,11 @@ object Agents:
     def get(id: AgentId): IO[AppError, AgentRecord] =
       db.read(AgentRepo.byId(id)).someOrFail(AppError.notFound(s"没有编号为 ${id.value} 的 agent"))
 
-    def names(ids: Iterable[AgentId]): UIO[Map[AgentId, String]] =
+    def names(ids: Iterable[AgentId]): UIO[AgentId => String] =
       db.read(AgentRepo.byIds(ids.toSet))
         .map(_.map(a => a.id -> a.name.value).toMap)
         .catchAll(e => ZIO.logWarning(s"查 agent 名字失败，先显示编号：${e.message}").as(Map.empty))
-        .map(_.withDefault(_.value))
+        .map(ns => id => ns.getOrElse(id, id.value))
 
     def find(name: String): IO[AppError, Option[AgentRecord]] =
       db.read(AgentRepo.liveByKey(AgentRecord.keyOf(name.trim))).map(_.filter(_.live))

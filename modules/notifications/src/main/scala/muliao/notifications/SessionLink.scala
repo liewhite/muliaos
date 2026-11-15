@@ -47,7 +47,7 @@ object SessionLink:
         ZIO.foreachDiscard(SessionRules.wanted(e)) { w =>
           for
             info <- sessions.info(w.session)
-            name <- agents.get(info.agent).map(_.name.value).orElseSucceed(info.agent.value)
+            name <- agents.names(List(info.agent)).map(_(info.agent))
             _    <- n.notify(SessionRules.notice(w, name, info.title))
           yield ()
         }

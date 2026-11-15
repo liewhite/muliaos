@@ -7,7 +7,7 @@ import muliao.resources.access.BuiltinRole
 import muliao.contract.AgentState
 import muliao.resources.agents.{AgentRecord, Agents, NewAgent}
 import muliao.contract.Thinking
-import muliao.resources.tree.Owner
+import muliao.resources.tree.{AssetPath, Owner}
 import muliao.resources.vault.{Actor, Vault}
 import muliao.toolkit.*
 import zio.*
@@ -149,7 +149,7 @@ object AgentTools:
       (for
         thinking <- ZIO.fromEither(Thinking.parse(in.thinking)).mapError(AppError.invalid)
         rec <- agents.create(NewAgent(in.name, in.description, in.model, thinking, in.group, in.roles.map(RoleName.wrap), in.allow, in.deny))
-      yield json(Created(rec.name.value, rec.id.value, paths.workspace(rec.id).toString, paths.assets.resolve(rec.name.value).toString)))
+      yield json(Created(rec.name.value, rec.id.value, paths.workspace(rec.id).toString, paths.assets.resolve(AssetPath.ownerDir(Owner.Agent(rec.name))).toString)))
         .mapError(fail)
     }
 

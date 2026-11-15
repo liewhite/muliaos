@@ -181,7 +181,7 @@ object Board:
 
     // ---- 读 ----
 
-    private def summaries(issues: List[Issue], statusOf: IssueId => Option[IssueStatus], ns: Map[AgentId, String]): IO[AppError, List[IssueSummary]] =
+    private def summaries(issues: List[Issue], statusOf: IssueId => Option[IssueStatus], ns: AgentId => String): IO[AppError, List[IssueSummary]] =
       for
         links  <- sessions.issueSessions(issues.filter(_.assignedAgent.isDefined).map(_.id))
         byPair  = links.map(l => (l.issue, l.agent) -> l.session).toMap
