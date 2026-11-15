@@ -78,7 +78,7 @@
 - **出站 HTTP**：一律经 `OutboundHttp`（系统代理及其例外列表、统一 User-Agent、状态码与连接错误分类），不直接用 zio-http 客户端。`send`/`open` 只把 2xx 当成功；要按对方契约自己解读状态码（跟随跳转、区分错误体）用 `exchange`。
 - **接口**：在 contract 里基于 `Api.base`/`Api.secure` 声明，服务端用 `Endpoints.secured(逻辑)` 得到 `Route`；输入有两个以上同类型、容易传反的字段（多个查询参数、文件名加类型）用 `.mapTo[case class]` / `.mapInTo[case class]` 收成一个类型；「编号 + 请求体」这种类型各不相同的二元组照旧。实时连接（SSE）在 contract 声明为 `Feed[输入, 事件]`（地址加事件名，data 是事件的 JSON），服务端 `feed.securedFeed(建订阅)`（连接帧 ready/ping 见 `Sse`），前端 `Live.frames(feed)(输入)`，登录校验由 `HttpServer.serve` 统一套上，领域不经手登录；不要登录的用 `Route.unsecured`。各领域的 `XHttp(服务...).routes` 由组装入口直接调用，不做成 layer。
 - **工具**：静态定义 `val XxxDef = ToolDef[Ctx, In](名字, 说明, Access, Scheduling, in => Display...)`（参数类型 `In` 派生 zio-schema，字段说明用 `@description`，敏感字段标 `@sensitive`；`Labeled` 枚举与 `Newtype` 编号自带 zio-schema，直接当字段类型；界面展示 `Display` 是带数据的 ADT，命令、路径、委派对象由这个函数从参数取，前端不按字段名猜），拿到服务后 `XxxDef { (in, ctx) => ... }` 得到 `Tool`。每个领域导出 `specs`（全部定义的 `spec`），组装入口据此静态给出全部内置工具目录；`Tool(...)(...)` 只在测试里用。
-- **命令**：`Exec.run(spec, timeout)` / `Exec.start(spec)`；走标准输入输出对话的（本地 MCP server）用 `Exec.attach(spec)`；沙箱 `Sandbox.Confined(可写, 私有, 只读)` 只收 `RealPath`（`RealPath.resolve` 解析出的真实路径），可写范围由调用方按权限算好；平台自己判断能不能写用同一份规则的 `permits`。「解析真实路径后是否在某根目录下」一律用 `RealPath.under(根, 路径)`。
+- **命令**：起命令并读完输出只有一个入口 `Exec.follow(spec, Stderr.Merged | Separate, stdin)(每行 => …)`，得到退出码：先打码再分行、主进程退出后限时读完、被中断就整组结束都在里面做，前台命令（`Exec.run`）、前置检查、常驻命令、后台任务都用它，调用方要限时就 `.timeout`、要停就中断；走标准输入输出对话的（本地 MCP server）用 `Exec.attach(spec)`；沙箱 `Sandbox.Confined(可写, 私有, 只读)` 只收 `RealPath`（`RealPath.resolve` 解析出的真实路径），可写范围由调用方按权限算好；平台自己判断能不能写用同一份规则的 `permits`。「解析真实路径后是否在某根目录下」一律用 `RealPath.under(根, 路径)`。
 - **可选配置段**：配了才有的功能（网页工具、语音转写）用 `ConfigFile.optionalSection`，文件里没有这一段得到 `None`。
 
 ## 模型接入与外部服务（models 模块）
@@ -118,9 +118,9 @@
 
 ## 工作区领域的接法（#869，给下游领域与组装入口）
 - **组装**：`Workspace.layer`（要 `PageSigner.fromSecret(server.cookieSecret)`）起全部服务；`Workspace.contribution` 给出 8 个工具（静态定义在 `Workspace.specs`）、skill 脚本的批准执行者 `skill_run`、agent 忙碌判断与删除清理；`Workspace.jobControl` 是会话等后台任务时的状态与取消。启动顺序：`Sessions.start` 之后调 `Jobs.recover`（上次没收尾的后台任务标为被中断、不盲杀，补交结局）。接口 `WorkspaceHttp(...).routes`，其中页面文件 `/site/<agent>/<page>/<签名>/<文件>` 不要登录，带隔离响应头（CSP sandbox、nosniff、允许跨源读取）。
-- **以 agent 身份起命令**：一律经 `AgentExec.command(agent, program, secrets, SecretUse)` 得到 `CommandSpec`（工作目录、写沙箱、secret 注入），再 `Exec.run/start`；输出可经 `annotate` 补写沙箱拦截说明。触发器的前置检查与常驻命令用它，不自己算可写范围。
+- **以 agent 身份起命令**：一律经 `AgentExec.command(agent, program, secrets, SecretUse)` 得到 `CommandSpec`（工作目录、写沙箱、secret 注入），再 `Exec.run/follow`；输出可经 `annotate` 补写沙箱拦截说明。触发器的前置检查与常驻命令用它，不自己算可写范围。
 - **文件读写**：`FileAccess` 按可写范围检查（平台私有文件对非 admin 读写都不行），每次写先经 `AssetGuard.check` 得到 `Vetted`（只有它能造）：`Plain` 是资源目录外的文件、照写，`Asset` 交给 `AssetStore.commit`；平台自己生成的资源文件用 `AssetStore.write(资源文件, 内容)`。读过的文本文件都记指纹；`WriteMode.Overwrite` 要求本次运行读过（读过的指纹按运行记在内存里），`Patch` 不要求。`AssetStore` 写文件覆盖已有文件时沿用原权限位（skill 脚本不丢可执行位）。
-- **后台任务**：输出在工作目录 `jobs/<编号>.log`；关停时结束并标被中断，结局下次启动补交（表 `job` 的 `reported`）。
+- **后台任务**：输出在工作目录 `jobs/<编号>.log`；每个任务是 fork 在 `Jobs` layer 的（并行收尾的）scope 里的一个 fiber，`job_kill` 经它的 `stop` 结束（记被结束）；关停时 scope 中断它、进程由 `Exec.follow` 结束，标被中断，结局下次启动补交（表 `job` 的 `reported`）。
 
 ## 看板（board，#871）
 - **组装**：`Board.layer`（要 `Database`、`ChangeBus`、`Sessions`、`Notifications`、`Agents`、`GeneralSettings`）；`BoardLink.contribution`：6 个 issue 工具（静态定义在 `BoardTools.specs`）、会话事件订阅、删除 agent 时的清理（`AgentHook`）；`BoardHttp(...).routes` 交给 HTTP 服务（接口声明在 contract 的 `BoardApi`）。改动后广播主题 `issues`。

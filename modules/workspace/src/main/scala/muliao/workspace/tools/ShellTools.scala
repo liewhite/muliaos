@@ -1,7 +1,7 @@
 package muliao.workspace.tools
 
 import muliao.contract.JobId
-import muliao.exec.{Exec, Program}
+import muliao.exec.{Ending, Exec, Program}
 import muliao.platform.AppError
 import muliao.resources.vault.SecretUse
 import muliao.sessions.RunContext
@@ -38,7 +38,9 @@ final class CommandRunner(exec: AgentExec, jobs: Jobs):
       out <- mode match
                case RunMode.Foreground(timeout) =>
                  Exec.run(cmd.spec, timeout).flatMap { f =>
-                   val head = if f.timedOut then s"killed after ${timeout.toSeconds}s timeout" else s"exit_code: ${f.exitCode}"
+                   val head = f.ending match
+                     case Ending.TimedOut     => s"killed after ${timeout.toSeconds}s timeout"
+                     case Ending.Exited(code) => s"exit_code: $code"
                    exec.annotate(ctx.agent, cmd.scope, f.output).map(o => if o.isEmpty then head else s"$head\n$o")
                  }
                case RunMode.Background(hb) =>

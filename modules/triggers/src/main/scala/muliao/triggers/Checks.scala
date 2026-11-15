@@ -1,7 +1,7 @@
 package muliao.triggers
 
 import muliao.contract.{AgentId, FireWhen}
-import muliao.exec.{Exec, Masker, Program}
+import muliao.exec.{Exec, Line, Program, Stderr}
 import muliao.platform.AppError
 import muliao.resources.vault.SecretUse
 import muliao.workspace.AgentExec
@@ -41,35 +41,22 @@ object Checks:
     exec.command(agent, program, p.secrets, SecretUse.Shell).either.flatMap {
       case Left(e) => ZIO.succeed(Left(s"起不来：${e.message}"))
       case Right(cmd) =>
-        ZIO
-          .scoped(
-            for
-              c       <- Exec.attach(cmd.spec)
-              mask     = Masker(cmd.spec.secrets)
-              out     <- Ref.make(Chunk.empty[String])
-              err     <- Ref.make(Chunk.empty[String])
-              outDone <- Promise.make[Nothing, Unit]
-              errDone <- Promise.make[Nothing, Unit]
-              _       <- Streams.background(c.stdout.map(mask.mask).runForeach(l => out.update(_ :+ l)) *> outDone.succeed(()))
-              _       <- Streams.background(c.stderr.runForeach(l => err.update(_ :+ l)) *> errDone.succeed(()))
-              _       <- ZIO.foreachDiscard(stdin)(c.send).ignore *> c.closeInput
-              code    <- c.exitCode
-              _       <- (outDone.await *> errDone.await).timeout(Exec.DrainGrace)
-              o       <- out.get.map(_.mkString("\n"))
-              e       <- err.get.map(_.mkString("\n"))
-            yield (code, o, e)
-          )
-          .timeout(timeout)
+        Ref
+          .make(Chunk.empty[Line])
+          .flatMap(seen => Exec.follow(cmd.spec, Stderr.Separate, Chunk.fromIterable(stdin))(l => seen.update(_ :+ l)).timeout(timeout).zip(seen.get))
           .flatMap {
-            case None => ZIO.succeed(Left(s"超过 ${timeout.toSeconds} 秒没跑完，已结束"))
-            case Some((0, o, _)) => ZIO.succeed(Right(o))
-            case Some((code, o, e)) =>
-              exec.annotate(agent, cmd.scope, List(e, o).filter(_.trim.nonEmpty).mkString("\n")).map { text =>
-                Left(s"退出码 $code" + (if text.trim.isEmpty then "" else s"，输出：\n${clip(text.trim)}"))
+            case (None, _)        => ZIO.succeed(Left(s"超过 ${timeout.toSeconds} 秒没跑完，已结束"))
+            case (Some(0), lines) => ZIO.succeed(Right(text(lines) { case Line.Out(t) => t }))
+            case (Some(code), lines) =>
+              val both = List(text(lines) { case Line.Err(t) => t }, text(lines) { case Line.Out(t) => t }).filter(_.trim.nonEmpty).mkString("\n")
+              exec.annotate(agent, cmd.scope, both).map { shown =>
+                Left(s"退出码 $code" + (if shown.trim.isEmpty then "" else s"，输出：\n${clip(shown.trim)}"))
               }
           }
           .catchAll(e => ZIO.succeed(Left(s"起不来：${e.message}")))
     }
+
+  private def text(lines: Chunk[Line])(pick: PartialFunction[Line, String]): String = lines.collect(pick).mkString("\n")
 
   private def clip(s: String): String =
     if s.length <= ShowMax then s else "…" + s.takeRight(ShowMax)

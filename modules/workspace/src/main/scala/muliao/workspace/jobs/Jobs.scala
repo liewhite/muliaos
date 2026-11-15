@@ -1,7 +1,7 @@
 package muliao.workspace.jobs
 
 import muliao.contract.{AgentId, JobId, JobStatus, JobView, SessionId, Topic}
-import muliao.exec.{Exec, RunningCommand, Sandbox}
+import muliao.exec.{Exec, Sandbox, Stderr}
 import muliao.platform.AppError
 import muliao.platform.db.{Database, Tx}
 import muliao.platform.events.ChangeBus
@@ -18,25 +18,27 @@ import java.nio.file.{Files, Path}
 /** 后台任务怎么结束的（还在跑的没有这个值）。`verb` 用在结局与 job_status 的文字里。 */
 enum Ended(val status: JobStatus, val verb: String):
   case Exited(code: Int) extends Ended(JobStatus.Exited, "结束")
-  /** 被结束（job_kill、界面、会话被停止）；`code` 是结束后的退出码 */
-  case Killed(code: Int) extends Ended(JobStatus.Killed, "被结束")
+  /** 被结束（job_kill、界面、会话被停止） */
+  case Killed extends Ended(JobStatus.Killed, "被结束")
   /** 服务关停或崩溃时它还在跑：平台没有接管它 */
   case Interrupted extends Ended(JobStatus.Interrupted, "被中断")
 
   def exitCode: Option[Int] = this match
-    case Exited(c)   => Some(c)
-    case Killed(c)   => Some(c)
-    case Interrupted => None
+    case Exited(c)            => Some(c)
+    case Killed | Interrupted => None
 
-  /** 「退出码 0，运行了 3 分钟」这样的一句；`ran` 是「，运行了 …」或空。 */
-  def detail(ran: String): String = exitCode.fold("服务重启时它还在跑")(c => s"退出码 $c$ran")
+  /** 「退出码 0，运行了 3 分钟」这样的一句；`ran` 是「运行了 …」。 */
+  def detail(ran: String): String = this match
+    case Exited(c)   => s"退出码 $c，$ran"
+    case Killed      => ran
+    case Interrupted => "服务重启时它还在跑"
 
 object Ended:
   /** 从库里的状态与退出码还原：还在跑的是 None（结束了却没有退出码的按被中断算）。 */
   def of(row: JobRow): Option[Ended] = (row.state, row.exitCode) match
     case (JobStatus.Running, _)      => None
     case (JobStatus.Exited, Some(c)) => Some(Exited(c))
-    case (JobStatus.Killed, Some(c)) => Some(Killed(c))
+    case (JobStatus.Killed, _)       => Some(Killed)
     case _                           => Some(Interrupted)
 
 /** 谁起的后台任务：结局与心跳回到这个会话。 */
@@ -84,17 +86,17 @@ object Jobs:
         exec     <- ZIO.service[AgentExec]
         paths    <- ZIO.service[ResourcePaths]
         registry <- Ref.make(Map.empty[JobId, Live])
-        down     <- Ref.make(false)
-        jobs      = Impl(db, bus, sessions, exec, paths, registry, down)
-        _        <- ZIO.addFinalizer(jobs.shutdown)
-      yield jobs
+        // 关停时各任务并行收尾（每个都可能要等 TERM 之后的宽限）
+        scope <- ZIO.scopeWith(_.forkWith(ExecutionStrategy.Parallel))
+        _ <- ZIO.addFinalizer(registry.get.flatMap(all => ZIO.when(all.nonEmpty)(ZIO.logInfo(s"服务关停，结束 ${all.size} 个后台任务"))))
+      yield Impl(db, bus, sessions, exec, paths, registry, scope)
     )
 
   /** 日志文件（相对工作目录）。 */
   def logName(id: JobId): String = s"jobs/${id.value}.log"
 
-  /** 一个在跑的任务。 */
-  private final case class Live(agent: AgentId, command: RunningCommand, scope: Scope.Closeable, killed: Ref[Boolean], writable: Sandbox.Confined)
+  /** 一个在跑的任务：`stop` 完成就结束它。 */
+  private final case class Live(agent: AgentId, writable: Sandbox.Confined, stop: Promise[Nothing, Unit])
 
   private final case class Impl(
       db: Database,
@@ -103,7 +105,7 @@ object Jobs:
       exec: AgentExec,
       paths: ResourcePaths,
       registry: Ref[Map[JobId, Live]],
-      down: Ref[Boolean]
+      scope: Scope
   ) extends Jobs:
 
     private val now = Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -126,30 +128,32 @@ object Jobs:
 
     private def launch(owner: JobOwner, cmd: AgentCommand, id: JobId, log: Path): IO[AppError, Unit] =
       for
-        out     <- ZIO.attemptBlocking { Files.createDirectories(log.getParent); FileOutputStream(log.toFile, true) }.mapError(e => AppError.internal(s"建日志 $log 失败", e))
-        scope   <- Scope.make
-        running <- Exec.start(cmd.spec).provideEnvironment(ZEnvironment(scope)).tapError(_ => scope.close(Exit.unit) *> ZIO.succeed(out.close()))
-        killed  <- Ref.make(false)
-        _       <- registry.update(_.updated(id, Live(owner.agent, running, scope, killed, cmd.scope)))
-        _       <- watch(id, running, scope, killed, out).forkDaemon
+        out  <- ZIO.attemptBlocking { Files.createDirectories(log.getParent); FileOutputStream(log.toFile, true) }.mapError(e => AppError.internal(s"建日志 $log 失败", e))
+        stop <- Promise.make[Nothing, Unit]
+        _    <- registry.update(_.updated(id, Live(owner.agent, cmd.scope, stop)))
+        _    <- watch(id, cmd, out, stop).forkIn(scope)
       yield ()
 
-    /** 把输出写进日志，等它结束，记下结局并交回会话（服务正在关停时由关停收尾，这里不管）。 */
-    private def watch(id: JobId, running: RunningCommand, scope: Scope.Closeable, killed: Ref[Boolean], out: OutputStream): UIO[Unit] =
-      val copy = ZIO
-        .acquireReleaseWith(ZIO.succeed(out))(o => ZIO.attemptBlocking(o.close()).ignore) { o =>
-          running.output.runForeachChunk(c => ZIO.attemptBlocking { o.write(c.mkString.getBytes(StandardCharsets.UTF_8)); o.flush() }.orDie)
+    /** 把输出写进日志，等它自己结束或被结束，记下结局并交回会话。服务关停时它被中断：进程由执行层结束，标为被中断，
+      * 结局留到下次启动时交回（那时会话领域已经起来了）。
+      */
+    private def watch(id: JobId, cmd: AgentCommand, out: OutputStream, stop: Promise[Nothing, Unit]): UIO[Unit] =
+      def write(text: String): UIO[Unit] =
+        ZIO
+          .attemptBlocking { out.write((text + "\n").getBytes(StandardCharsets.UTF_8)); out.flush() }
+          .catchAll(e => ZIO.logWarning(s"写后台任务 ${id.value} 的日志出错：${e.getMessage}"))
+      val ran: UIO[Ended] = Exec
+        .follow(cmd.spec, Stderr.Merged)(l => write(l.text))
+        .map(Ended.Exited(_))
+        .catchAll(e => write(s"[muliao] ${e.message}").as(Ended.Exited(-1)))
+        .race(stop.await.as(Ended.Killed))
+      ZIO
+        .acquireReleaseWith(ZIO.succeed(out))(o => ZIO.attemptBlocking(o.close()).ignore)(_ => ran)
+        .onInterrupt(registry.update(_ - id) *> end(id, Ended.Interrupted, reported = false))
+        .flatMap { ended =>
+          registry.update(_ - id) *>
+            settle(id, ended).catchAll(e => ZIO.logError(s"后台任务 ${id.value} 收尾失败（重启时补交）：${e.message}"))
         }
-        .catchAllCause(c => ZIO.logWarningCause(s"写后台任务 ${id.value} 的日志出错", c))
-      for
-        _    <- copy
-        code <- running.exitCode
-        _    <- scope.close(Exit.unit)
-        k    <- killed.get
-        _    <- registry.update(_ - id)
-        d    <- down.get
-        _    <- ZIO.unless(d)(settle(id, if k then Ended.Killed(code) else Ended.Exited(code)).catchAll(e => ZIO.logError(s"后台任务 ${id.value} 收尾失败（重启时补交）：${e.message}")))
-      yield ()
 
     private def end(id: JobId, ended: Ended, reported: Boolean): UIO[Unit] =
       now.flatMap(t => write(Repo.setOutcome(id, ended.status, ended.exitCode, t) *> ZIO.when(reported)(Repo.setReported(id)))).unit.catchAll(e => ZIO.logError(s"记后台任务 ${id.value} 的结局失败：${e.message}"))
@@ -160,23 +164,21 @@ object Jobs:
     /** 把结局作为事件交回发起会话（会话已经不等了就不投），记为已交回。 */
     private def report(row: JobRow, ended: Ended): IO[AppError, Unit] =
       for
-        text <- endText(row, ended)
+        t    <- now
+        text <- endText(row, ended, t)
         _    <- sessions.closeJobWait(row.id, Some(Letter(Source.Event(EventKind.Job), text)))
         _    <- db.write(Repo.setReported(row.id))
       yield ()
 
-    /** 「，运行了 …」：从开始算到 `until`。 */
-    private def ran(row: JobRow, until: Long): String = s"，运行了 ${Durations.human(until - row.startedAt)}"
+    /** 「运行了 …」：已结束的算到结束时间，还在跑的算到 `now`。 */
+    private def ranSoFar(row: JobRow, now: Long): String = s"运行了 ${Durations.human(row.endedAt.getOrElse(now) - row.startedAt)}"
 
-    /** 已结束的算到结束时间，还在跑的算到 `now`。 */
-    private def ranSoFar(row: JobRow, now: Long): String = ran(row, row.endedAt.getOrElse(now))
-
-    private def endText(row: JobRow, ended: Ended): IO[AppError, String] =
+    private def endText(row: JobRow, ended: Ended, now: Long): IO[AppError, String] =
       val advice = ended match
         case Ended.Interrupted =>
           "：服务正常关停时会结束它，意外退出时进程可能还在（平台没有接管，也没有杀它）。看日志和相关进程确认结果，需要的话重新起"
         case _ => ""
-      val head = s"[后台任务 ${row.id.value} ${ended.verb}] ${ended.detail(row.endedAt.fold("")(ran(row, _)))}$advice。"
+      val head = s"[后台任务 ${row.id.value} ${ended.verb}] ${ended.detail(ranSoFar(row, now))}$advice。"
       tail(row.id, 20).map { last =>
         val shown = if last.isBlank then "（没有输出）" else last
         s"$head\n命令：${row.label}\n日志：${logName(row.id)}（在工作目录下），最后几行：\n$shown"
@@ -192,7 +194,7 @@ object Jobs:
         t    <- now
         last <- tail(row.id, tailLines)
       yield
-        val state = Ended.of(row).fold(s"运行中${ranSoFar(row, t)}")(e => s"${e.verb}，${e.detail(ranSoFar(row, t))}")
+        val state = Ended.of(row).fold(s"运行中，${ranSoFar(row, t)}")(e => s"${e.verb}，${e.detail(ranSoFar(row, t))}")
         s"后台任务 ${row.id.value}：$state\n命令：${row.label}\n日志：${logName(row.id)}，最后 $tailLines 行：\n${if last.isBlank then "（没有输出）" else last}"
 
     def brief(id: JobId): IO[AppError, String] =
@@ -200,11 +202,11 @@ object Jobs:
         row  <- db.read(Repo.job(id)).someOrFail(AppError.notFound(s"没有后台任务 ${id.value}"))
         t    <- now
         last <- tail(id, 5)
-      yield s"${ranSoFar(row, t).drop(1)}；日志最后几行：\n${if last.isBlank then "（还没有输出）" else last}"
+      yield s"${ranSoFar(row, t)}；日志最后几行：\n${if last.isBlank then "（还没有输出）" else last}"
 
     def kill(id: JobId): UIO[Boolean] =
       registry.get.map(_.get(id)).flatMap {
-        case Some(j) => j.killed.set(true) *> j.command.kill.as(true)
+        case Some(j) => j.stop.succeed(())
         case None    => ZIO.succeed(false)
       }
 
@@ -241,17 +243,6 @@ object Jobs:
         mine <- registry.get.map(_.filter(_._2.agent == agent).keys.toList)
         _    <- ZIO.foreachDiscard(mine)(kill)
         _    <- write(Repo.deleteJobsOf(agent))
-      yield ()
-
-    /** 服务关停：结束全部在跑的任务，标为被中断，结局留到下次启动时交回（那时会话领域已经起来了）。 */
-    def shutdown: UIO[Unit] =
-      for
-        _   <- down.set(true)
-        all <- registry.getAndSet(Map.empty)
-        _ <- ZIO.foreachParDiscard(all.toList) { (id, j) =>
-               j.command.kill *> j.scope.close(Exit.unit) *> end(id, Ended.Interrupted, reported = false)
-             }
-        _ <- ZIO.when(all.nonEmpty)(ZIO.logInfo(s"服务关停，结束了 ${all.size} 个后台任务"))
       yield ()
 
 /** 读日志文件的最后几行（只读文件末尾一段，日志再大也不慢）。 */

@@ -1,7 +1,7 @@
 package muliao.triggers
 
 import muliao.contract.{AgentId, FaultSource, TriggerId, TriggerName}
-import muliao.exec.{Exec, Masker, Program}
+import muliao.exec.{Exec, Line, Program, Stderr}
 import muliao.platform.AppError
 import muliao.resources.vault.SecretUse
 import zio.*
@@ -42,56 +42,47 @@ private[triggers] final case class Streams(core: Core, scope: Scope, hosted: Ref
       }
     }
 
-  /** 托管一条：命令一直重起，事件交给消费方。 */
-  private def host(id: TriggerId, key: Streams.Key): UIO[Nothing] =
+  /** 托管一条：命令一直重起（按 [[Streams.restart]] 退避），事件交给消费方。 */
+  private def host(id: TriggerId, key: Streams.Key): UIO[Any] =
     for
       queue <- Queue.bounded[String](tuning.queueLines)
       fails <- Ref.make(0)
       _     <- health.update(_.updated(id, Health(None, 0)))
       _     <- consume(id, key, queue).fork
-      n     <- (runOnce(id, key, queue, fails) *> backoff(fails)).forever
+      n     <- runOnce(id, key, queue, fails).repeat(Streams.restart(tuning))
     yield n
 
-  private def backoff(fails: Ref[Int]): UIO[Unit] =
-    fails.get.flatMap { n =>
-      val wait = if n <= 1 then tuning.restartFirst else (tuning.restartFirst * math.pow(2, (n - 1).min(30).toDouble)).min(tuning.restartMax)
-      Clock.sleep(wait.min(tuning.restartMax))
-    }
-
-  /** 起一次命令直到它退出；没跑到稳定就退出算一次失败，连续失败够数记脚本故障。 */
-  private def runOnce(id: TriggerId, key: Streams.Key, queue: Queue[String], fails: Ref[Int]): UIO[Unit] =
+  /** 起一次命令直到它退出，得到它跑没跑稳；没跑到稳定就退出算一次失败，连续失败够数记脚本故障。 */
+  private def runOnce(id: TriggerId, key: Streams.Key, queue: Queue[String], fails: Ref[Int]): UIO[Boolean] =
     val log = paths.workspace(key.agent).resolve(Streams.logName(key.name))
-    val attempt: IO[AppError, Int] = ZIO.scoped(
+    def attempt(steady: Promise[Nothing, Unit]): IO[AppError, Int] = ZIO.scoped(
       for
-        cmd    <- exec.command(key.agent, Program.Shell(key.mode.command), key.mode.secrets, SecretUse.Shell)
-        c      <- Exec.attach(cmd.spec)
-        _      <- c.closeInput
-        at     <- now
-        _      <- fails.get.flatMap(n => health.update(_.updated(id, Health(Some(at), n))))
-        _      <- (Clock.sleep(tuning.stableAfter) *> stable(id, key, fails)).forkScoped
-        errRead <- Promise.make[Nothing, Unit]
-        _      <- Streams.background(c.stderr.runForeach(line => Streams.append(log, line, tuning.stderrMaxBytes)) *> errRead.succeed(()))
-        mask    = Masker(cmd.spec.secrets)
-        read   <- Promise.make[Nothing, Unit]
-        _      <- Streams.background(c.stdout.map(mask.mask).filter(_.trim.nonEmpty).runForeach(queue.offer) *> read.succeed(()))
-        code   <- c.exitCode
-        // 主进程退出后限时读完余下的输出（留在后台的子进程占着输出不放时不等它）
-        _      <- (read.await *> errRead.await).timeout(Exec.DrainGrace)
+        cmd  <- exec.command(key.agent, Program.Shell(key.mode.command), key.mode.secrets, SecretUse.Shell)
+        at   <- now
+        _    <- fails.get.flatMap(n => health.update(_.updated(id, Health(Some(at), n))))
+        _    <- (Clock.sleep(tuning.stableAfter) *> stable(id, key, fails) *> steady.succeed(())).forkScoped
+        code <- Exec.follow(cmd.spec, Stderr.Separate) {
+                  case Line.Out(l) => ZIO.when(l.trim.nonEmpty)(queue.offer(l))
+                  case Line.Err(l) => Streams.append(log, l, tuning.stderrMaxBytes)
+                }
       yield code
     )
-    attempt.either.flatMap { r =>
-      val why = r.fold(e => s"起不来：${e.message}", code => s"退出码 $code")
-      for
-        _ <- health.update(_.updatedWith(id)(_.map(_.copy(runningSince = None))))
-        n <- fails.updateAndGet(_ + 1)
-        _ <- health.update(_.updatedWith(id)(_.map(_.copy(failures = n))))
-        _ <- Streams.append(log, s"[muliao] 命令结束（$why），第 $n 次连续没跑稳", tuning.stderrMaxBytes)
-        _ <- ZIO.when(n >= tuning.failuresToFault)(
-               load(id).someOrFail(AppError.notFound("触发器已删除")).flatMap(t =>
-                 recordFault(t, FaultSource.Stream, s"常驻命令连续 $n 次没跑满 ${tuning.stableAfter.toSeconds} 秒就退出（最后一次：$why）。标准错误见工作目录 ${Streams.logName(key.name)}")
-               ).ignore
-             )
-      yield ()
+    Promise.make[Nothing, Unit].flatMap { steady =>
+      attempt(steady).either.flatMap { r =>
+        val why = r.fold(e => s"起不来：${e.message}", code => s"退出码 $code")
+        for
+          _ <- health.update(_.updatedWith(id)(_.map(_.copy(runningSince = None))))
+          n <- fails.updateAndGet(_ + 1)
+          _ <- health.update(_.updatedWith(id)(_.map(_.copy(failures = n))))
+          _ <- Streams.append(log, s"[muliao] 命令结束（$why），第 $n 次连续没跑稳", tuning.stderrMaxBytes)
+          _ <- ZIO.when(n >= tuning.failuresToFault)(
+                 load(id).someOrFail(AppError.notFound("触发器已删除")).flatMap(t =>
+                   recordFault(t, FaultSource.Stream, s"常驻命令连续 $n 次没跑满 ${tuning.stableAfter.toSeconds} 秒就退出（最后一次：$why）。标准错误见工作目录 ${Streams.logName(key.name)}")
+                 ).ignore
+               )
+          ran <- steady.isDone
+        yield ran
+      }
     }
 
   /** 跑稳了：连续失败清零，故障清除。 */
@@ -128,7 +119,7 @@ private[triggers] object Streams:
   /** 决定要不要重起的东西：这些变了才重起（提示词、前置检查变了不用）。 */
   final case class Key(agent: AgentId, name: TriggerName, mode: Mode.Stream)
 
-  final case class Hosted(key: Key, fiber: Fiber.Runtime[Nothing, Nothing])
+  final case class Hosted(key: Key, fiber: Fiber.Runtime[Nothing, Any])
 
   def make(core: Core, scope: Scope): UIO[Streams] =
     Ref.Synchronized.make(Map.empty[TriggerId, Hosted]).map(Streams(core, scope, _))
@@ -136,11 +127,11 @@ private[triggers] object Streams:
   /** 标准错误日志（相对工作目录）。 */
   def logName(name: TriggerName): String = s"trigger-logs/${name.value}.stderr.log"
 
-  /** 读命令输出的一路：读管道是阻塞调用、中断要等它返回，所以不跟着 scope 等它结束——scope 结束时只发中断，进程组随后被结束、管道关闭，
-    * 它自然收尾。
+  /** 重起的退避：输入是上一次跑没跑稳。从 `restartFirst` 起翻倍、最长 `restartMax`；跑稳了就从头算。
+    * （不用 `resetAfter`：它按第一次重起以来的累计时长重置，一直秒退的命令也会被重置。）
     */
-  def background(read: UIO[Any]): URIO[Scope, Unit] =
-    read.forkDaemon.flatMap(f => ZIO.addFinalizer(f.interruptFork)).unit
+  def restart(tuning: Tuning): Schedule[Any, Boolean, Any] =
+    (Schedule.identity[Boolean] && (Schedule.exponential(tuning.restartFirst) || Schedule.spaced(tuning.restartMax))).resetWhen(_._1)
 
   /** 追加一行；超过上限先把现有的轮换成 `.1`。 */
   def append(file: Path, line: String, maxBytes: Long): UIO[Unit] =

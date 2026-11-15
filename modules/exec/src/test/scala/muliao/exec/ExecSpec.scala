@@ -23,12 +23,30 @@ object ExecSpec extends ZIOSpecDefault:
         dir <- tempDir
         r   <- Exec.run(shell("pwd; echo out; echo err >&2; exit 3", dir), 10.seconds)
       yield assertTrue(
-        r.exitCode == 3,
-        !r.timedOut,
-        r.output.contains(dir.toRealPath().toString),
-        r.output.contains("out\n"),
-        r.output.contains("err\n")
+        r.ending == Ending.Exited(3),
+        r.output == s"${dir.toRealPath()}\nout\nerr"
       )
+    },
+    test("逐行读：标准错误单独成行，标准输入每项一行写完就关；先打码再分行（带换行的 secret 也换得掉）") {
+      val secrets = Chunk(SecretEnv("PEM", "line1\nline2"))
+      for
+        dir  <- tempDir
+        seen <- Ref.make(Chunk.empty[Line])
+        code <- Exec.follow(shell("""while read l; do echo "got:$l"; done; echo "oops" >&2; printf 'k=%s' "$PEM"; exit 4""", dir, secrets = secrets), Stderr.Separate, Chunk("one", "两"))(l =>
+                  seen.update(_ :+ l)
+                )
+        all  <- seen.get
+      yield assertTrue(
+        code == 4,
+        all.collect { case Line.Out(t) => t } == Chunk("got:one", "got:两", "k=[secret:PEM]"),
+        all.collect { case Line.Err(t) => t } == Chunk("oops")
+      )
+    },
+    test("命令不读标准输入就退出也不出错") {
+      for
+        dir  <- tempDir
+        code <- Exec.follow(shell("exit 0", dir), Stderr.Separate, Chunk.fill(20000)("x" * 10))(_ => ZIO.unit)
+      yield assertTrue(code == 0)
     },
     test("命令自成进程组") {
       for
@@ -62,7 +80,7 @@ object ExecSpec extends ZIOSpecDefault:
         child <- ZIO.attemptBlocking(Files.readString(pidf).trim.toLong).orDie
         _     <- ZIO.sleep(200.millis)
         live  <- alive(child)
-      yield assertTrue(r.timedOut, !live, took < 8000)
+      yield assertTrue(r.ending == Ending.TimedOut, !live, took < 8000)
     } @@ withLiveClock,
     test("主进程退出后不等占着输出的后台子进程：限时读完就返回，子进程不被杀") {
       for
@@ -74,7 +92,7 @@ object ExecSpec extends ZIOSpecDefault:
         bg    <- ZIO.attemptBlocking(Files.readString(pidf).trim.toLong).orDie
         live  <- alive(bg)
         _     <- ZIO.attemptBlocking(ProcessBuilder("/bin/kill", bg.toString).start().waitFor()).ignore
-      yield assertTrue(r.exitCode == 0, r.output.contains("before"), r.output.contains("done"), !r.output.contains("late"), took < 6000, live)
+      yield assertTrue(r.ending == Ending.Exited(0), r.output.contains("before"), r.output.contains("done"), !r.output.contains("late"), took < 6000, live)
     } @@ withLiveClock,
     test("写沙箱：只能写给定目录（按真实路径），别处被系统拦下") {
       for
@@ -164,12 +182,15 @@ object ExecSpec extends ZIOSpecDefault:
         box  = new Sandbox.Confined(Chunk(w), hidden = Chunk(hid), readOnly = Chunk(ro))
       yield assertTrue(box.permits(a), !box.permits(b), !box.permits(c), box.hides(c), !box.hides(b), !box.permits(out))
     },
-    test("scope 结束时还在跑的命令整组结束") {
+    test("被中断时还在跑的命令整组结束，中断在组结束后才完成") {
       for
-        dir <- tempDir
-        pid <- ZIO.scoped(Exec.start(shell("sleep 30", dir)).map(_.pid))
-        _   <- ZIO.sleep(100.millis)
-        live <- alive(pid)
+        dir   <- tempDir
+        pid   <- Promise.make[Nothing, Long]
+        fiber <- Exec.follow(shell("(sleep 30) & echo $!; sleep 30", dir), Stderr.Merged)(l => pid.succeed(l.text.trim.toLong)).fork
+        child <- pid.await
+        _     <- fiber.interrupt
+        _     <- ZIO.sleep(200.millis)
+        live  <- alive(child)
       yield assertTrue(!live)
     } @@ withLiveClock,
     test("对话式命令：按行收发，标准错误打码，scope 结束整组结束") {

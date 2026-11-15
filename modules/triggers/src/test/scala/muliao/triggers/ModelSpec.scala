@@ -11,6 +11,21 @@ object ModelSpec extends ZIOSpecDefault:
   private val shanghai = ZoneId.of("Asia/Shanghai")
 
   def spec = suite("触发器的类型与纯函数")(
+    test("常驻命令重起的退避：翻倍到上限；跑稳一次就从头算（与已经重起了多久无关）") {
+      val s   = Streams.restart(Tuning(restartFirst = 1.second, restartMax = 5.seconds))
+      val now = java.time.OffsetDateTime.parse("2026-01-01T00:00:00Z")
+      // 每次重起前等几秒；输入是上一次跑没跑稳。时刻拉开，确认不按累计时长重置
+      val runs = List(false, false, false, false, false, true, false, false)
+      ZIO
+        .foldLeft(runs.zipWithIndex)((s.initial, List.empty[Long])) { case ((state, acc), (stable, i)) =>
+          val at = now.plusMinutes(10L * i)
+          s.step(at, stable, state).map {
+            case (next, _, Schedule.Decision.Continue(iv)) => (next, acc :+ java.time.Duration.between(at, iv.start).getSeconds)
+            case (next, _, Schedule.Decision.Done)         => (next, acc :+ -1L)
+          }
+        }
+        .map((_, waits) => assertTrue(waits == List(1L, 2L, 4L, 5L, 5L, 1L, 2L, 4L)))
+    },
     test("cron 按配置的时区解释：每天 9 点在上海是 UTC 1 点；写错报出来") {
       val c    = CronSpec.parse("0 9 * * *").toOption.get
       val next = c.next(Instant.parse("2026-01-01T02:00:00Z"), shanghai)

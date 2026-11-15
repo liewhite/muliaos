@@ -27,22 +27,27 @@ final case class CommandSpec(
     secrets: Chunk[SecretEnv] = Chunk.empty
 )
 
-/** 起来了的命令。 */
-trait RunningCommand:
-  /** 进程号，也是它自成一组的进程组号。 */
-  def pid: Long
+/** 命令输出的一行（已打码，不带换行）。 */
+enum Line:
+  def text: String
+  case Out(text: String)
+  case Err(text: String)
 
-  /** 标准输出与标准错误合在一起的文本（已打码）。主进程退出后再限时读完：留在后台的子进程占着输出不放时，到时就不再等。 */
-  def output: ZStream[Any, Nothing, String]
+/** 标准错误怎么交出。 */
+enum Stderr(private[exec] val merged: Boolean):
+  /** 并进标准输出（两者的先后保持原样），都是 [[Line.Out]]。 */
+  case Merged extends Stderr(true)
+  /** 单独成 [[Line.Err]]。 */
+  case Separate extends Stderr(false)
 
-  /** 等主进程退出，得到退出码。 */
-  def exitCode: UIO[Int]
+/** 前台执行怎么结束的。 */
+enum Ending:
+  case Exited(code: Int)
+  /** 到时没跑完，已结束整组 */
+  case TimedOut
 
-  /** 结束整个进程组：先 TERM，等一会儿还在就 KILL。 */
-  def kill: UIO[Unit]
-
-/** 前台执行的结果。 */
-final case class Finished(exitCode: Int, output: String, timedOut: Boolean)
+/** 前台执行的结果：输出是各行以换行连起来。 */
+final case class Finished(output: String, ending: Ending)
 
 /** 走标准输入输出对话的命令（如本地 MCP server）：标准输出是协议数据，按行原样交出；标准错误是给人看的日志，已打码。 */
 trait AttachedCommand:
@@ -84,29 +89,50 @@ object Exec:
       case c: Sandbox.Confined     => Chunk("/usr/bin/sandbox-exec", "-p", Sandbox.profile(c)) ++ command
     setpgrp ++ sandboxed
 
-  /** 起命令；scope 结束时主进程还没退出就结束整组。 */
-  def start(spec: CommandSpec): ZIO[Scope, AppError, RunningCommand] =
+  /** 起命令，逐行读完它的输出（先打码再分行，跨行的 secret 也换得掉），每行交给 `each`，得到退出码。
+    *   - `stdin` 每项一行写进标准输入，写完关闭。
+    *   - 主进程退出后限时读完余下的输出：留在后台的子进程占着输出不放时，到时就不再等，也不杀它。
+    *   - 被中断（超时、取消、服务关停）时主进程还没退出就结束整组。
+    */
+  def follow(spec: CommandSpec, stderr: Stderr, stdin: Chunk[String] = Chunk.empty)(each: Line => UIO[Any]): IO[AppError, Int] =
     val masker = Masker(spec.secrets)
-    for
-      process <- launch(spec, mergeStderr = true, ProcessInput.fromUTF8String(""))
-      pid     <- process.pid.orElseSucceed(-1L)
-      exit    <- process.exitCode.map(_.code).orElseSucceed(-1).forkDaemon
-      queue   <- Queue.bounded[Take[Nothing, String]](256)
-      reader <- process.stdout.stream
-                  .via(ZPipeline.utf8Decode)
-                  .orElse(ZStream.empty)
-                  .via(masker.pipeline)
-                  .runForeachChunk(c => queue.offer(Take.chunk(c)))
-                  .ensuring(queue.offer(Take.end))
-                  .forkDaemon
-      // 主进程退出后限时等读完；读不完（后台子进程还占着输出）就结束输出流，读的那一路放弃
-      _ <- (exit.join *> reader.join.timeout(DrainGrace).flatMap {
-             case Some(_) => ZIO.unit
-             case None    => reader.interruptFork *> queue.offer(Take.end)
-           }).forkDaemon
-      running = Live(pid, queue, exit)
-      _ <- ZIO.addFinalizer(exit.poll.flatMap(done => ZIO.when(done.isEmpty)(running.kill)))
-    yield running
+    ZIO.scoped(
+      for
+        process <- launch(spec, stderr.merged, ProcessInput.Pipe)
+        pid     <- process.pid.orElseSucceed(-1L)
+        exit    <- process.exitCode.map(_.code).orElseSucceed(-1).forkDaemon
+        _       <- ZIO.addFinalizer(exit.poll.flatMap(done => ZIO.when(done.isEmpty)(killGroup(pid, exit))))
+        _       <- feed(process, stdin).forkDaemon
+        queue   <- Queue.bounded[Take[Nothing, Line]](256)
+        _       <- ZIO.addFinalizer(queue.shutdown)
+        pump = (bytes: ZStream[Any, Any, Byte], as: String => Line) =>
+                 bytes
+                   .via(ZPipeline.utf8Decode)
+                   .orElse(ZStream.empty)
+                   .via(masker.pipeline)
+                   .via(ZPipeline.splitLines)
+                   .map(as)
+                   .runForeachChunk(c => queue.offer(Take.chunk(c)))
+        // 读管道是阻塞调用、中断要等它返回：读的两路不跟着 scope 等它们结束，只发中断；进程组随后被结束、管道关闭，它们自然收尾
+        out <- pump(process.stdout.stream, Line.Out(_)).forkDaemon
+        err <- (stderr match
+                 case Stderr.Merged   => ZIO.unit
+                 case Stderr.Separate => pump(process.stderr.stream, Line.Err(_))
+               ).forkDaemon
+        _    <- ZIO.addFinalizer(out.interruptFork *> err.interruptFork)
+        _    <- (exit.join *> (out.join *> err.join).timeout(DrainGrace) *> queue.offer(Take.end)).forkScoped
+        _    <- ZStream.fromQueue(queue).flattenTake.runForeach(each)
+        code <- exit.join
+      yield code
+    )
+
+  // 写完就关；命令不读输入、先退出了时写不进去，不算错
+  private def feed(process: zio.process.Process, lines: Chunk[String]): UIO[Unit] =
+    ZIO.attemptBlocking {
+      scala.util.Using.resource(process.getOutputStream) { o =>
+        lines.foreach(l => o.write((l + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)))
+      }
+    }.ignore
 
   /** 起一条走标准输入输出对话的命令（同样自成进程组、进写沙箱、注入 secret）；scope 结束时关输入并结束整组。 */
   def attach(spec: CommandSpec): ZIO[Scope, AppError, AttachedCommand] =
@@ -129,24 +155,13 @@ object Exec:
       .run
       .mapError(e => AppError.internal(s"起命令失败：${e.getMessage}", e))
 
-  /** 前台执行到结束或超时（超时结束整组），收齐输出。 */
+  /** 前台执行到结束或超时（超时结束整组），收齐输出（标准输出与标准错误合在一起）；超时也带上已有的输出。 */
   def run(spec: CommandSpec, timeout: Duration): IO[AppError, Finished] =
-    ZIO.scoped {
-      for
-        r      <- start(spec)
-        out    <- r.output.runCollect.map(_.mkString).fork
-        code   <- r.exitCode.timeout(timeout)
-        _      <- ZIO.when(code.isEmpty)(r.kill)
-        status <- r.exitCode
-        text   <- out.join
-      yield Finished(status, text, code.isEmpty)
-    }
-
-  private final case class Live(pid: Long, queue: Queue[Take[Nothing, String]], exit: Fiber[Nothing, Int])
-      extends RunningCommand:
-    val output: ZStream[Any, Nothing, String] = ZStream.fromQueue(queue).flattenTake
-    def exitCode: UIO[Int]                    = exit.join
-    def kill: UIO[Unit]                       = killGroup(pid, exit)
+    for
+      seen <- Ref.make(Chunk.empty[String])
+      code <- follow(spec, Stderr.Merged)(l => seen.update(_ :+ l.text)).timeout(timeout)
+      out  <- seen.get
+    yield Finished(out.mkString("\n"), code.fold(Ending.TimedOut)(Ending.Exited(_)))
 
   private final case class Attached(
       pid: Long,
