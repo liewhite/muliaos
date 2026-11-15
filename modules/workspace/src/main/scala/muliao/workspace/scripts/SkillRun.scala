@@ -92,7 +92,7 @@ object SkillRun:
       "SKILL.md 的 frontmatter 里 `approval:` 列出的脚本，每次执行前等用户批准（这轮回答就此结束，结果或拒绝作为这个调用的结果回来）；用户选了「始终允许」的，同样的脚本、参数、secret 再调用且 skill 文件没改时直接执行。",
     Access.Write,
     Scheduling.Ordered,
-    Display.Terminal
+    _ => Display.Terminal(None)
   )
 
   /** 本领域工具的静态定义（进全部内置工具目录）。 */

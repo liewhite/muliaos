@@ -59,13 +59,6 @@ object Model:
         case CallState.Running | CallState.Approved | CallState.ApprovedAlways | CallState.Pending if live || runActive => ToolStatus.Running
         case _                                                                                                       => ToolStatus.Unfinished
 
-  /** 调用参数里的一个字符串字段（命令、路径……）；不是 JSON 或没有就是 None。 */
-  def argString(args: String, key: String): Option[String] =
-    Try(js.JSON.parse(args)).toOption.flatMap { v =>
-      val f = v.asInstanceOf[js.Dynamic].selectDynamic(key)
-      if js.isUndefined(f) || f == null then None else Some(f.toString)
-    }
-
   /** 参数原文里值得显示的：没有参数（空串、空对象）时为 None；是 JSON 的按缩进排版。 */
   def argsShown(args: String): Option[String] =
     if args.trim.isEmpty then None
@@ -121,7 +114,7 @@ object Model:
     case Notice(kind: NoticeKind, text: String, at: Long)
     case Interrupted
 
-  private def isAsk(c: CallView): Boolean = c.name == "ask_user" && c.pending.forall(_.isInstanceOf[PendingView.Question])
+  private def isAsk(c: CallView): Boolean = c.display == Display.Question && c.pending.forall(_.isInstanceOf[PendingView.Question])
   private def isApproval(c: CallView): Boolean =
     c.pending.exists(_.isInstanceOf[PendingView.Approval]) || c.state == CallState.Approved || c.state == CallState.ApprovedAlways
 

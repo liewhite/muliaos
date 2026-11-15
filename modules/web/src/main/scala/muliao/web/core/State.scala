@@ -3,7 +3,7 @@ package muliao.web.core
 import com.raquo.airstream.core.{EventStream, Signal}
 import com.raquo.airstream.eventbus.EventBus
 import com.raquo.airstream.state.Var
-import muliao.contract.{ApiError, AuthApi, Change, ErrorKind, Topic, refreshTopics}
+import muliao.contract.{Api, ApiError, AuthApi, Change, ErrorKind, Topic, refreshTopics}
 import sttp.tapir.Endpoint
 import zio.json.*
 
@@ -44,15 +44,13 @@ object Auth:
 
 /** 全站的「数据变了」：一条全局 SSE 连接，登录后的外壳一直订阅着。 */
 object Events:
-  val frames: EventStream[Frame] = Live.frames("/api/events", "change")
+  val frames: EventStream[Frame[Change]] = Live.frames(Api.changes)(())
 
   /** 连上了（含重连）：断线期间可能错过变化，正在显示的数据都要重新拉取。 */
   val ready: EventStream[Unit] = frames.collect { case Frame.Ready => () }
 
-  /** 变了的主题（看不懂的丢掉：服务端比页面新时，重连后整页会重拉）。 */
-  val changes: EventStream[Topic] = frames.collect { case Frame.Data(json) => json.fromJson[Change].toOption.map(_.topic) }.collect {
-    case Some(t) => t
-  }
+  /** 变了的主题。 */
+  val changes: EventStream[Topic] = frames.collect { case Frame.Data(c) => c.topic }
 
   /** 用户刚做完一个操作：正在显示的数据都重新拉一次（不等 SSE 带来变化）。 */
   val refreshNow: EventBus[Unit] = new EventBus[Unit]

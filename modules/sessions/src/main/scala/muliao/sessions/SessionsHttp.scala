@@ -2,14 +2,9 @@ package muliao.sessions
 
 import muliao.contract.*
 import muliao.platform.AppError
-import muliao.platform.server.{Endpoints, Route, Sse}
+import muliao.platform.server.{Endpoints, Route}
 import muliao.resources.agents.Agents
-import sttp.capabilities.zio.ZioStreams
-import sttp.model.sse.ServerSentEvent
-import sttp.tapir.{CodecFormat, Endpoint}
-import sttp.tapir.ztapir.*
 import zio.*
-import zio.json.*
 import zio.stream.*
 
 import java.net.URLEncoder
@@ -19,27 +14,19 @@ import java.nio.charset.StandardCharsets
 final case class SessionsHttp(sessions: Sessions, console: SessionConsole, files: Files, agents: Agents):
   import Endpoints.*
 
-  /** 会话页的实时事件（SSE）：先给正在生成的部分，再给之后的事件；连接帧（ready、ping）见 [[Sse]]。 */
-  val liveEndpoint: Endpoint[Option[String], SessionId, ApiError, ZStream[Any, Throwable, Byte], ZioStreams] =
-    SessionsApi.one.get
-      .in("live")
-      .out(streamTextBody(ZioStreams)(CodecFormat.TextEventStream(), Some(StandardCharsets.UTF_8)))
-      .name("sessionLive")
-      .description("会话页的实时事件（SSE），事件 data 为 LiveView 的 JSON。")
-
-  private def view(e: LiveEvent, d: String => Display): LiveView = e match
+  private def view(e: LiveEvent, d: Timeline.Shows): LiveView = e match
     case LiveEvent.Begin         => LiveView.Begin
     case LiveEvent.Part(i, p)    => LiveView.Part(i, Timeline.part(p, Map.empty, d))
     case LiveEvent.Grew(i, g, t) => LiveView.Grew(i, g, t)
     case LiveEvent.Changed       => LiveView.Changed
 
+  /** 会话页的实时事件：先给正在生成的部分，再给之后的事件。 */
   private def live: Route =
-    liveEndpoint.securedStream { id =>
-      (sessions.info(id) *> console.display).mapError(AppError.toApi).map { d =>
-        Sse.frames(console.subscribe(id).map { (snap, stream) =>
-          (ZStream.fromIterable(snap.map(ps => LiveView.Snapshot(ps.toList.map(Timeline.part(_, Map.empty, d))))) ++ stream.map(view(_, d)))
-            .map(v => ServerSentEvent(data = Some((v: LiveView).toJson), eventType = Some("live")))
-        })
+    SessionsApi.live.securedFeed { id =>
+      (sessions.info(id) *> console.display).map { d =>
+        console.subscribe(id).map { (snap, stream) =>
+          ZStream.fromIterable(snap.map(ps => LiveView.Snapshot(ps.toList.map(Timeline.part(_, Map.empty, d))))) ++ stream.map(view(_, d))
+        }
       }
     }
 

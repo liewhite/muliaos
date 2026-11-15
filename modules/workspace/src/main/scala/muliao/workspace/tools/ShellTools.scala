@@ -67,7 +67,7 @@ object ShellTools:
   )
   given Schema[ShellIn] = DeriveSchema.gen[ShellIn]
 
-  final case class JobIn(@fieldName("job_id") @description("run_shell 后台运行返回的任务号") jobId: Long)
+  final case class JobIn(@fieldName("job_id") @description("run_shell 后台运行返回的任务号") jobId: JobId)
   given Schema[JobIn] = DeriveSchema.gen[JobIn]
 
   /** job_status 显示日志的最后几行。 */
@@ -82,7 +82,7 @@ object ShellTools:
       "secrets 里的 key 作为同名环境变量注入，输出中出现的值会被打码。",
     Access.Write,
     Scheduling.Concurrent,
-    Display.Terminal
+    in => Display.Terminal(Some(in.command))
   )
 
   val JobStatusDef = ToolDef[RunContext, JobIn](
@@ -90,7 +90,7 @@ object ShellTools:
     s"看一个后台任务（只能看自己起的）：状态（运行中/已结束及退出码/被结束/被中断）、运行时长、日志最后 $StatusLines 行。全部输出在工作目录的 jobs/<任务号>.log。",
     Access.Read,
     Scheduling.Concurrent,
-    Display.Terminal
+    _ => Display.Terminal(None)
   )
 
   val JobKillDef = ToolDef[RunContext, JobIn](
@@ -116,17 +116,17 @@ object ShellTools:
 
   def jobStatus(jobs: Jobs): Tool[RunContext, Nothing] =
     JobStatusDef { (in, ctx) =>
-      jobs.get(ctx.agent, JobId.wrap(in.jobId)).flatMap(jobs.describe(_, StatusLines)).map(ToolOutcome.text).mapError(rejected)
+      jobs.get(ctx.agent, in.jobId).flatMap(jobs.describe(_, StatusLines)).map(ToolOutcome.text).mapError(rejected)
     }
 
   def jobKill(jobs: Jobs): Tool[RunContext, Nothing] =
     JobKillDef { (in, ctx) =>
-      val id = JobId.wrap(in.jobId)
+      val id = in.jobId
       (for
         _      <- jobs.get(ctx.agent, id)
         killed <- jobs.kill(id)
       yield ToolOutcome.text(
-        if killed then s"已结束后台任务 ${in.jobId}；结局会作为事件回到发起它的会话。" else s"后台任务 ${in.jobId} 本来就已经结束了。"
+        if killed then s"已结束后台任务 ${in.jobId.value}；结局会作为事件回到发起它的会话。" else s"后台任务 ${in.jobId.value} 本来就已经结束了。"
       )).mapError(rejected)
     }
 

@@ -2,7 +2,7 @@ package muliao.platform.server
 
 import io.circe.Printer
 import io.circe.syntax.*
-import muliao.contract.{Api, ApiError, AuthApi, AuthSession, ErrorKind}
+import muliao.contract.{Api, ApiError, AuthApi, AuthSession, ErrorKind, Feed}
 import muliao.platform.AppError
 import muliao.platform.events.ChangeBus
 import sttp.apispec.openapi.circe.*
@@ -42,6 +42,19 @@ object Endpoints:
     def securedStream(logic: I => IO[ApiError, O]): Route =
       auth => e.zServerSecurityLogic(auth.authenticate).serverLogic[Any](_ => logic)
 
+  extension [I, E](f: Feed[I, E])
+    /** 实时连接的完整声明：输出是 SSE 字节流。 */
+    def stream: Endpoint[Option[String], I, ApiError, ZStream[Any, Throwable, Byte], ZioStreams] =
+      f.endpoint.out(streamTextBody(ZioStreams)(CodecFormat.TextEventStream(), Some(StandardCharsets.UTF_8)))
+
+    /** 需要登录的实时连接：逻辑给出「在 scope 里建好订阅、得到业务事件流」，连接帧与事件名、JSON 编码在这里统一做（见 [[Sse]]）。 */
+    def securedFeed(logic: I => IO[AppError, URIO[Scope, ZStream[Any, Throwable, E]]]): Route =
+      stream.securedStream { i =>
+        toApi(f.endpoint.showShort, logic(i)).map { subscribed =>
+          Sse.frames(subscribed.map(_.map(e => ServerSentEvent(data = Some(f.codec.encoder.encodeJson(e, None).toString), eventType = Some(f.event)))))
+        }
+      }
+
   extension [I, O](e: PublicEndpoint[I, ApiError, O, Any])
     def public(logic: I => IO[AppError, O]): ApiEndpoint =
       e.zServerLogic(i => toApi(e.showShort, logic(i)))
@@ -55,14 +68,6 @@ object Endpoints:
 
 /** HTTP 服务骨架：登录、实时刷新（SSE）、OpenAPI、静态前端、统一错误体、gzip。各领域的接口由组装入口传进来。 */
 object HttpServer:
-
-  /** 实时刷新：`change` 事件的 data 是 [[muliao.contract.Change]] 的 JSON；连接帧（ready、ping）见 [[Sse]]。 */
-  val events: Endpoint[Option[String], Unit, ApiError, ZStream[Any, Throwable, Byte], ZioStreams] =
-    Api.secure.get
-      .in("events")
-      .out(streamTextBody(ZioStreams)(CodecFormat.TextEventStream(), Some(StandardCharsets.UTF_8)))
-      .name("events")
-      .description("「数据变了」的实时推送（SSE）。`change` 事件的 data 为 {\"topic\": ...}，收到后重新拉取对应数据；`ready`（订阅建好）与每 25 秒的 `ping` 见服务端 Sse。")
 
   val openApiEndpoint: PublicEndpoint[Unit, ApiError, String, Any] =
     Api.base.get.in("openapi.json").out(stringJsonBody).name("openapi")
@@ -80,9 +85,7 @@ object HttpServer:
     val logout: ApiEndpoint = AuthApi.logout.zServerSecurityLogic(auth.authenticate).serverLogic[Any](_ => _ => ZIO.succeed(auth.logoutCookie))
     val session: ApiEndpoint =
       AuthApi.session.zServerSecurityLogic(auth.authenticate).serverLogic[Any](p => _ => ZIO.succeed(AuthSession(p.expiresAt.getEpochSecond)))
-    val sse: ApiEndpoint = events.zServerSecurityLogic(auth.authenticate).serverLogic[Any] { _ => _ =>
-      ZIO.succeed(Sse.frames(bus.subscribe.map(_.map(c => ServerSentEvent(data = Some(zio.json.EncoderOps(c).toJson), eventType = Some("change"))))))
-    }
+    val sse: ApiEndpoint = Endpoints.securedFeed(Api.changes)(_ => ZIO.succeed(bus.subscribe))(auth)
     List(login, logout, session, sse)
 
   /** 请求来源：经本机反向代理时取 X-Forwarded-For 的最后一跳（代理自己加上的），否则取连接对端地址。 */

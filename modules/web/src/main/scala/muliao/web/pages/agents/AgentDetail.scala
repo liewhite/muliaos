@@ -67,7 +67,7 @@ object AgentDetail:
         DirContent(l.entries.map(e => FileEntry(e.name, e.dir, Option.when(!e.dir)(e.size), Some(e.modifiedAt))), l.truncated)
       )
     def read(path: String): Future[Array[Byte]] = Http.call(WorkspaceApi.workspaceFile)((id, path)).map(_._3)
-    def url(path: String): String               = s"/api/agents/${Http.enc(id.value)}/workspace/file?path=${Http.enc(path)}"
+    def url(path: String): String               = Http.href(WorkspaceApi.workspaceFile)((id, path))
 
   // ---- 配置 ----
 

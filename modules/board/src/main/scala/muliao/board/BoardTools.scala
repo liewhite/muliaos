@@ -16,10 +16,7 @@ import java.time.format.DateTimeFormatter
 /** 本领域给 agent 的工具：issue_list、issue_show、issue_create、issue_update、issue_comment、issue_stop。 */
 object BoardTools:
 
-  // ---- 参数里的枚举（JSON 里的写法与界面一致） ----
-
-  given Schema[IssueStatus] = LabeledArg.schema
-  given Schema[Priority]    = LabeledArg.schema
+  // ---- 参数里的枚举 ----
 
   /** 叫停后能进的状态。 */
   enum HaltArg:
@@ -115,14 +112,14 @@ object BoardTools:
     "issue_list",
     "列出看板上的 issue，最近更新的在前。每项带 owner、status、priority、assignee，assignee_state（指派的 agent 处理它的会话：running / waiting / idle，没有为 null）、stalled（in_progress 指派给 agent、不等上游，但它的会话空闲或还没有：没人在处理）、depends_on 与 waiting_on（还没结束的上游）。",
     Access.Read,
-    display = Display.JsonData
+    display = _ => Display.JsonData
   )
 
   val IssueShowDef = ToolDef[RunContext, IssueRef](
     "issue_show",
     "看一个 issue 的全部：描述、依赖（在等哪些）、被谁依赖（blocks）、处理它的会话、完整时间线（评论与每个改动）。",
     Access.Read,
-    display = Display.Markdown
+    display = _ => Display.Markdown
   )
 
   val IssueCreateDef = ToolDef[RunContext, CreateIn](

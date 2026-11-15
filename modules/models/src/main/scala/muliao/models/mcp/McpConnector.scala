@@ -156,7 +156,7 @@ object McpConnector:
       val name = s"${server}_${t.name}"
       Either.cond(ToolSpec.validName(name), (), s"工具名 $name 不合规（只能用字母、数字、_、-，最长 64 个字符）").map { _ =>
         val schema = mapper.writeValueAsString(Option(t.inputSchema).getOrElse(java.util.Map.of("type", "object"))).fromJson[Json].getOrElse(Json.Obj())
-        val s      = ToolSpec(name, Option(t.description).getOrElse(""), schema, Access.Write, Scheduling.Concurrent, Display.Plain, Set.empty)
+        val s      = ToolSpec(name, Option(t.description).getOrElse(""), schema, Access.Write, Scheduling.Concurrent, _ => Display.Plain, Set.empty)
         new Tool[Any, Nothing]:
           val spec = s
           def invoke(args: Json, ctx: Any): IO[ToolFailure, ToolOutcome[Nothing]] =

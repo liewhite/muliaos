@@ -73,7 +73,7 @@ object FileTools:
       "输出有上限：停在整行处，最后单独一行在方括号里说明从哪个 offset 续读。图片文件（PNG、JPEG、GIF、WebP）用 path 读时直接作为图片返回，可以看截图、图表。",
     Access.Read,
     Scheduling.Ordered,
-    Display.Code
+    in => Display.Code(in.path)
   )
 
   val WriteFileDef = ToolDef[RunContext, WriteIn](
@@ -90,7 +90,7 @@ object FileTools:
       "成功后回显每个文件改动处及上下文（`cat -n` 格式，不相连的块用 -- 隔开），可以据此接着按行号改，不必重读。",
     Access.Write,
     Scheduling.Ordered,
-    Display.Diff
+    in => Display.Diff(in.path)
   )
 
   val ShareFileDef = ToolDef[RunContext, ShareIn](
@@ -98,7 +98,7 @@ object FileTools:
     "把工作目录里的文件（如做好的图表、写好的文档）发给用户：随你的回复显示给他（图片内联，其他文件可下载），你不用再贴链接或嵌入，提到文件名即可。用户拿到的是现在的快照，之后改文件不会反映过去。",
     Access.Write,
     Scheduling.Ordered,
-    Display.SharedFile
+    _ => Display.SharedFile
   )
 
   /** 本领域工具的静态定义（进全部内置工具目录）。 */

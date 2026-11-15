@@ -29,9 +29,9 @@ object AgentTools:
       @description("显示名，唯一（不分大小写），不能叫 user") name: String,
       @description("它是干什么的；它自己看得到，别的 agent 按它决定把活交给谁") description: String,
       @description("`<服务商>:<模型>`；省略用默认模型") model: Option[String] = None,
-      @description("思考档位：default 按模型默认，off 关闭，其余是档位") thinking: String = "default",
+      @description("思考档位：default 按模型默认，off 关闭，其余是档位") thinking: Thinking = Thinking.Default,
       @description("分组，如同一批做同类事的 agent") group: Option[String] = None,
-      @description("base 之外的角色（get_agent 列出全部角色）") roles: List[String] = Nil,
+      @description("base 之外的角色（get_agent 列出全部角色）") roles: List[RoleName] = Nil,
       @description("额外允许的规则 `动作:种类:名字`，如 `use:skill:relay-host`、`use:secret:RELAY_*`、`write:path:~/projects/x`") allow: List[String] = Nil,
       @description("禁止的规则，优先于一切允许，如 `use:tool:trigger_*`") deny: List[String] = Nil
   )
@@ -83,14 +83,14 @@ object AgentTools:
     "list_agents",
     "列出全部 agent 和各自管什么（按分组）。委派前用它找该交给谁。归档的不列。",
     Access.Read,
-    display = Display.JsonData
+    display = _ => Display.JsonData
   )
 
   val GetAgentDef = ToolDef[ToolContext, AgentRef](
     "get_agent",
     "看一个 agent 的配置、最终能用的工具（tools）和资源（assets：`种类:名字`）、全部角色与全部内置工具。看自己的用自己的名字。",
     Access.Read,
-    display = Display.JsonData
+    display = _ => Display.JsonData
   )
 
   val CreateAgentDef = ToolDef[ToolContext, CreateAgent](
@@ -98,7 +98,7 @@ object AgentTools:
     "新建一个长期存在的 agent（有自己的记忆、skill、工作目录），例如以后会反复委派的专人。一次性的活委派给自己（delegate_task / ask_agent 用自己的名字），不用新建。",
     Access.Admin,
     Scheduling.Ordered,
-    Display.JsonData
+    _ => Display.JsonData
   )
 
   val DeleteAgentDef = ToolDef[ToolContext, AgentRef](
@@ -170,8 +170,7 @@ object AgentTools:
 
     val createAgent = CreateAgentDef { (in, _) =>
       (for
-        thinking <- ZIO.fromEither(Thinking.parse(in.thinking)).mapError(AppError.invalid)
-        rec <- agents.create(NewAgent(in.name, in.description, in.model, thinking, in.group, in.roles.map(RoleName.wrap), in.allow, in.deny))
+        rec <- agents.create(NewAgent(in.name, in.description, in.model, in.thinking, in.group, in.roles, in.allow, in.deny))
       yield json(Created(rec.name.value, rec.id.value, paths.workspace(rec.id).toString, paths.assets.resolve(AssetPath.ownerDir(Owner.Agent(rec.name))).toString)))
         .mapError(fail)
     }

@@ -66,24 +66,34 @@ enum OriginKind(val label: String) extends Labeled:
 
 object OriginKind extends Labels[OriginKind]("会话来源", OriginKind.values)
 
-/** 界面怎么展示一个工具的调用与结果（由工具声明）。 */
-enum Display(val label: String) extends Labeled:
+/** 界面怎么展示一次工具调用：种类由工具声明，要用到的参数（命令、路径、委派对象）由后端从参数里取好，前端不按字段名去挖。
+  * 参数还没生成完或解不开时是 [[Plain]]。JSON 里 `kind` 是分支名。
+  */
+@jsonDiscriminator("kind")
+enum Display derives JsonCodec:
   /** 原文 */
-  case Plain      extends Display("Plain")
-  /** 终端输出（命令） */
-  case Terminal   extends Display("Terminal")
+  case Plain
+  /** 终端输出；`command` 没有时（skill 脚本）参数按字段显示 */
+  case Terminal(command: Option[String])
   /** 带行号的文件内容 */
-  case Code       extends Display("Code")
+  case Code(path: Option[String])
   /** 改动对比 */
-  case Diff       extends Display("Diff")
+  case Diff(path: Option[String])
   /** 一段 JSON（列表、详情） */
-  case JsonData   extends Display("JsonData")
+  case JsonData
   /** Markdown 文本 */
-  case Markdown   extends Display("Markdown")
+  case Markdown
   /** 发给用户的文件：结果是附件的 JSON（id、name、mediaType、size），界面显示成附件 */
-  case SharedFile extends Display("SharedFile")
+  case SharedFile
+  /** 问用户的选择题（待回答时显示成表单） */
+  case Question
+  /** 交给别的 agent 的 thread：界面据此对上开出的 thread 会话 */
+  case Delegate(agent: AgentName, thread: ThreadName)
 
-object Display extends Labels[Display]("展示方式", Display.values)
+object Display:
+  given Schema[Display] =
+    given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
+    Schema.derived
 
 // ---- 会话列表 ----
 
@@ -294,8 +304,12 @@ final case class UsageLine(day: String, agent: AgentId, agentName: String, model
 
 object SessionsApi:
   private val sessions = Api.secure.in("sessions")
-  /** 一个会话下的接口（实时事件 `GET /api/sessions/{id}/live` 是 SSE，声明在服务端）。 */
+  /** 一个会话下的接口。 */
   val one = sessions.in(path[SessionId]("id"))
+
+  /** 会话页的实时事件：先给正在生成的部分，再给之后的事件。 */
+  val live: Feed[SessionId, LiveView] =
+    Feed(one.get.in("live").name("sessionLive").description("会话页的实时事件（SSE），`live` 事件的 data 为 LiveView 的 JSON。"), "live")
 
   val list: Endpoint[Option[String], (Option[AgentId], List[OriginKind], Option[String], Option[Long], Option[Int]), ApiError, SessionPage, Any] =
     sessions.get

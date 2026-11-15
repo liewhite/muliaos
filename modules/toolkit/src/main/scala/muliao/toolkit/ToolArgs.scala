@@ -2,6 +2,7 @@ package muliao.toolkit
 
 import zio.Chunk
 import zio.json.ast.Json
+import muliao.contract.choices
 import zio.schema.{Schema, StandardType}
 import zio.schema.annotation.{caseName, description, fieldDefaultValue}
 import zio.schema.codec.JsonCodec

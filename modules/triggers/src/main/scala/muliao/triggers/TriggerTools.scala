@@ -14,9 +14,6 @@ import zio.schema.annotation.{description, fieldName}
 /** 触发器的工具：trigger_kinds、trigger_list、trigger_create、trigger_update、trigger_run、trigger_delete。 */
 object TriggerTools:
 
-  given Schema[TriggerKind] = LabeledArg.schema
-  given Schema[FireWhen]    = LabeledArg.schema
-
   /** 给模型的配置是平铺的（各种类的字段都可选），按种类读成 [[TriggerConfig]]；trigger_list 也按这个样子列出。 */
   @jsonMemberNames(SnakeCase)
   final case class ConfigIn(
@@ -112,13 +109,13 @@ object TriggerTools:
 
   private def fail(e: AppError): ToolFailure = ToolFailure.fromAppError(e)
 
-  val TriggerKindsDef = ToolDef[RunContext, NoIn]("trigger_kinds", "列出触发器的种类和各自的 config 写法。", Access.Read, display = Display.JsonData)
+  val TriggerKindsDef = ToolDef[RunContext, NoIn]("trigger_kinds", "列出触发器的种类和各自的 config 写法。", Access.Read, display = _ => Display.JsonData)
 
   val TriggerListDef = ToolDef[RunContext, ListIn](
     "trigger_list",
     "列出触发器：name、kind、config、status（定时与一次性：next_run_at、连续跳过次数 skipped；常驻流：running_since、stderr_log）、agent、prompt、enabled、precheck、faults（脚本故障：source、error）、last_session_id、finished_at。结果是一段 JSON 数组。",
     Access.Read,
-    display = Display.JsonData
+    display = _ => Display.JsonData
   )
 
   val TriggerCreateDef = ToolDef[RunContext, CreateIn](

@@ -67,7 +67,7 @@ final case class ProblemView(path: String, reason: String, owner: Option[String]
 final case class AgentDetail(
     summary: AgentSummary,
     thinking: Option[Thinking],
-    roles: List[String],
+    roles: List[RoleName],
     allow: List[String],
     deny: List[String],
     tools: List[GrantView],
@@ -88,7 +88,7 @@ final case class AgentCreate(
     model: Option[String] = None,
     thinking: Option[Thinking] = None,
     group: Option[String] = None,
-    roles: List[String] = Nil,
+    roles: List[RoleName] = Nil,
     allow: List[String] = Nil,
     deny: List[String] = Nil
 ) derives JsonCodec, Schema
@@ -100,7 +100,7 @@ final case class AgentUpdate(
     model: Option[String] = None,
     thinking: Option[Thinking] = None,
     group: Option[String] = None,
-    roles: Option[List[String]] = None,
+    roles: Option[List[RoleName]] = None,
     allow: Option[List[String]] = None,
     deny: Option[List[String]] = None,
     archived: Option[Boolean] = None,
@@ -108,7 +108,7 @@ final case class AgentUpdate(
 ) derives JsonCodec, Schema
 
 /** 新建或修改前预览最终权限。`agent` 给出时按这个 agent 算「自己的资源」。 */
-final case class PreviewRequest(agent: Option[AgentId] = None, roles: List[String] = Nil, allow: List[String] = Nil, deny: List[String] = Nil)
+final case class PreviewRequest(agent: Option[AgentId] = None, roles: List[RoleName] = Nil, allow: List[String] = Nil, deny: List[String] = Nil)
     derives JsonCodec, Schema
 
 final case class PreviewResult(tools: List[GrantView], assets: List[GrantView], writablePaths: List[String]) derives JsonCodec, Schema

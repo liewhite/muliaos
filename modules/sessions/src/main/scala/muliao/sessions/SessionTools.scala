@@ -1,6 +1,6 @@
 package muliao.sessions
 
-import muliao.contract.{SessionId, ThreadName, WorkState}
+import muliao.contract.{AgentName, SessionId, ThreadName, WorkState}
 import muliao.resources.agents.Agents
 import muliao.platform.AppError
 import muliao.toolkit.*
@@ -68,33 +68,39 @@ private[sessions] object SessionTools:
   private def fail(e: AppError): ToolFailure = ToolFailure.fromAppError(e)
   private def reject(m: String): ToolFailure = ToolFailure.Rejected(m)
 
+  /** 委派类调用在界面上对上它开出的 thread。 */
+  private def delegated(agent: String, thread: String): Display =
+    (for a <- AgentName.make(agent); t <- ThreadName.make(thread) yield Display.Delegate(a, t)).getOrElse(Display.Plain)
+
   val AskUserDef = ToolDef[RunContext, AskUserIn](
     "ask_user",
     "问用户 1–4 个选择题（他总能选「其他」自己写），需要他拍板或给偏好时用；答案作为这个调用的结果回来。只在用户在等这个会话时可用（触发器、issue、别人委派来的会话里不可用：改用 notify_user，或在 issue 上设 blocked 交给用户）。能自己查到或定下的事别问。",
     Access.Read,
     Scheduling.Ordered,
-    Display.Markdown
+    _ => Display.Question
   )
 
   val DelegateTaskDef = ToolDef[RunContext, DelegateIn](
     "delegate_task",
     "把一件事交给某个 agent 的 thread（以你这个会话为发起方），不等结果，立即返回。默认它的回答推送给用户、不回给你；report_back=true 时回答作为事件交回这里（期间你处于等待中，可配心跳检查）。要等它的回答才能继续时用 ask_agent。",
     Access.Write,
-    Scheduling.Ordered
+    Scheduling.Ordered,
+    in => delegated(in.agent, in.thread)
   )
 
   val AskAgentDef = ToolDef[RunContext, AskAgentIn](
     "ask_agent",
     "问某个 agent 并等它回答：交给它的 thread（同名续聊），它的最后一条回答就是这个调用的结果。期间这个会话处于等待中。不需要等结果时用 delegate_task。",
     Access.Write,
-    Scheduling.Ordered
+    Scheduling.Ordered,
+    in => delegated(in.agent, in.thread)
   )
 
   val ListThreadsDef = ToolDef[RunContext, NoArgs](
     "list_threads",
     "列出这个会话开出的 thread：thread 名、agent、会话编号、state（running/waiting/idle）、failure（最近一次运行最终失败的原因）、answer（最新回复，没做完时是中间回复）。",
     Access.Read,
-    display = Display.JsonData
+    display = _ => Display.JsonData
   )
 
   val StopThreadDef = ToolDef[RunContext, StopThreadIn](

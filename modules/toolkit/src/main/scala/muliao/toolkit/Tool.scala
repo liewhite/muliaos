@@ -30,7 +30,8 @@ final case class ToolSpec(
     inputSchema: Json,
     access: Access,
     scheduling: Scheduling,
-    display: Display,
+    /** 一次调用在界面上怎么展示（参数解不开时是 `Display.Plain`） */
+    display: Json => Display,
     /** 敏感参数的字段名（顶层） */
     sensitiveFields: Set[String]
 ):
@@ -106,10 +107,11 @@ object ToolDef:
       description: String,
       access: Access,
       scheduling: Scheduling = Scheduling.Concurrent,
-      display: Display = Display.Plain
+      display: In => Display = (_: In) => Display.Plain
   )(using schema: Schema[In]): ToolDef[C, In] =
     require(ToolSpec.validName(name), s"工具名不合法：$name")
+    val decode = ToolArgs.decoder(schema)
     new ToolDef(
-      ToolSpec(name, description, ToolArgs.jsonSchema(schema), access, scheduling, display, ToolArgs.sensitiveFields(schema)),
-      ToolArgs.decoder(schema)
+      ToolSpec(name, description, ToolArgs.jsonSchema(schema), access, scheduling, args => decode(args).fold(_ => Display.Plain, display), ToolArgs.sensitiveFields(schema)),
+      decode
     )

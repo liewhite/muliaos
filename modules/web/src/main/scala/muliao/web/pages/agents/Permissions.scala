@@ -189,7 +189,7 @@ object Grants:
 
 /** agent 的角色开关、自己的允许/禁止规则，以及按它们算出的最终工具与资源（新建与编辑共用；`agent` 为空是还没建的）。 */
 object PermissionsInput:
-  final case class Value(roles: List[String], allow: List[String], deny: List[String])
+  final case class Value(roles: List[RoleName], allow: List[String], deny: List[String])
 
   def view(agent: Option[AgentId], value: Signal[Value], onChange: (Value => Value) => Unit): HtmlElement =
     val roles      = Remote(ResourcesApi.listRoles)(())
@@ -215,13 +215,14 @@ object PermissionsInput:
         div(
           cls := "grid grid-cols-1 gap-2 sm:grid-cols-2",
           children <-- list.map(_.filterNot(_.name.value == "base")).splitSeq(_.name)(r =>
-            val name = r.now().name.value
+            val role = r.now().name
+            val name = role.value
             div(
               cls := "flex items-center gap-2 text-sm",
               Fields.switch(
                 name,
-                value.map(_.roles.contains(name)),
-                on => onChange(v => v.copy(roles = if on then (v.roles :+ name).distinct else v.roles.filterNot(_ == name)))
+                value.map(_.roles.contains(role)),
+                on => onChange(v => v.copy(roles = if on then (v.roles :+ role).distinct else v.roles.filterNot(_ == role)))
               ),
               span(cls := "font-mono", name),
               span(cls := "truncate text-xs text-muted", child.text <-- r.map(_.description))

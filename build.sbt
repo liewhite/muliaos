@@ -61,6 +61,7 @@ lazy val contract = crossProject(JVMPlatform, JSPlatform)
       "dev.zio"                     %%% "zio-json"       % V.zioJson,
       "com.softwaremill.sttp.tapir" %%% "tapir-core"     % V.tapir,
       "com.softwaremill.sttp.tapir" %%% "tapir-json-zio" % V.tapir,
+      "dev.zio"                     %%% "zio-schema"     % V.zioSchema,
       "dev.zio"                     %%% "zio-test"       % V.zio % Test,
       "dev.zio"                     %%% "zio-test-sbt"   % V.zio % Test
     )

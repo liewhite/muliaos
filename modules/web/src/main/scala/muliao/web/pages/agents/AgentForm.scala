@@ -13,7 +13,7 @@ final case class AgentForm(
     group: String,
     model: String,
     thinking: Thinking,
-    roles: List[String],
+    roles: List[RoleName],
     allow: List[String],
     deny: List[String]
 ):

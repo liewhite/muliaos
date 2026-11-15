@@ -37,6 +37,13 @@ object Http:
   /** 登录失效（任何接口回 401）：外壳据此回到登录页。 */
   val unauthorized: EventBus[Unit] = new EventBus[Unit]
 
+  /** 接口的站内地址（路径加查询参数），由接口声明生成：给浏览器自己去取的场合（下载链接、图片、实时连接），不手拼。 */
+  def href[I, O](e: Endpoint[Option[String], I, ApiError, O, Any])(in: I): String =
+    interpreter.toSecureRequest(e, Some(hrefBase)).apply(None).apply(in).uri.toString.stripPrefix(hrefBase.toString)
+
+  /** 生成地址时借用的源（只为得到绝对地址再去掉它）。 */
+  private val hrefBase = Uri.unsafeParse("http://muliao.invalid")
+
   /** 调一个要登录的接口。cookie 由浏览器自己带，安全输入给 None。 */
   def call[I, O](e: Endpoint[Option[String], I, ApiError, O, Any])(in: I): Future[O] =
     finish(interpreter.toSecureRequest(e, base).apply(None).apply(in).send(backend).map(_.body))

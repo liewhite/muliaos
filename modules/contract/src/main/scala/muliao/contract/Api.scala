@@ -58,6 +58,11 @@ extension [S, I, E, O, R](e: Endpoint[S, I, E, O, R])
 
 final case class Change(topic: Topic) derives JsonCodec, Schema
 
+/** 一条实时连接（SSE）：`endpoint` 是地址与输入（输出的事件流由服务端补上），业务事件名是 `event`、data 是 `E` 的 JSON。
+  * 另有连接帧 `ready`（订阅建好）与 `ping`（保活），data 都是 `{"intervalSeconds":N}`。
+  */
+final case class Feed[I, E](endpoint: Endpoint[Option[String], I, ApiError, Unit, Any], event: String)(using val codec: JsonCodec[E])
+
 object Api:
   /** 登录 cookie 的名字。 */
   final val AuthCookie = "muliao_auth"
@@ -74,3 +79,10 @@ object Api:
   /** 需要登录的接口：凭登录 cookie。 */
   val secure: Endpoint[Option[String], Unit, ApiError, Unit, Any] =
     base.securityIn(auth.apiKey(cookie[Option[String]](AuthCookie)))
+
+  /** 「数据变了」的实时推送：收到后重新拉取跟着这个主题的接口。 */
+  val changes: Feed[Unit, Change] =
+    Feed(
+      secure.get.in("events").name("events").description("「数据变了」的实时推送（SSE）。`change` 事件的 data 为 {\"topic\": ...}，收到后重新拉取对应数据。"),
+      "change"
+    )

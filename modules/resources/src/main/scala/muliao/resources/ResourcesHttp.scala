@@ -58,7 +58,7 @@ final case class ResourcesHttp(
     yield AgentDetail(
       summary = summary(a, snap),
       thinking = snap.profiles.get(a.name).map(_.thinking),
-      roles = grants.roles.map(_.value),
+      roles = grants.roles,
       allow = grants.allow.map(_.text),
       deny = grants.deny.map(_.text),
       tools = toolViews(eff),
@@ -82,7 +82,7 @@ final case class ResourcesHttp(
   private def createAgent(req: AgentCreate): IO[AppError, AgentDetail] =
     for
       a <- agents.create(
-             NewAgent(req.name, req.description, req.model, req.thinking.getOrElse(Thinking.Default), req.group, req.roles.map(RoleName.wrap), req.allow, req.deny)
+             NewAgent(req.name, req.description, req.model, req.thinking.getOrElse(Thinking.Default), req.group, req.roles, req.allow, req.deny)
            )
       d <- detail(a.id)
     yield d
@@ -97,7 +97,7 @@ final case class ResourcesHttp(
                model = req.model,
                thinking = req.thinking,
                group = req.group.map(g => Option(g.trim).filter(_.nonEmpty)),
-               roles = req.roles.map(_.map(RoleName.wrap)),
+               roles = req.roles,
                allow = req.allow,
                deny = req.deny,
                archived = req.archived,
@@ -109,7 +109,7 @@ final case class ResourcesHttp(
 
   private def preview(req: PreviewRequest): IO[AppError, PreviewResult] =
     resources
-      .preview(req.agent, req.roles.map(RoleName.wrap), req.allow, req.deny)
+      .preview(req.agent, req.roles, req.allow, req.deny)
       .map(e => PreviewResult(toolViews(e), assetViews(e), e.paths.map(_.toString)))
 
   // ---- 角色 ----

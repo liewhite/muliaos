@@ -75,7 +75,7 @@ trait SessionConsole:
   def usage(from: Long, to: Long): IO[AppError, List[UsageLine]]
   def subscribe(id: SessionId): URIO[Scope, (Option[zio.Chunk[muliao.models.llm.ReplyPart]], zio.stream.ZStream[Any, Nothing, LiveEvent])]
   /** 界面怎么展示某个工具的调用与结果。 */
-  def display: UIO[String => Display]
+  def display: UIO[Timeline.Shows]
 
 object Sessions:
   type Env = Database & ChangeBus & Files & LiveHub & Resources & Agents & Models & McpConnector & Vault & ResourcePaths & SessionSettings &
@@ -157,7 +157,7 @@ object Sessions:
     def delete(id: SessionId)                                   = control.delete(id)
     def markRead(id: SessionId)                                 = kernel.info(id) *> ports.unread.flatMap(_.markRead(id))
     def subscribe(id: SessionId)                                = live.subscribe(id)
-    def display: UIO[String => Display]                         = ports.display
+    def display: UIO[Timeline.Shows]                         = ports.display
 
     private final case class Queued(row: InboxRow, letter: Letter)
 

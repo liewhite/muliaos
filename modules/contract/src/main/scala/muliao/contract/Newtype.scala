@@ -10,12 +10,13 @@ import zio.json.{JsonCodec, JsonFieldDecoder, JsonFieldEncoder}
   * type AgentId = AgentId.Type
   * }}}
   *
-  * 自带 JSON、tapir 的编解码与 [[IsNewtype]] 证据（数据库等其他层据此生成映射，不必逐个类型手写）。 校验规则覆盖 [[validate]]。
+  * 自带 JSON、tapir、zio-schema（工具参数）的编解码与 [[IsNewtype]] 证据（数据库等其他层据此生成映射，不必逐个类型手写）。 校验规则覆盖 [[validate]]。
   */
 abstract class Newtype[A](using
     baseJson: JsonCodec[A],
     baseSchema: Schema[A],
-    baseCodec: Codec[String, A, CodecFormat.TextPlain]
+    baseCodec: Codec[String, A, CodecFormat.TextPlain],
+    baseZio: zio.schema.Schema[A]
 ):
   opaque type Type = A
 
@@ -39,6 +40,9 @@ abstract class Newtype[A](using
 
   given Codec[String, Type, CodecFormat.TextPlain] =
     baseCodec.mapEither(make)(_.value)
+
+  /** 用作工具参数：外部输入，先校验。 */
+  given zioSchema: zio.schema.Schema[Type] = baseZio.transformOrFail(make, t => Right(t.value))
 
 /** `T` 是 `A` 的不透明包装。 */
 final case class IsNewtype[T, A](wrap: A => T, unwrap: T => A)

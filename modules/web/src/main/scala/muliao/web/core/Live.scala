@@ -1,15 +1,18 @@
 package muliao.web.core
 
 import com.raquo.airstream.core.EventStream
+import muliao.contract.Feed
 import org.scalajs.dom
 
 import scala.scalajs.js
 import scala.scalajs.js.timers.{SetIntervalHandle, SetTimeoutHandle, clearInterval, clearTimeout, setInterval, setTimeout}
 
-/** 一条实时连接（SSE）给出的东西：`Ready` 是订阅建好了（第一次连上与每次重连都有，页面据此重新拉取），`Data` 是一条业务事件的 data。 */
-enum Frame:
+/** 一条实时连接（SSE）给出的东西：`Ready` 是订阅建好了（第一次连上与每次重连都有，页面据此重新拉取），`Data` 是一条业务事件
+  * （看不懂的丢掉：服务端比页面新时，重连后整页会重拉）。
+  */
+enum Frame[+E]:
   case Ready
-  case Data(json: String)
+  case Data(event: E)
 
 /** SSE 连接：有人订阅时连上，没人订阅时断开（Airstream 的流本身就是这样起停的）。
   *
@@ -21,21 +24,25 @@ object Live:
   private val WatchdogMs     = 5000
   private val HiddenCloseMs  = 60000
 
-  /** @param eventName 业务事件的 SSE 事件名（全局刷新是 `change`，会话页是 `live`） */
-  def frames(url: String, eventName: String): EventStream[Frame] =
+  /** 连上 contract 里声明的一条实时连接。 */
+  def frames[I, E](feed: Feed[I, E])(in: I): EventStream[Frame[E]] =
+    val url = Http.href(feed.endpoint)(in)
     var conn: Option[Connection] = None
-    EventStream.fromCustomSource[Frame](
+    EventStream.fromCustomSource[Frame[String]](
       shouldStart = _ => true,
       start = (fire, _, _, _) =>
-        val c = Connection(url, eventName, fire)
+        val c = Connection(url, feed.event, fire)
         conn = Some(c)
         c.open(),
       stop = _ =>
         conn.foreach(_.close())
         conn = None
-    )
+    ).collect {
+      case Frame.Ready   => Some(Frame.Ready)
+      case Frame.Data(j) => feed.codec.decoder.decodeJson(j).toOption.map(Frame.Data(_))
+    }.collect { case Some(f) => f }
 
-  private final class Connection(url: String, eventName: String, fire: Frame => Unit):
+  private final class Connection(url: String, eventName: String, fire: Frame[String] => Unit):
     private var source: Option[dom.EventSource] = None
     private var lastFrameAt                     = 0.0
     private var intervalSeconds: Option[Int]    = None

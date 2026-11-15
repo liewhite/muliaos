@@ -66,8 +66,8 @@ object PureSpec extends ZIOSpecDefault:
       )
     },
     test("读会话：来信按来源打标签，回答正文、调用与结果、通知各成一条，思考不读出；按标签、正则、时刻筛选；只截可截的") {
-      val call = CallView(CallId.wrap("c1"), "run_shell", """{"command":"ls"}""", Display.Terminal, CallState.Done, Some(ResultView("a\nb", Nil, isError = false)), None, Some(at(9, 1)), Some(at(9, 2)))
-      val bad  = CallView(CallId.wrap("c2"), "read_file", "{}", Display.Code, CallState.Done, Some(ResultView("没有这个文件", List(ImageRef("image/png", "s")), isError = true)), None, Some(at(9, 3)), Some(at(9, 4)))
+      val call = CallView(CallId.wrap("c1"), "run_shell", """{"command":"ls"}""", Display.Terminal(Some("ls")), CallState.Done, Some(ResultView("a\nb", Nil, isError = false)), None, Some(at(9, 1)), Some(at(9, 2)))
+      val bad  = CallView(CallId.wrap("c2"), "read_file", "{}", Display.Code(None), CallState.Done, Some(ResultView("没有这个文件", List(ImageRef("image/png", "s")), isError = true)), None, Some(at(9, 3)), Some(at(9, 4)))
       val tl = List(
         TimelineItem(1, Some(1), at(9, 0), at(9, 0), EntryView.Context("当前时间 ...")),
         TimelineItem(2, Some(1), at(9, 0), at(9, 0), EntryView.Letter(SourceKind.User, None, "帮我看看目录" * 300, Nil, checkIn = false)),

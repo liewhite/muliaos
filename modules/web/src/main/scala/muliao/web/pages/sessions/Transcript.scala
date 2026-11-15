@@ -21,14 +21,9 @@ final case class TranscriptCtx(
     answer: (Long, CallId, AnswerIn) => Future[Unit]
 ):
   /** 委派调用开出（或续写）的 thread。 */
-  def threadOf(c: CallView): Option[SessionSummary] =
-    Option.when(c.name == "delegate_task" || c.name == "ask_agent")(()).flatMap { _ =>
-      for
-        agent <- argString(c.args, "agent")
-        name  <- argString(c.args, "thread")
-        t     <- threads.find(t => t.originRef.contains(name) && t.agentName == agent)
-      yield t
-    }
+  def threadOf(c: CallView): Option[SessionSummary] = c.display match
+    case Display.Delegate(agent, thread) => threads.find(t => t.originRef.contains(thread.value) && t.agentName == agent.value)
+    case _                               => None
 
 /** 会话时间线怎么画。展开状态按条目的键记在页面里：数据刷新、条目重画都不会把展开的收起来。 */
 final class TranscriptView:
@@ -100,16 +95,16 @@ final class TranscriptView:
     val display = c.display
     val result  = c.result
     def rendered: Modifier[HtmlElement] = display match
-      case Display.Terminal if argString(c.args, "command").isDefined =>
-        terminal(argString(c.args, "command"), result.map(_.text), result.exists(_.isError))
-      case Display.Terminal =>
+      case Display.Terminal(Some(command)) =>
+        terminal(Some(command), result.map(_.text), result.exists(_.isError))
+      case Display.Terminal(None) =>
         // 没有命令参数的（skill 脚本）：参数按字段，输出进终端框
         Seq(argFields(c.args), result.map(r => terminal(None, Some(r.text), r.isError)))
-      case Display.Code =>
-        Seq(titled(argString(c.args, "path")), result.map(r => pre(cls := Ui.CodeBlock, r.text)))
-      case Display.Diff =>
+      case Display.Code(path) =>
+        Seq(titled(path), result.map(r => pre(cls := Ui.CodeBlock, r.text)))
+      case Display.Diff(path) =>
         Seq(
-          titled(argString(c.args, "path")),
+          titled(path),
           result.map(r => pre(cls := Ui.CodeBlock, r.text.split("\n", -1).toList.map(l => div(cls := diffLine(l), if l.isEmpty then " " else l))))
         )
       case Display.JsonData =>
@@ -119,7 +114,7 @@ final class TranscriptView:
           argsShown(c.args).map(a => pre(cls := Ui.CodeBlock, a)),
           result.map(r => div(cls := "my-1 rounded-lg border border-separator px-3 py-2 text-foreground", Markdown.view(r.text)))
         )
-      case Display.SharedFile | Display.Plain =>
+      case Display.SharedFile | Display.Plain | Display.Question | Display.Delegate(_, _) =>
         Seq(argFields(c.args), result.map(r => pre(cls := Ui.CodeBlock, r.text)))
     def original: Modifier[HtmlElement] =
       Seq(argsShown(c.args).map(a => pre(cls := Ui.CodeBlock, a)), result.map(r => pre(cls := Ui.CodeBlock, r.text)))

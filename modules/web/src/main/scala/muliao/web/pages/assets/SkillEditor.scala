@@ -130,7 +130,7 @@ object SkillEditor:
     def list(path: String): Future[DirContent] =
       fetch(path).map(fs => DirContent(level(fs, path), truncated = false))
     def read(path: String): Future[Array[Byte]] = Http.call(WorkspaceApi.skillFile)((SkillName.wrap(name), path)).map(_._3)
-    def url(path: String): String               = s"/api/assets/skills/${Http.enc(name)}/raw?path=${Http.enc(path)}"
+    def url(path: String): String               = Http.href(WorkspaceApi.skillFile)((SkillName.wrap(name), path))
 
   /** 全部文件的相对路径 → 某一层目录里的条目（目录在前，各自按名字排）。 */
   def level(files: List[String], dir: String): List[FileEntry] =

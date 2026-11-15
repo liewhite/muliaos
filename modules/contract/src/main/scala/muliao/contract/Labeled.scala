@@ -1,13 +1,20 @@
 package muliao.contract
 
 import sttp.tapir.{Codec, CodecFormat, Schema, Validator}
+import zio.Chunk
 import zio.json.{JsonCodec, JsonFieldDecoder, JsonFieldEncoder}
+import zio.schema.StandardType
+
+import scala.annotation.StaticAnnotation
+
+/** 标在 zio-schema 的字符串类型上：只能取这些值（工具参数的 JSON Schema 据此写 `enum`）。 */
+final case class choices(values: List[String]) extends StaticAnnotation
 
 /** 有固定文字写法的枚举值：库里、JSON 里、接口参数里都写 [[label]]。 */
 trait Labeled:
   def label: String
 
-/** 枚举的伴生对象继承它，得到按 `label` 的解析，以及 JSON、tapir 的编解码与 [[IsLabeled]] 证据（数据库层据此生成映射）：
+/** 枚举的伴生对象继承它，得到按 `label` 的解析，以及 JSON、tapir、zio-schema（工具参数）的编解码与 [[IsLabeled]] 证据（数据库层据此生成映射）：
   *
   * {{{
   * enum RunState(val label: String) extends Labeled:
@@ -36,6 +43,10 @@ abstract class Labels[E <: Labeled](what: String, all: => Array[E]):
   given Schema[E] = Schema.string[E].validate(Validator.enumeration(all.toList, e => Some(e.label)))
 
   given Codec[String, E, CodecFormat.TextPlain] = Codec.string.mapEither(parse)(_.label)
+
+  /** 用作工具参数：JSON 里写 `label`，JSON Schema 里列出全部取值。 */
+  given zioSchema: zio.schema.Schema[E] =
+    zio.schema.Schema.Primitive(StandardType.StringType, Chunk(choices(labels))).transformOrFail(parse, e => Right(e.label))
 
 /** `E` 是有固定文字写法的枚举：怎么解析、怎么写、全部写法。 */
 final case class IsLabeled[E](parse: String => Either[String, E], label: E => String, labels: List[String])

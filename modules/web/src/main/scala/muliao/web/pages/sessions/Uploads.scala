@@ -12,7 +12,7 @@ import Http.ec
 
 /** 消息里的附件：图片显示缩略图（点开看原图），其他文件是下载链接。 */
 object Attachments:
-  def url(f: FileView): String = s"/api/files/${Http.enc(f.id.value)}"
+  def url(f: FileView): String = Http.href(SessionsApi.download)(f.id)
 
   private val inlineTypes = Set("image/png", "image/jpeg", "image/gif", "image/webp")
   def isImage(f: FileView): Boolean = inlineTypes(f.mediaType)
@@ -48,7 +48,7 @@ object Attachments:
       div(
         cls := "flex flex-wrap gap-1.5",
         refs.map(r =>
-          val u = s"/api/blobs/${r.sha256}"
+          val u = Http.href(SessionsApi.blob)(r.sha256)
           a(href := u, target := "_blank", rel := "noreferrer", img(src := u, alt := "", Ui.attr("loading") := "lazy", cls := "max-h-48 max-w-full rounded-xl border border-separator object-contain"))
         )
       )

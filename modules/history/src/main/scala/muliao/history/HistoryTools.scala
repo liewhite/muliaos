@@ -88,7 +88,7 @@ object HistoryTools:
       |给 query 时每个词都要出现在标题、摘要或引用里，相关的在前；不给 query 就按日期倒序列出（适合列某段日期的全部）。
       |只记到 agent 自己写下的为止，通常到昨天；今天的事用 activity_overview。都查不到时答「未核实」，不答「没有」。""".stripMargin,
     Access.Read,
-    display = Display.JsonData
+    display = _ => Display.JsonData
   )
 
   val ActivityOverviewDef = ToolDef[RunContext, OverviewIn](
@@ -97,7 +97,7 @@ object HistoryTools:
       |对 issue 的操作（该 agent 做的，加上用户在它负责或被指派的 issue 上做的，评论全文）、失败的运行及错误、当天的工作历史。
       |回顾今天或最近的工作用它（history_search 一般只到昨天），要细看某个会话再用 session_read。输出太长时最后一行说明从哪个 offset 继续。""".stripMargin,
     Access.Read,
-    display = Display.Markdown
+    display = _ => Display.Markdown
   )
 
   val SessionReadDef = ToolDef[RunContext, ReadIn](

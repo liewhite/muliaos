@@ -90,8 +90,8 @@ object IssueRefs:
     }
 
 object Markdown:
-  /** 本站附件的地址前缀：只有它们的图片直接显示。 */
-  val FilesPath = "/api/files/"
+  /** 本站附件的地址前缀（由下载接口生成）：只有它们的图片直接显示。 */
+  lazy val FilesPath: String = Http.href(muliao.contract.SessionsApi.download)(muliao.contract.FileId.wrap("_")).stripSuffix("_")
 
   private lazy val marked =
     val m = new MarkedJs()

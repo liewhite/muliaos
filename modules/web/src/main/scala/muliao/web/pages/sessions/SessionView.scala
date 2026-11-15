@@ -5,7 +5,6 @@ import muliao.contract.*
 import muliao.web.core.*
 import muliao.web.ui.*
 import org.scalajs.dom
-import zio.json.*
 
 import scala.concurrent.Future
 import scala.scalajs.js
@@ -158,8 +157,8 @@ object SessionView:
     val compaction = new Action
 
     // 这个会话的实时事件：连上（含重连）与「库里变了」时重新拉取详情与时间线
-    val frames  = Live.frames(s"/api/sessions/${Http.enc(idText)}/live", "live")
-    val views   = frames.collect { case Frame.Data(j) => j.fromJson[LiveView].toOption }.collect { case Some(v) => v }
+    val frames  = Live.frames(SessionsApi.live)(id)
+    val views   = frames.collect { case Frame.Data(v) => v }
     val reloads = EventStream.merge(frames.collect { case Frame.Ready => () }, views.filter(_ == LiveView.Changed).mapToUnit, Events.refreshNow.events)
     val detail   = Remote.triggered(reloads)(Http.call(SessionsApi.get)(id))
     val timeline = Remote.triggered(reloads)(Http.call(SessionsApi.timeline)(id))

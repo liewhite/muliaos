@@ -119,7 +119,8 @@ private[sessions] final class Ports private (wired: Promise[Nothing, Ports.Wired
   def jobs: UIO[JobControl]                     = wired.await.map(_.ports.jobs)
   def unread: UIO[UnreadSource]                 = wired.await.map(_.ports.unread)
   /** 界面怎么展示某个工具（MCP 工具不在其中，按纯文字）。 */
-  def display: UIO[String => Display] = wired.await.map(w => n => w.display.getOrElse(n, Display.Plain))
+  def display: UIO[Timeline.Shows] =
+    wired.await.map(w => (name, args) => w.display.get(name).fold(Display.Plain)(f => args.fromJson[Json].fold(_ => Display.Plain, f)))
 
   /** 同步地逐个通知订阅方（按贡献的顺序），一个出错不影响别的。 */
   def emit(e: SessionEvent): UIO[Unit] =
@@ -129,7 +130,7 @@ private[sessions] object Ports:
   final case class Wired(ports: SessionPorts):
     val tools: List[Tool[RunContext, Pause]] = ports.contributions.flatMap(_.tools)
     val listeners: List[SessionListener]     = ports.contributions.flatMap(_.listener)
-    val display: Map[String, Display]        = tools.map(t => t.spec.name -> t.spec.display).toMap
+    val display: Map[String, Json => Display] = tools.map(t => t.spec.name -> t.spec.display).toMap
 
   val layer: ULayer[Ports] = ZLayer(Promise.make[Nothing, Wired].map(Ports(_)))
 
