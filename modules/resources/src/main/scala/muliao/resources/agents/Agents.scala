@@ -410,10 +410,9 @@ object Agents:
         }
 
     def start(hs: List[AgentHook]): IO[AppError, Unit] =
-      lock.withPermit {
+      // 先定下参与方再拿锁：拿着锁的归档、删除会等它们
+      hooks.succeed(hs) *> lock.withPermit {
         for
-          first <- hooks.succeed(hs)
-          _     <- ZIO.unless(first)(ZIO.fail(AppError.Internal("Agents.start 调了两次：组装顺序错了")))
           all <- db.read(AgentRepo.all)
           _   <- ZIO.foreachDiscard(all.filter(a => a.renamedFrom.isDefined && a.live))(finishRename)
           _ <- ZIO.foreachDiscard(all.filter(_.state == AgentState.Deleting)) { a =>

@@ -12,7 +12,6 @@ import muliao.platform.server.ServerSettings
 import muliao.resources.{ResourcePaths, ResourcesSettings, VaultSettings}
 import muliao.sessions.{SessionPaths, SessionSettings}
 import muliao.triggers.TriggerSettings
-import muliao.workspace.pages.PageSigner
 import zio.*
 
 import java.nio.file.Path
@@ -50,7 +49,7 @@ final case class AppConfig(
   /** 各领域要的配置值与位置。 */
   def layer: ULayer[
     GeneralSettings & ServerSettings & HttpSettings & ResourcesSettings & VaultSettings & ModelSettings & SessionSettings & PushSettings &
-      TriggerSettings & ResourcePaths & SessionPaths & PageSigner
+      TriggerSettings & ResourcePaths & SessionPaths
   ] =
     ZLayer.succeedEnvironment(
       ZEnvironment(general, server, http, resources, vault)
@@ -60,7 +59,6 @@ final case class AppConfig(
         .add(triggers)
         .add(resourcePaths)
         .add(sessionPaths)
-        .add(PageSigner.fromSecret(server.cookieSecret))
     )
 
 object AppConfig:

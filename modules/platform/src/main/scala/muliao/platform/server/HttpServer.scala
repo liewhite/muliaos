@@ -25,8 +25,7 @@ import java.nio.charset.StandardCharsets
 type ApiEndpoint = ZServerEndpoint[Any, ZioStreams]
 
 /** 一个领域的接口实现：声明加逻辑。要登录的由 [[HttpServer.serve]] 统一套上登录校验，领域不经手登录。 */
-trait Route:
-  def serve(auth: Auth): ApiEndpoint
+type Route = Auth => ApiEndpoint
 
 object Route:
   /** 不要登录的领域接口（如靠签名的页面文件）。 */
@@ -106,7 +105,7 @@ object HttpServer:
       version: String
   ): ZIO[Scope, Throwable, Int] =
     import Endpoints.*
-    val api: List[ApiEndpoint] = platformEndpoints(auth, bus) ++ domain.map(_.serve(auth))
+    val api: List[ApiEndpoint] = platformEndpoints(auth, bus) ++ domain.map(_(auth))
     val docJson  = openApi((api :+ openApiEndpoint.public(_ => ZIO.succeed(""))).map(_.endpoint), version)
     val docs     = openApiEndpoint.public(_ => ZIO.succeed(docJson))
     val all      = api ++ List(docs, apiNotFound, StaticFiles.serverEndpoint(settings.webDir))

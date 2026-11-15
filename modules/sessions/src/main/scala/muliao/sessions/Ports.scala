@@ -1,7 +1,6 @@
 package muliao.sessions
 
 import muliao.contract.{AgentId, AgentName, CallId, FileId, JobId, RunId, SessionId}
-import muliao.platform.AppError
 import muliao.platform.config.ConfigSection
 import muliao.resources.{AgentHook, RunResources}
 import muliao.toolkit.{Display, Tool, ToolContext, ToolFailure, ToolOutcome}
@@ -109,8 +108,7 @@ final case class SessionPorts(contributions: List[Contribution], jobs: JobContro
 
 /** 启动时定下的端口（写一次）。定下之前读它的会等到定下：组装入口在接受任何请求前就启动，所以实际不会等。 */
 private[sessions] final class Ports private (wired: Promise[Nothing, Ports.Wired]):
-  def settle(p: SessionPorts): IO[AppError, Unit] =
-    wired.succeed(Ports.Wired(p)).flatMap(first => ZIO.unless(first)(ZIO.fail(AppError.Internal("Sessions.start 调了两次：组装顺序错了"))).unit)
+  def settle(p: SessionPorts): UIO[Unit] = wired.succeed(Ports.Wired(p)).unit
 
   def tools: UIO[List[Tool[RunContext]]]                      = wired.await.map(_.tools)
   def jobs: UIO[JobControl]                                   = wired.await.map(_.ports.jobs)

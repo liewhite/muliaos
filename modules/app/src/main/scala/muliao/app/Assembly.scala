@@ -25,7 +25,7 @@ import muliao.toolkit.ToolSpec
 import muliao.triggers.{Triggers, TriggersHttp}
 import muliao.workspace.{Browse, Workspace, WorkspaceHttp}
 import muliao.workspace.jobs.Jobs
-import muliao.workspace.pages.Pages
+import muliao.workspace.pages.{PageSigner, Pages}
 import muliao.workspace.scripts.ScriptGrants
 import zio.*
 
@@ -70,6 +70,7 @@ object Assembly:
     val paths = cfg.resourcePaths
     ZLayer.make[Services](
       cfg.layer,
+      ZLayer.succeed(PageSigner.fromSecret(cfg.server.cookieSecret)),
       ZLayer.succeed(ToolCatalog.of(toolSpecs(cfg.web.isDefined))),
       // 平台基础
       SystemProxy.macOS(),
