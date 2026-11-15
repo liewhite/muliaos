@@ -271,6 +271,24 @@ object WorkspaceSpec extends ZIOSpecDefault:
           seen.count(_ == Topic.Jobs) == 2 // 开始、结束各广播一次
         )
     },
+    test("后台任务正常结束后不留下挂着的 fiber（否则服务关停时等所有 root fiber 会卡死，#897）") {
+      // 别的用例并行起的任务也在 Jobs.scala 里 fork，但都会在几秒内结束；这里等到一个都不剩
+      val jobFibers: UIO[Chunk[String]] =
+        Fiber.roots.flatMap(fs => ZIO.filter(fs.filter(_.location.toString.contains("Jobs.scala")))(_.poll.map(_.isEmpty))).map(_.map(_.location.toString))
+      for
+        d <- S.dirs
+        m <- model { case t if t.startsWith("跑个快的") => Script.Say(List(modelCall("b1", "run_shell", args("command" -> str("echo hi"), "background" -> Json.Bool(true))))) }
+        left <- withEnv(d, m) {
+                  for
+                    _     <- start
+                    alice <- S.agent("alice")
+                    _     <- S.userSession(alice, "跑个快的")
+                    _     <- sawText(m, "[后台任务 1 结束] 退出码 0")
+                    left  <- S.eventually("后台任务的 fiber 都结束")(jobFibers)(_.isEmpty)
+                  yield left
+                }
+      yield assertTrue(left.isEmpty)
+    },
     test("后台任务：job_kill 与停止会话都结束整组进程") {
       for
         d <- S.dirs

@@ -86,17 +86,19 @@ object Jobs:
         exec     <- ZIO.service[AgentExec]
         paths    <- ZIO.service[ResourcePaths]
         registry <- Ref.make(Map.empty[JobId, Live])
-        // 关停时各任务并行收尾（每个都可能要等 TERM 之后的宽限）
-        scope <- ZIO.scopeWith(_.forkWith(ExecutionStrategy.Parallel))
-        _ <- ZIO.addFinalizer(registry.get.flatMap(all => ZIO.when(all.nonEmpty)(ZIO.logInfo(s"服务关停，结束 ${all.size} 个后台任务"))))
-      yield Impl(db, bus, sessions, exec, paths, registry, scope)
+        // 关停时打断全部任务，并行收尾（每个都可能要等 TERM 之后的宽限）。不用并行子 scope 做 forkIn：任务自己结束时
+        // 关它的子 scope 会另起 fiber 去打断它自己而互等，留下永远挂着的 root fiber，关停时卡死（#897）
+        _ <- ZIO.addFinalizer(registry.get.flatMap { all =>
+               ZIO.when(all.nonEmpty)(ZIO.logInfo(s"服务关停，结束 ${all.size} 个后台任务")) *> ZIO.foreachParDiscard(all.values)(_.fiber.interrupt)
+             })
+      yield Impl(db, bus, sessions, exec, paths, registry)
     )
 
   /** 日志文件（相对工作目录）。 */
   def logName(id: JobId): String = s"jobs/${id.value}.log"
 
-  /** 一个在跑的任务：`stop` 完成就结束它。 */
-  private final case class Live(agent: AgentId, writable: Sandbox.Confined, stop: Promise[Nothing, Unit])
+  /** 一个在跑的任务：`stop` 完成就结束它（被结束）；打断 `fiber` 是服务关停（被中断）。 */
+  private final case class Live(agent: AgentId, writable: Sandbox.Confined, stop: Promise[Nothing, Unit], fiber: Fiber[Nothing, Unit])
 
   private final case class Impl(
       db: Database,
@@ -104,8 +106,7 @@ object Jobs:
       sessions: Sessions,
       exec: AgentExec,
       paths: ResourcePaths,
-      registry: Ref[Map[JobId, Live]],
-      scope: Scope
+      registry: Ref[Map[JobId, Live]]
   ) extends Jobs:
 
     private val now = Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -130,8 +131,12 @@ object Jobs:
       for
         out  <- ZIO.attemptBlocking { Files.createDirectories(log.getParent); FileOutputStream(log.toFile, true) }.mapError(e => AppError.internal(s"建日志 $log 失败", e))
         stop <- Promise.make[Nothing, Unit]
-        _    <- registry.update(_.updated(id, Live(owner.agent, cmd.scope, stop)))
-        _    <- watch(id, cmd, out, stop).forkIn(scope)
+        // 先登记再放行：任务结束时从登记里删掉自己，放行前结束会留下删不掉的登记
+        gate <- Promise.make[Nothing, Unit]
+        _ <- ZIO.uninterruptibleMask { restore =>
+               restore(gate.await *> watch(id, cmd, out, stop)).forkDaemon
+                 .flatMap(f => registry.update(_.updated(id, Live(owner.agent, cmd.scope, stop, f))) *> gate.succeed(()))
+             }
       yield ()
 
     /** 把输出写进日志，等它自己结束或被结束，记下结局并交回会话。服务关停时它被中断：进程由执行层结束，标为被中断，
