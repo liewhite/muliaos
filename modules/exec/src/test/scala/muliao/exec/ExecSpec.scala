@@ -136,6 +136,16 @@ object ExecSpec extends ZIOSpecDefault:
              )
       yield assertTrue(r.output.contains("keep"), r.output.contains("nowrite"), r.output.contains("wrote"), Files.readString(ro.resolve("f")) == "keep")
     },
+    test("沙箱：setuid 程序（ps、top）放到沙箱外执行，照常能跑") {
+      for
+        root  <- tempDir
+        rootR <- RealPath.resolve(root)
+        r <- Exec.run(
+               shell("ps -o pid= -p $$ && echo ps-ok; top -l 1 -n 0 >/dev/null && echo top-ok", root, Sandbox.Confined(Chunk(rootR))),
+               20.seconds
+             )
+      yield assertTrue(r.output.contains("ps-ok"), r.output.contains("top-ok"), !r.output.contains("Operation not permitted"))
+    },
     test("沙箱规则：先禁止全部写，再放开设备文件") {
       val p = Sandbox.profile(Chunk.empty)
       assertTrue(p.contains("(deny file-write*)"), p.contains("/dev/null"))

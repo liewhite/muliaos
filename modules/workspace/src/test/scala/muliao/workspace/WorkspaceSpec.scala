@@ -126,6 +126,9 @@ object WorkspaceSpec extends ZIOSpecDefault:
         mixed.startsWith("[rejected]") // 给了 edits 又给了顶层 old_text：当作没给 edits，new_text 照常；这里 edits 为空所以按单处处理 → 找不到 x
       )
     },
+    test("setuid 程序按文件权限位认出（它们在沙箱里报的 Operation not permitted 与写权限无关）") {
+      assertTrue(AgentExec.setuid(Path.of("/bin/ps")), !AgentExec.setuid(Path.of("/bin/echo")), !AgentExec.setuid(Path.of("/no/such")))
+    },
     test("写沙箱：文件工具写不了范围外、读不了平台私有文件，命令被拦时补说明") {
       for
         d    <- S.dirs

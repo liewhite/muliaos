@@ -34,6 +34,10 @@ object AgentExec:
   /** 输出里被拒绝写的路径（去重，最多几个）。 */
   def deniedPaths(output: String): List[String] = Denied.findAllMatchIn(output).map(_.group(1)).toList.distinct.take(5)
 
+  /** 带 setuid 位的文件：macOS 不让沙箱里的进程执行它，报的也是 Operation not permitted。 */
+  def setuid(p: Path): Boolean =
+    scala.util.Try(Files.getAttribute(p, "unix:mode").asInstanceOf[Int] & 0x800).toOption.exists(_ != 0)
+
   final case class Live(resources: Resources, vault: Vault, paths: ResourcePaths) extends AgentExec:
 
     def workspace(agent: AgentId): IO[AppError, Path] =
@@ -52,7 +56,8 @@ object AgentExec:
       ZIO
         .foreach(deniedPaths(output)) { p =>
           RealPath.resolve(Path.of(p)).flatMap { real =>
-            if scope.permits(real) then ZIO.none
+            if setuid(real.path) then ZIO.some(s"[沙箱里不能执行 setuid 程序 $p（与写权限无关）；常用的话找 admin（muliao）放进沙箱外执行的名单]")
+            else if scope.permits(real) then ZIO.none
             else resources.explainDenied(agent, Path.of(p)).map(why => Some(s"[写沙箱拦下了 $p：$why]"))
           }
         }
