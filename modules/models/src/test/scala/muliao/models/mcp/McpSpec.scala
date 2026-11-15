@@ -27,12 +27,11 @@ object McpSpec extends ZIOSpecDefault:
 
   def tempDir: UIO[Path] = ZIO.succeed(Files.createTempDirectory("muliao-mcp"))
 
-  def call(tools: Chunk[Tool[Any]], name: String, args: String = "{}"): IO[ToolFailure, ToolOutcome] =
+  def call(tools: Chunk[Tool[Any, Nothing]], name: String, args: String = "{}"): IO[ToolFailure, ToolOutcome[Nothing]] =
     tools.find(_.spec.name == name).get.invoke(args.fromJson[Json].toOption.get, ())
 
-  def text(o: ToolOutcome): String = o match
+  def text(o: ToolOutcome[Nothing]): String = o match
     case ToolOutcome.Completed(cs) => cs.collect { case ToolContent.Text(t) => t }.mkString
-    case other                     => other.toString
 
   def alive(pid: Long): UIO[Boolean] =
     ZIO.attemptBlocking(ProcessBuilder("/bin/kill", "-0", pid.toString).start().waitFor() == 0).orElseSucceed(false)

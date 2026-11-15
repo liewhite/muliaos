@@ -108,9 +108,9 @@ object FileBrowser:
     val version = Var(0)
 
     def load(path: String): Unit =
-      dirs.update(m => m.updated(path, m.get(path).flatMap(_.data).fold(Load.Pending: Load[DirContent])(Load.Ready(_))))
+      dirs.update(m => m.updated(path, m.get(path).flatMap(_.data).fold(Load.Pending: Load[DirContent])(Load.Loaded(_))))
       source.list(path).onComplete { r =>
-        dirs.update(_.updated(path, r.fold(t => Load.Failed(Http.messageOf(t)), Load.Ready(_))))
+        dirs.update(_.updated(path, r.fold(t => Load.Failed(Http.messageOf(t)), Load.Loaded(_))))
       }
 
     def toggle(path: String): Unit =
@@ -141,7 +141,7 @@ object FileBrowser:
         child.maybe <-- dirs.signal.map(_.get(dir)).map {
           case Some(Load.Failed(m))                     => Some(p(cls := "px-2 py-1 text-xs text-danger", m))
           case Some(Load.Pending) if depth > 0          => Some(div(cls := "px-2 py-1", Ui.spinner("spinner--sm")))
-          case Some(Load.Ready(c)) if c.truncated       => Some(p(cls := "px-2 py-1 text-xs text-muted", "条目太多，只列了前面一部分"))
+          case Some(Load.Loaded(c, _)) if c.truncated   => Some(p(cls := "px-2 py-1 text-xs text-muted", "条目太多，只列了前面一部分"))
           case _                                        => None
         }
       )
@@ -186,7 +186,7 @@ object FileBrowser:
           child <-- root.map {
             case None | Some(Load.Pending)                       => Ui.centeredSpinner
             case Some(Load.Failed(m))                            => Ui.errorAlert("加载失败", m)
-            case Some(Load.Ready(c)) if c.entries.isEmpty        => Ui.emptyHint(emptyText)
+            case Some(Load.Loaded(c, _)) if c.entries.isEmpty    => Ui.emptyHint(emptyText)
             case Some(_)                                         => div()
           },
           level("", 0)

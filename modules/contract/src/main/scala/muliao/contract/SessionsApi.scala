@@ -52,11 +52,6 @@ enum CallState(val label: String) extends Labeled:
   case ApprovedAlways extends CallState("approved-always")
   case Done      extends CallState("done")
 
-  /** 驱动接下来要执行它。 */
-  def runnable: Boolean = this match
-    case Pending | Approved | ApprovedAlways => true
-    case Running | Suspended | Done          => false
-
 object CallState extends Labels[CallState]("调用状态", CallState.values)
 
 /** 会话来源的种类（谁开的）。 */

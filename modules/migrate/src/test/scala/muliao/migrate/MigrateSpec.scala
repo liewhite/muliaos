@@ -129,7 +129,7 @@ object MigrateSpec extends ZIOSpecDefault:
         r.map(_._1.precheck.exists(_.contains("/Users/u/.muliao-scala/muliao.log"))) == Right(true),
         r.map(_._1.skipped) == Right(2),
         r.map(_._1.baseline) == Right(Some("old")),
-        r.map(_._1.config.fromJson[muliao.contract.TriggerConfig]) == Right(Right(muliao.contract.TriggerConfig(command = Some("cd ~/.muliao-scala/data/workspaces/w && tail -f x"), secrets = Some(List("K")), debounceSeconds = Some(1.0))))
+        r.map(_._1.config.fromJson[muliao.contract.TriggerConfig]) == Right(Right(muliao.contract.TriggerConfig.Stream("cd ~/.muliao-scala/data/workspaces/w && tail -f x", List("K"), 1.0)))
       )
     },
     test("路径改写：只换旧主目录下的资源、数据、配置、日志") {

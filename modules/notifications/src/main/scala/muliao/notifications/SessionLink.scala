@@ -23,7 +23,7 @@ object SessionLink:
   /** 本领域工具的静态定义（组装时汇进全部内置工具目录）。 */
   val specs: List[ToolSpec] = List(NotifyUserDef.spec)
 
-  def notifyUser(n: Notifications): Tool[RunContext] =
+  def notifyUser(n: Notifications): Tool[RunContext, Nothing] =
     NotifyUserDef { (in, ctx) =>
       n.notify(Notice(in.title, in.body, Target.Session(ctx.session)))
         .mapBoth(ToolFailure.fromAppError, _ => ToolOutcome.text("已通知用户"))

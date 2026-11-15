@@ -5,7 +5,6 @@ import muliao.models.llm.{ReplyPart, Usage}
 import muliao.platform.AppError
 import muliao.sessions.store.*
 import zio.*
-import zio.json.*
 
 /** 用户与别的领域对会话的控制：停止、重试、答复挂起的调用、手动压缩、删除，以及 agent 删除时的忙碌判断与清理。 */
 private[sessions] final case class Control(
@@ -54,7 +53,7 @@ private[sessions] final case class Control(
              for
                _     <- ZIO.foreachDiscard(partial.filter(_.builder.parts.exists(visible)))(p => savePartial(id, p, t))
                open  <- Repo.openCalls(id).flatMap(Decode.calls)
-               _     <- ZIO.foreachDiscard(open)(c => CallTx.finish(c, CallResult.error(stoppedNote(c.state)), t))
+               _     <- ZIO.foreachDiscard(open)(c => CallTx.finish(c, CallResult.error(stoppedNote(c.status)), t))
                run   <- Repo.lastRun(id)
                _     <- ZIO.foreachDiscard(run.filter(_.state.active))(r => Repo.setRunState(r.id, RunState.Stopped, None, Some(t)))
                _     <- Repo.dropQueued(id)
@@ -92,10 +91,10 @@ private[sessions] final case class Control(
       EntryRow(0L, id, Some(p.run), EntryKind.Reply, EntryBody.Reply(parts, p.model, Usage.zero, None, interrupted = true).encode, ModelView.searchText(parts), p.startedAt, t)
     )
 
-  private def stoppedNote(s: CallState): String = s match
-    case CallState.Running   => Interrupted.stoppedWhileRunning
-    case CallState.Suspended => Interrupted.stoppedWhileWaiting
-    case _                   => Interrupted.stoppedBeforeStart
+  private def stoppedNote(s: CallStatus): String = s match
+    case CallStatus.Running(_)      => Interrupted.stoppedWhileRunning
+    case CallStatus.Suspended(_, _) => Interrupted.stoppedWhileWaiting
+    case _                          => Interrupted.stoppedBeforeStart
 
   // ---- 重试 ----
 
@@ -125,17 +124,16 @@ private[sessions] final case class Control(
                row <- Repo.call(key.entry, key.call).someOrFail(AppError.notFound("没有这个调用"))
                c   <- Decode.call(row)
                _   <- ZIO.when(row.sessionId != id)(ZIO.fail(AppError.notFound("没有这个调用")))
-               _   <- ZIO.when(c.state != CallState.Suspended)(ZIO.fail(AppError.conflict("这个调用已经不在等答复了")))
-               _ <- (c.pause, a) match
-                      case (Some(Pause.AskUser(qs)), Answer.Answers(as)) =>
+               _ <- (c.status, a) match
+                      case (CallStatus.Suspended(Pause.AskUser(qs), _), Answer.Answers(as)) =>
                         if as.size != qs.size then ZIO.fail(AppError.invalid(s"要回答 ${qs.size} 个问题，收到 ${as.size} 个"))
                         else CallTx.finish(c, CallResult.ok(answersText(qs, as)), t)
-                      case (Some(_: Pause.Approval), Answer.Decision(true, always)) =>
-                        val next = if always then CallState.ApprovedAlways else CallState.Approved
-                        Repo.setCall(c.entryId, c.callId, next, c.pause.map(_.toJson), None, c.startedAt, None)
-                      case (Some(_: Pause.Approval), Answer.Decision(false, _)) =>
+                      case (CallStatus.Suspended(p: Pause.Approval, t0), Answer.Decision(true, always)) =>
+                        CallTx.save(c.key, CallStatus.Approved(p, always, t0))
+                      case (CallStatus.Suspended(_: Pause.Approval, _), Answer.Decision(false, _)) =>
                         CallTx.finish(c, CallResult.error("[用户没有批准，没有执行。]"), t)
-                      case _ => ZIO.fail(AppError.invalid("答复的种类和这个调用在等的不一致"))
+                      case (CallStatus.Suspended(_, _), _) => ZIO.fail(AppError.invalid("答复的种类和这个调用在等的不一致"))
+                      case _                               => ZIO.fail(AppError.conflict("这个调用已经不在等答复了"))
                _ <- touched(id, t)
              yield ()
            )

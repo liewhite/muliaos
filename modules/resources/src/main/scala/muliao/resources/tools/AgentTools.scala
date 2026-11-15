@@ -75,7 +75,7 @@ object AgentTools:
 
   final case class Created(name: String, id: String, workspace: String, assets: String) derives JsonEncoder
 
-  private def json[A: JsonEncoder](a: A): ToolOutcome = ToolOutcome.text(a.toJsonPretty)
+  private def json[A: JsonEncoder](a: A): ToolOutcome[Nothing] = ToolOutcome.text(a.toJsonPretty)
 
   private def fail(e: AppError): ToolFailure = ToolFailure.fromAppError(e)
 
@@ -125,7 +125,7 @@ object AgentTools:
       vault: Vault,
       catalog: ToolCatalog,
       paths: ResourcePaths
-  ): List[Tool[ToolContext]] =
+  ): List[Tool[ToolContext, Nothing]] =
 
     val listAgents = ListAgentsDef { (_, _) =>
       (for

@@ -104,7 +104,7 @@ object FileTools:
   /** 本领域工具的静态定义（进全部内置工具目录）。 */
   val specs: List[ToolSpec] = List(ReadFileDef, WriteFileDef, EditFileDef, ShareFileDef).map(_.spec)
 
-  def all(access: FileAccess, files: Files): List[Tool[RunContext]] =
+  def all(access: FileAccess, files: Files): List[Tool[RunContext, Nothing]] =
     List(readFile(access), writeFile(access), editFile(access), shareFile(access, files))
 
   // ---- read_file ----
@@ -115,7 +115,7 @@ object FileTools:
     case Picture(mediaType: String, bytes: Chunk[Byte])
     case Problem(message: String)
 
-  def readFile(access: FileAccess): Tool[RunContext] =
+  def readFile(access: FileAccess): Tool[RunContext, Nothing] =
     ReadFileDef { (in, ctx) =>
       (in.path, in.reads) match
         case (Some(p), Nil) =>
@@ -170,7 +170,7 @@ object FileTools:
 
   // ---- write_file ----
 
-  def writeFile(access: FileAccess): Tool[RunContext] =
+  def writeFile(access: FileAccess): Tool[RunContext, Nothing] =
     WriteFileDef { (in, ctx) =>
       val path = FileAccess.resolve(ctx.workspace, in.path)
       access
@@ -215,7 +215,7 @@ object FileTools:
   /** 改好、还没写的一个文件。 */
   private final case class Planned(raw: String, path: java.nio.file.Path, edited: Edited)
 
-  def editFile(access: FileAccess): Tool[RunContext] =
+  def editFile(access: FileAccess): Tool[RunContext, Nothing] =
     EditFileDef { (in, ctx) =>
       for
         groups <- ZIO.fromEither(plan(in)).mapError(m => ToolFailure.Rejected(m))
@@ -238,7 +238,7 @@ object FileTools:
 
   // ---- share_file ----
 
-  def shareFile(access: FileAccess, files: Files): Tool[RunContext] =
+  def shareFile(access: FileAccess, files: Files): Tool[RunContext, Nothing] =
     ShareFileDef { (in, ctx) =>
       val path = FileAccess.resolve(ctx.workspace, in.path)
       (for

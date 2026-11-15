@@ -22,7 +22,7 @@ import scala.jdk.CollectionConverters.*
 final case class Launch(cwd: Path, sandbox: Sandbox)
 
 /** 一次连接的结果：连上的 server 的全部工具，和没连上的 server 要告诉模型的话（已打码）。 */
-final case class Connected(tools: Chunk[Tool[Any]], problems: Chunk[String])
+final case class Connected(tools: Chunk[Tool[Any, Nothing]], problems: Chunk[String])
 
 /** MCP 客户端：把 MCP server 连成给 agent 的工具。协议细节交给官方 MCP Java SDK。
   *
@@ -74,7 +74,7 @@ object McpConnector:
       ZIO.scoped(connect(server, secrets, launch).map(_.map(_.spec.name.stripPrefix(s"${server.name}_")))).mapError(AppError.invalid)
 
     /** 连一个 server；失败原因已打码。 */
-    private def connect(server: McpServerSpec, secrets: SecretLookup, launch: Launch): ZIO[Scope, String, Chunk[Tool[Any]]] =
+    private def connect(server: McpServerSpec, secrets: SecretLookup, launch: Launch): ZIO[Scope, String, Chunk[Tool[Any, Nothing]]] =
       VaultTemplate.fill(server.transport, secrets).mapError(_.message).flatMap { case Filled(transport, revealed) =>
         val masker = Masker(Chunk.fromIterable(revealed.values.map(SecretEnv(_, _))))
         val attempt =
@@ -152,14 +152,14 @@ object McpConnector:
       msgs.toList.distinct.mkString("：")
 
     /** 一个 MCP 工具 → 给 agent 的工具。名字不合规的（太长、有怪字符）不加载。 */
-    private def tool(server: String, client: McpSyncClient, masker: Masker, gone: UIO[String])(t: McpSchema.Tool): Either[String, Tool[Any]] =
+    private def tool(server: String, client: McpSyncClient, masker: Masker, gone: UIO[String])(t: McpSchema.Tool): Either[String, Tool[Any, Nothing]] =
       val name = s"${server}_${t.name}"
       Either.cond(ToolSpec.validName(name), (), s"工具名 $name 不合规（只能用字母、数字、_、-，最长 64 个字符）").map { _ =>
         val schema = mapper.writeValueAsString(Option(t.inputSchema).getOrElse(java.util.Map.of("type", "object"))).fromJson[Json].getOrElse(Json.Obj())
         val s      = ToolSpec(name, Option(t.description).getOrElse(""), schema, Access.Write, Scheduling.Concurrent, Display.Plain, Set.empty)
-        new Tool[Any]:
+        new Tool[Any, Nothing]:
           val spec = s
-          def invoke(args: Json, ctx: Any): IO[ToolFailure, ToolOutcome] =
+          def invoke(args: Json, ctx: Any): IO[ToolFailure, ToolOutcome[Nothing]] =
             args match
               case o: Json.Obj =>
                 ZIO
@@ -173,7 +173,7 @@ object McpConnector:
               case _ => ZIO.fail(ToolFailure.Rejected("参数整体：应是一个 JSON 对象。请对照参数说明改了再调用。"))
       }
 
-    private def result(r: McpSchema.CallToolResult, masker: Masker): IO[ToolFailure, ToolOutcome] =
+    private def result(r: McpSchema.CallToolResult, masker: Masker): IO[ToolFailure, ToolOutcome[Nothing]] =
       val blocks: Chunk[ToolContent] = Chunk.fromIterable(Option(r.content).map(_.asScala).getOrElse(Nil)).map {
         case c: McpSchema.TextContent  => ToolContent.Text(masker.mask(c.text))
         case c: McpSchema.ImageContent => ToolContent.Image(Option(c.mimeType).getOrElse("image/png"), Chunk.fromArray(Base64.getDecoder.decode(c.data)))

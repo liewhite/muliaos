@@ -9,10 +9,17 @@ import zio.*
 import zio.json.*
 import zio.json.ast.Json
 
-/** 把一个调用标成做完并写结果。 */
+/** 工具调用状态的唯一写入口。 */
 private[sessions] object CallTx:
-  def finish(c: Call, r: CallResult, t: Long): Tx[Unit] =
-    Repo.setCall(c.entryId, c.callId, CallState.Done, c.pause.map(_.toJson), Some(r.toJson), c.startedAt, Some(t))
+  def save(key: CallKey, s: CallStatus): Tx[Unit] =
+    val pause: Option[Pause] = s match
+      case CallStatus.Suspended(p, _)   => Some(p)
+      case CallStatus.Approved(a, _, _) => Some(a)
+      case _                            => None
+    Repo.setCall(key.entry, key.call, s.state, pause.map(_.toJson), s.outcome.map(_.toJson), s.started, s.finished)
+
+  /** 标成做完并写结果（开始时间沿用原来的）。 */
+  def finish(c: Call, r: CallResult, t: Long): Tx[Unit] = save(c.key, CallStatus.Done(r, c.status.started, t))
 
 /** 执行一条回复里的工具调用：`Ordered` 的工具与其他调用保持先后顺序，相邻的 `Concurrent` 调用并发执行；每个调用开始与结束都落库。 */
 private[sessions] final case class CallRunner(kernel: Kernel, files: Files, delegations: Delegations):
@@ -54,36 +61,33 @@ private[sessions] final case class CallRunner(kernel: Kernel, files: Files, dele
     val id = kit.info.id
     for
       t0 <- now
-      _  <- db.write(Repo.setCall(c.entryId, c.callId, CallState.Running, c.pause.map(_.toJson), None, Some(t0), None) *> touched(id, t0))
+      _  <- db.write(CallTx.save(c.key, CallStatus.Running(t0)) *> touched(id, t0))
       waiting <- info(id).map(_.userWaiting) // 运行中用户可能插话，按调用时的算
       ctx = RunContext(kit.info.agent, kit.res.agent.name, id, run, c.callId, kit.info.origin, kit.workspace, kit.res, waiting)
-      args    <- slot.secrets.get.map(_.getOrElse(CallKey(c.entryId, c.callId), c.args))
+      args    <- slot.secrets.get.map(_.getOrElse(c.key, c.args))
       outcome <- invoke(kit, c.copy(args = args), ctx)
-      fate    <- toFate(kit, c, outcome, rejects)
+      fate    <- toFate(c, outcome, rejects)
       t1 <- now
       _  <- save(kit, c, fate, t0, t1)
     yield fate match
       case Fate.Abort(_, why) => Some(why)
       case _                  => None
 
-  private def invoke(kit: Kit, c: Call, ctx: RunContext): UIO[Either[ToolFailure, ToolOutcome]] =
-    val attempt: IO[ToolFailure, ToolOutcome] = c.state match
-      case CallState.Approved | CallState.ApprovedAlways =>
-        c.pause match
-          case Some(Pause.Approval(handler, _, payload)) =>
-            ports.approval(handler).flatMap {
-              case Some(h) => h.approved(payload, c.state == CallState.ApprovedAlways, ctx)
-              case None    => ZIO.fail(ToolFailure.Aborted(s"批准后的执行者 ${handler.value} 没有登记"))
-            }
-          case _ => ZIO.fail(ToolFailure.Aborted("批准了的调用没有记下要执行什么"))
+  private def invoke(kit: Kit, c: Call, ctx: RunContext): UIO[Either[ToolFailure, ToolOutcome[Pause]]] =
+    val tool = ZIO.fromOption(kit.tools.get(c.name)).orElseFail(ToolFailure.Rejected(s"没有工具 ${c.name}（或你没有权限用它）。只能用工具列表里的。"))
+    val attempt: IO[ToolFailure, ToolOutcome[Pause]] = c.status match
+      case CallStatus.Approved(a, always, _) =>
+        tool.flatMap {
+          case t: Approvable => t.approved(a.payload, always, ctx)
+          case _             => ZIO.fail(ToolFailure.Aborted(s"工具 ${c.name} 不接受批准后的执行"))
+        }
       case _ =>
-        kit.tools.get(c.name) match
-          case None => ZIO.fail(ToolFailure.Rejected(s"没有工具 ${c.name}（或你没有权限用它）。只能用工具列表里的。"))
-          case Some(tool) =>
-            ZIO
-              .fromEither(c.args.fromJson[Json])
-              .mapError(_ => ToolFailure.Rejected("参数不是合法的 JSON 对象，改好了再调用。"))
-              .flatMap(args => tool.invoke(args, ctx))
+        tool.flatMap(t =>
+          ZIO
+            .fromEither(c.args.fromJson[Json])
+            .mapError(_ => ToolFailure.Rejected("参数不是合法的 JSON 对象，改好了再调用。"))
+            .flatMap(args => t.invoke(args, ctx))
+        )
     // 暂时不可用：这个调用退避重试（约 30 分钟放弃），期间运行仍算在跑；其余结局原样交出
     attempt
       .catchAllDefect(d => ZIO.fail(ToolFailure.Aborted(s"工具 ${c.name} 出错：${d.getMessage}", Some(d))))
@@ -97,13 +101,11 @@ private[sessions] final case class CallRunner(kernel: Kernel, files: Files, dele
       .retry(Retry.schedule(Retry.transient))
       .catchAll(e => ZIO.succeed(Left(ToolFailure.Unavailable(e.message))))
 
-  private def toFate(kit: Kit, c: Call, outcome: Either[ToolFailure, ToolOutcome], rejects: Ref[Map[String, Int]]): IO[AppError, Fate] =
+  private def toFate(c: Call, outcome: Either[ToolFailure, ToolOutcome[Pause]], rejects: Ref[Map[String, Int]]): IO[AppError, Fate] =
     outcome match
       case Right(ToolOutcome.Completed(content)) =>
         rejects.update(_ - c.name) *> stored(content).map(Fate.Result(_))
-      case Right(ToolOutcome.Suspended(p: Pause)) => ZIO.succeed(Fate.Wait(p))
-      case Right(ToolOutcome.Suspended(other)) =>
-        ZIO.succeed(Fate.Abort(CallResult.error("[系统错误：工具挂起的方式平台不认识]"), s"工具 ${c.name} 挂起的方式不认识：$other"))
+      case Right(ToolOutcome.Suspended(p)) => ZIO.succeed(Fate.Wait(p))
       case Left(ToolFailure.Rejected(m)) =>
         rejects.modify { m0 =>
           val n = m0.getOrElse(c.name, 0) + 1
@@ -133,14 +135,14 @@ private[sessions] final case class CallRunner(kernel: Kernel, files: Files, dele
   private def save(kit: Kit, c: Call, fate: Fate, t0: Long, t1: Long): IO[AppError, Unit] =
     val i = kit.info
     fate match
-      case Fate.Result(r)   => db.write(CallTx.finish(c.copy(startedAt = Some(t0)), r, t1) *> touched(i.id, t1))
-      case Fate.Abort(r, _) => db.write(CallTx.finish(c.copy(startedAt = Some(t0)), r, t1) *> touched(i.id, t1))
+      case Fate.Result(r)   => db.write(CallTx.save(c.key, CallStatus.Done(r, Some(t0), t1)) *> touched(i.id, t1))
+      case Fate.Abort(r, _) => db.write(CallTx.save(c.key, CallStatus.Done(r, Some(t0), t1)) *> touched(i.id, t1))
       case Fate.Wait(p) =>
         db.write(
           for
-            _ <- Repo.setCall(c.entryId, c.callId, CallState.Suspended, Some((p: Pause).toJson), None, Some(t0), None)
+            _ <- CallTx.save(c.key, CallStatus.Suspended(p, t0))
             _ <- p match
-                   case Pause.AwaitThread(d, _, _) => delegations.linkTx(d, CallKey(c.entryId, c.callId), t1)
+                   case Pause.AwaitThread(d, _, _) => delegations.linkTx(d, c.key, t1)
                    case _                          => ZIO.unit
             _ <- touched(i.id, t1)
           yield ()
@@ -148,7 +150,7 @@ private[sessions] final case class CallRunner(kernel: Kernel, files: Files, dele
           p match
             case Pause.AskUser(qs) =>
               ports.emit(SessionEvent.NeedsUser(i.id, i.agent, UserNeed.Answers(qs.size), waiting))
-            case Pause.Approval(_, summary, _) =>
+            case Pause.Approval(summary, _) =>
               ports.emit(SessionEvent.NeedsUser(i.id, i.agent, UserNeed.Approval(summary), waiting))
             case _: Pause.AwaitThread => ZIO.unit
         }

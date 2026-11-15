@@ -1,6 +1,6 @@
 package muliao.sessions
 
-import muliao.contract.{CallState, RunId}
+import muliao.contract.RunId
 
 /** 进行中的运行：编号与状态。 */
 private[sessions] final case class ActiveRun(id: RunId, suspended: Boolean)
@@ -30,9 +30,9 @@ private[sessions] object Plan:
     run match
       case None => if queued then Next.Start else Next.Rest
       case Some(r) =>
-        val runnable   = open.filter(_.state.runnable)
-        val suspended  = open.filter(_.state == CallState.Suspended)
-        val declinable = suspended.filter(_.pause.exists(_.declinable))
+        val runnable   = open.filter(_.status.runnable)
+        val suspended  = open.collect { case c @ Call(_, _, _, _, _, CallStatus.Suspended(p, _)) => c -> p }
+        val declinable = suspended.collect { case (c, p) if p.declinable => c }
         if runnable.nonEmpty then Next.Execute(r, runnable)
         else if queued && declinable.nonEmpty then Next.Decline(r, declinable)
         else if suspended.nonEmpty then Next.Pause(r)

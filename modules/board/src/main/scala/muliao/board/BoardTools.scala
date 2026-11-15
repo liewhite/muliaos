@@ -160,7 +160,7 @@ object BoardTools:
   /** 本领域工具的静态定义（进全部内置工具目录）。 */
   val specs: List[ToolSpec] = List(IssueListDef, IssueShowDef, IssueCreateDef, IssueUpdateDef, IssueCommentDef, IssueStopDef).map(_.spec)
 
-  def all(board: Board, agents: Agents, zone: ZoneId): List[Tool[RunContext]] =
+  def all(board: Board, agents: Agents, zone: ZoneId): List[Tool[RunContext, Nothing]] =
     val iso  = DateTimeFormatter.ISO_OFFSET_DATE_TIME.withZone(zone)
     val time = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(zone)
 
@@ -179,7 +179,7 @@ object BoardTools:
 
     def issueId(n: Long): IO[AppError, IssueId] = ZIO.fromEither(IssueId.make(n)).mapError(e => AppError.invalid(s"issue 号 $n：$e"))
 
-    def run[A](effect: IO[AppError, A])(out: A => String): IO[ToolFailure, ToolOutcome] =
+    def run[A](effect: IO[AppError, A])(out: A => String): IO[ToolFailure, ToolOutcome[Nothing]] =
       effect.mapBoth(ToolFailure.fromAppError, a => ToolOutcome.text(out(a)))
 
     val issueList = IssueListDef { (in, _) =>

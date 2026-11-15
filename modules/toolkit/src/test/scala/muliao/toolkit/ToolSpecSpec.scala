@@ -29,8 +29,8 @@ object ToolSpecSpec extends ZIOSpecDefault:
   final case class Ctx(agent: AgentId, session: SessionId, call: CallId) extends ToolContext
   val ctx = Ctx(AgentId.wrap("a"), SessionId.wrap("s"), CallId.wrap("c"))
 
-  val tool: Tool[ToolContext] =
-    Tool[ToolContext, SetSecret]("vault_set", "存口令", Access.Write, Scheduling.Ordered) { (in, c) =>
+  val tool: Tool[ToolContext, Nothing] =
+    ToolDef[ToolContext, SetSecret]("vault_set", "存口令", Access.Write, Scheduling.Ordered) { (in, c) =>
       if in.key == "bad" then ZIO.fail(ToolFailure.fromAppError(AppError.invalid("名字不合法")))
       else ZIO.succeed(ToolOutcome.text(s"${c.agent.value}:${in.key}:${in.count}:${in.mode}"))
     }
@@ -86,7 +86,7 @@ object ToolSpecSpec extends ZIOSpecDefault:
       )
     },
     test("工具名不合法时拒绝定义") {
-      for r <- ZIO.attempt(Tool[ToolContext, SetSecret]("bad name", "", Access.Read)((_, _) => ZIO.succeed(ToolOutcome.text("")))).either
+      for r <- ZIO.attempt(ToolDef[ToolContext, SetSecret]("bad name", "", Access.Read)((_, _) => ZIO.succeed(ToolOutcome.text("")))).either
       yield assertTrue(r.isLeft)
     }
   )

@@ -11,7 +11,7 @@ import muliao.resources.agents.Agents
 import muliao.resources.guard.AssetGuard
 import muliao.resources.tree.AssetStore
 import muliao.resources.vault.Vault
-import muliao.sessions.{Contribution, Files, LiveHub, Origin, RunContext, SessionConsole, SessionPaths, SessionSettings, Sessions}
+import muliao.sessions.{Contribution, Files, LiveHub, Origin, Pause, RunContext, SessionConsole, SessionPaths, SessionSettings, Sessions}
 import muliao.sessions.TestEnv as S
 import muliao.toolkit.{ToolOutcome, ToolContent, ToolFailure}
 import muliao.workspace.pages.PageSigner
@@ -83,14 +83,14 @@ object TestEnv:
     yield RunContext(agent, res.agent.name, SessionId.wrap(session), RunId.wrap(run), CallId.wrap("c"), Origin.User, dir, res, userWaiting = true)
 
   /** 直接调用一个工具：成功时返回结果的文字（或 `[image:类型]`），失败时返回失败。 */
-  def call(name: String, args: String, ctx: RunContext): ZIO[Env, Nothing, Either[ToolFailure, ToolOutcome]] =
+  def call(name: String, args: String, ctx: RunContext): ZIO[Env, Nothing, Either[ToolFailure, ToolOutcome[Pause]]] =
     Workspace.contribution.flatMap { c =>
       val tool = c.tools.find(_.spec.name == name).getOrElse(throw IllegalArgumentException(s"没有工具 $name"))
       val json = zio.json.ast.Json.decoder.decodeJson(args).fold(e => throw IllegalArgumentException(e), identity)
       tool.invoke(json, ctx).either
     }
 
-  def text(r: Either[ToolFailure, ToolOutcome]): String = r match
+  def text(r: Either[ToolFailure, ToolOutcome[Pause]]): String = r match
     case Right(ToolOutcome.Completed(cs)) =>
       cs.map {
         case ToolContent.Text(t)     => t

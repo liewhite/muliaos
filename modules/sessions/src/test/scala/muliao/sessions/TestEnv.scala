@@ -99,19 +99,16 @@ object TestEnv:
       a <- Ref.make(List.empty[Boolean])
     yield Probe(g, s, a)
 
-  def tools(p: Probe): List[Tool[RunContext]] = List(
-    Tool[RunContext, EchoIn]("echo", "原样返回", Access.Read)((in, _) => ZIO.succeed(ToolOutcome.text(s"echo:${in.text}"))),
-    Tool[RunContext, NoIn]("block", "卡住直到放行", Access.Write, Scheduling.Ordered)((_, _) => p.gate.await.as(ToolOutcome.text("放行了"))),
-    Tool[RunContext, SecretIn]("keep_secret", "收一个秘密", Access.Write)((in, _) => p.secrets.update(_ :+ in.value).as(ToolOutcome.text("收到"))),
-    Tool[RunContext, NoIn]("approve_me", "要批准", Access.Write, Scheduling.Ordered)((_, _) =>
-      ZIO.succeed(ToolOutcome.Suspended(Pause.Approval(ApproverName.wrap("test-approval"), "跑测试脚本", Json.Obj("x" -> Json.Num(1)))))
-    )
+  def tools(p: Probe): List[Tool[RunContext, Pause]] = List(
+    muliao.toolkit.ToolDef[RunContext, EchoIn]("echo", "原样返回", Access.Read)((in, _) => ZIO.succeed(ToolOutcome.text(s"echo:${in.text}"))),
+    muliao.toolkit.ToolDef[RunContext, NoIn]("block", "卡住直到放行", Access.Write, Scheduling.Ordered)((_, _) => p.gate.await.as(ToolOutcome.text("放行了"))),
+    muliao.toolkit.ToolDef[RunContext, SecretIn]("keep_secret", "收一个秘密", Access.Write)((in, _) => p.secrets.update(_ :+ in.value).as(ToolOutcome.text("收到"))),
+    Approvable(
+      muliao.toolkit.ToolDef[RunContext, NoIn]("approve_me", "要批准", Access.Write, Scheduling.Ordered)((_, _) =>
+        ZIO.succeed(ToolOutcome.Suspended(Pause.Approval("跑测试脚本", Json.Obj("x" -> Json.Num(1)))))
+      )
+    )((_, always, _) => p.approvals.update(_ :+ always).as(ToolOutcome.text(s"批准后执行了，always=$always")))
   )
-
-  def approval(p: Probe): ApprovalHandler = new ApprovalHandler:
-    val name = ApproverName.wrap("test-approval")
-    def approved(payload: Json, always: Boolean, ctx: RunContext): IO[ToolFailure, ToolOutcome] =
-      p.approvals.update(_ :+ always).as(ToolOutcome.text(s"批准后执行了，always=$always"))
 
   /** 全部内置工具：测试工具、本领域的，加上 `more`（下游领域测试时一并接上的）。 */
   def toolCatalog(more: List[ToolSpec] = Nil): ToolCatalog =
@@ -183,12 +180,12 @@ object TestEnv:
       _        <- ZIO.serviceWithZIO[Agents](_.start(sessions.agentHook :: more.flatMap(_.agentHook)))
     yield ()
 
-  /** 同 [[startWith]]，另接上测试工具与批准执行者。 */
+  /** 同 [[startWith]]，另接上测试工具。 */
   def start(p: Probe, more: List[Contribution] = Nil, jobs: JobControl = noJobs, unread: UnreadSource = noUnread): ZIO[Sessions & Agents & EventLog, AppError, Unit] =
     startWith(probeContribution(p) :: more, jobs, unread)
 
-  /** 测试工具与批准执行者。 */
-  def probeContribution(p: Probe): Contribution = Contribution(tools(p), List(approval(p)))
+  /** 测试工具。 */
+  def probeContribution(p: Probe): Contribution = Contribution(tools(p))
 
   /** 启动以来的全部会话事件。 */
   def recordEvents: URIO[EventLog, Ref[List[SessionEvent]]] = ZIO.serviceWith[EventLog](_.events)

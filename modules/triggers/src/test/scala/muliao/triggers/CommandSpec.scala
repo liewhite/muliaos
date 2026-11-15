@@ -225,7 +225,7 @@ object CommandSpec extends ZIOSpecDefault:
           port   <- muliao.platform.server.HttpServer.serve(settings, auth, bus, http.routes, "test").orDie
           c       = muliao.sessions.SessionsHttpSpec.Client(s"http://127.0.0.1:$port")
           _      <- c.call("POST", "/api/auth/login", Some("""{"password":"pw"}""")).orDie
-          made   <- c.call("POST", "/api/triggers", Some(s"""{"name":"web","agent":"${a.value}","kind":"schedule","config":{"cron":"0 9 * * *"},"prompt":"p"}""")).orDie
+          made   <- c.call("POST", "/api/triggers", Some(s"""{"name":"web","agent":"${a.value}","config":{"kind":"Schedule","cron":"0 9 * * *"},"prompt":"p"}""")).orDie
           id      = zio.json.ast.Json.decoder.decodeJson(made.body).toOption.flatMap(_.asObject).flatMap(_.get("id")).map(_.toString).getOrElse("?")
           list   <- c.call("GET", "/api/triggers").orDie
           kinds  <- c.call("GET", "/api/triggers/kinds").orDie

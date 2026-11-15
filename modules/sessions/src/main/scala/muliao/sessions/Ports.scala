@@ -82,23 +82,28 @@ trait JobControl:
   /** 会话被停止，放弃这个任务。 */
   def cancel(job: JobId): UIO[Unit]
 
-/** 用户批准后接着执行挂起的调用（如 skill 脚本）。 */
-trait ApprovalHandler:
-  def name: ApproverName
-  /** `always`：用户选了「以后同样的调用不再问」。 */
-  def approved(payload: Json, always: Boolean, ctx: RunContext): IO[ToolFailure, ToolOutcome]
+/** 会挂起等用户批准的工具（如 skill 脚本）：批准后由它自己接着执行。 */
+trait Approvable extends Tool[RunContext, Pause]:
+  /** `payload`：挂起时 [[Pause.Approval]] 里交出的数据；`always`：用户选了「以后同样的调用不再问」。 */
+  def approved(payload: Json, always: Boolean, ctx: RunContext): IO[ToolFailure, ToolOutcome[Pause]]
+
+object Approvable:
+  def apply(tool: Tool[RunContext, Pause])(onApproved: (Json, Boolean, RunContext) => IO[ToolFailure, ToolOutcome[Pause]]): Approvable =
+    new Approvable:
+      val spec                                                      = tool.spec
+      def invoke(args: Json, ctx: RunContext)                       = tool.invoke(args, ctx)
+      def approved(payload: Json, always: Boolean, ctx: RunContext) = onApproved(payload, always, ctx)
 
 /** 会话的未读（通知领域实现：有指向它的未读通知）。 */
 trait UnreadSource:
   def unread(ids: List[SessionId]): UIO[Set[SessionId]]
   def markRead(id: SessionId): UIO[Unit]
 
-/** 一个领域交给本领域的东西：给 agent 的工具、批准后的执行者、会话事件订阅，以及它对 agent 生命周期的参与
+/** 一个领域交给本领域的东西：给 agent 的工具、会话事件订阅，以及它对 agent 生命周期的参与
   * （组装入口转交给 `Agents.start`）。下游领域用纯函数给出它，组装入口在 [[Sessions.start]] 时一并交进来。
   */
 final case class Contribution(
-    tools: List[Tool[RunContext]] = Nil,
-    approvals: List[ApprovalHandler] = Nil,
+    tools: List[Tool[RunContext, Pause]] = Nil,
     listener: Option[SessionListener] = None,
     agentHook: Option[AgentHook] = None
 )
@@ -110,10 +115,9 @@ final case class SessionPorts(contributions: List[Contribution], jobs: JobContro
 private[sessions] final class Ports private (wired: Promise[Nothing, Ports.Wired]):
   def settle(p: SessionPorts): UIO[Unit] = wired.succeed(Ports.Wired(p)).unit
 
-  def tools: UIO[List[Tool[RunContext]]]                      = wired.await.map(_.tools)
-  def jobs: UIO[JobControl]                                   = wired.await.map(_.ports.jobs)
-  def unread: UIO[UnreadSource]                               = wired.await.map(_.ports.unread)
-  def approval(n: ApproverName): UIO[Option[ApprovalHandler]] = wired.await.map(_.approvals.get(n))
+  def tools: UIO[List[Tool[RunContext, Pause]]] = wired.await.map(_.tools)
+  def jobs: UIO[JobControl]                     = wired.await.map(_.ports.jobs)
+  def unread: UIO[UnreadSource]                 = wired.await.map(_.ports.unread)
   /** 界面怎么展示某个工具（MCP 工具不在其中，按纯文字）。 */
   def display: UIO[String => Display] = wired.await.map(w => n => w.display.getOrElse(n, Display.Plain))
 
@@ -123,10 +127,9 @@ private[sessions] final class Ports private (wired: Promise[Nothing, Ports.Wired
 
 private[sessions] object Ports:
   final case class Wired(ports: SessionPorts):
-    val tools: List[Tool[RunContext]]                 = ports.contributions.flatMap(_.tools)
-    val approvals: Map[ApproverName, ApprovalHandler] = ports.contributions.flatMap(_.approvals).map(h => h.name -> h).toMap
-    val listeners: List[SessionListener]              = ports.contributions.flatMap(_.listener)
-    val display: Map[String, Display]                 = tools.map(t => t.spec.name -> t.spec.display).toMap
+    val tools: List[Tool[RunContext, Pause]] = ports.contributions.flatMap(_.tools)
+    val listeners: List[SessionListener]     = ports.contributions.flatMap(_.listener)
+    val display: Map[String, Display]        = tools.map(t => t.spec.name -> t.spec.display).toMap
 
   val layer: ULayer[Ports] = ZLayer(Promise.make[Nothing, Wired].map(Ports(_)))
 

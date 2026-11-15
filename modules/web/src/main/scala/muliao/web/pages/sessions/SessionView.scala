@@ -105,11 +105,7 @@ object SessionView:
     val issue = Remote(BoardApi.get)(IssueId.wrap(n))
     Ui.appLink(Route.Issue(n).url)(
       cls := "flex min-w-0 items-center gap-1.5 hover:text-accent",
-      child <-- issue.map {
-        case Load.Ready(d)    => span(cls := "min-w-0 truncate", s"#$n ${d.summary.title}")
-        case Load.Stale(d, _) => span(cls := "min-w-0 truncate", s"#$n ${d.summary.title}")
-        case _                => span(cls := "min-w-0 truncate", fallback)
-      },
+      child <-- issue.map(l => span(cls := "min-w-0 truncate", l.data.fold(fallback)(d => s"#$n ${d.summary.title}"))),
       child.maybe <-- issue.map(_.data.map(d => span(cls := "shrink-0 text-xs font-normal text-muted", d.summary.status.shown))),
       child.maybe <-- issue.map {
         case Load.Failed(m) => Some(span(cls := "shrink-0 text-xs font-normal text-danger", m))

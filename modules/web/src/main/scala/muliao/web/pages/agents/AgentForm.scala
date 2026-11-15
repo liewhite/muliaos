@@ -93,7 +93,7 @@ object ModelInput:
     val overview = Remote(ModelsApi.overview)(())
     val provider = model.map(split(_)._1).distinct
     val listed: Signal[Load[List[String]]] = provider.flatMapSwitch {
-      case "" => Val(Load.Ready(Nil))
+      case "" => Val(Load.Loaded(Nil))
       case p  => Remote(ModelsApi.listModels)(p)
     }
     val names = listed.map(_.data.getOrElse(Nil))

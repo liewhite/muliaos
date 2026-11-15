@@ -36,18 +36,25 @@ enum FaultSource(val label: String) extends Labeled:
 
 object FaultSource extends Labels[FaultSource]("故障来源", FaultSource.values)
 
-/** 触发器的配置：哪些字段有意义由种类定（`kind`）。
-  *   - schedule：`cron`（5 段 cron，按服务器时区）
-  *   - once：`at`（ISO 8601 时刻，不带时区按服务器时区，须在将来）
-  *   - stream：`command`（常驻 bash 命令）、`secrets`（注入的 secret 名）、`debounceSeconds`（防抖秒数，默认 5）
-  */
-final case class TriggerConfig(
-    cron: Option[String] = None,
-    at: Option[String] = None,
-    command: Option[String] = None,
-    secrets: Option[List[String]] = None,
-    debounceSeconds: Option[Double] = None
-) derives JsonCodec, Schema
+/** 触发器的配置，每个种类只带自己的字段。JSON 里 `kind` 是分支名。 */
+@jsonDiscriminator("kind")
+enum TriggerConfig derives JsonCodec:
+  /** 按 cron 定时：5 段 cron，按服务器时区 */
+  case Schedule(cron: String)
+  /** 到点一次：ISO 8601 时刻，不带时区按服务器时区，须在将来 */
+  case Once(at: String)
+  /** 常驻命令：注入的 secret 名；第一行到达后多少秒内的行合成一次触发 */
+  case Stream(command: String, secrets: List[String] = Nil, debounceSeconds: Double = 5.0)
+
+  def kind: TriggerKind = this match
+    case Schedule(_)     => TriggerKind.Schedule
+    case Once(_)         => TriggerKind.Once
+    case Stream(_, _, _) => TriggerKind.Stream
+
+object TriggerConfig:
+  given Schema[TriggerConfig] =
+    given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
+    Schema.derived
 
 /** 前置检查。 */
 final case class PrecheckSpec(command: String, fireWhen: FireWhen = FireWhen.Output, secrets: List[String] = Nil) derives JsonCodec, Schema
@@ -66,7 +73,6 @@ final case class TriggerView(
     name: TriggerName,
     agent: AgentId,
     agentName: String,
-    kind: TriggerKind,
     config: TriggerConfig,
     prompt: String,
     enabled: Boolean,
@@ -85,7 +91,6 @@ final case class TriggerView(
 final case class NewTrigger(
     name: String,
     agent: AgentId,
-    kind: TriggerKind,
     config: TriggerConfig,
     prompt: String,
     enabled: Boolean = true,

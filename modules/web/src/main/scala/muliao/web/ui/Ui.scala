@@ -222,25 +222,16 @@ object Ui:
   def loading[A](state: Signal[Load[A]])(render: Signal[A] => Modifier[HtmlElement]): Modifier[HtmlElement] =
     Seq(
       child.maybe <-- state.map {
-        case Load.Stale(_, m) => Some(errorAlert("重新加载失败，显示的是之前的内容", m))
-        case _                => None
+        case Load.Loaded(_, Some(m)) => Some(errorAlert("重新加载失败，显示的是之前的内容", m))
+        case _                       => None
       },
-      child <-- state.map(_.data.isDefined).distinct.map {
-        case true  => div(cls := "contents", render(dataOf(state)))
-        case false => div(cls := "contents", child <-- state.map {
+      child <-- state.map(_.data).splitOption(data => div(cls := "contents", render(data))).someOrElse(
+        div(cls := "contents", child <-- state.map {
           case Load.Failed(m) => errorAlert("加载失败", m)
           case _              => centeredSpinner
         })
-      }
+      )
     )
-
-  /** 已有数据之后的数据：Load 一旦有了数据就不会再变回没有（重拉失败是 Stale），这里保留最近一份以防万一。 */
-  def dataOf[A](state: Signal[Load[A]]): Signal[A] =
-    var last: Option[A] = None
-    state.map { s =>
-      s.data.foreach(d => last = Some(d))
-      last.getOrElse(throw new IllegalStateException("还没有数据"))
-    }
 
   /** 任意 HTML 属性（字符串值）。 */
   def attr(name: String): HtmlAttr[String] = htmlAttr(name, com.raquo.laminar.codecs.Codec.stringAsIs)

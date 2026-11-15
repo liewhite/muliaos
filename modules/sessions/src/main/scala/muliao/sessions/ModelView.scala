@@ -14,18 +14,8 @@ import java.nio.file.Path
 final case class Entry(id: Long, run: Option[RunId], body: EntryBody, startedAt: Long, finishedAt: Long)
 
 /** 一次工具调用（解码后）。 */
-final case class Call(
-    entryId: Long,
-    callId: CallId,
-    seq: Int,
-    name: String,
-    args: String,
-    state: CallState,
-    pause: Option[Pause],
-    result: Option[CallResult],
-    startedAt: Option[Long],
-    finishedAt: Option[Long]
-)
+final case class Call(entryId: Long, callId: CallId, seq: Int, name: String, args: String, status: CallStatus):
+  def key: CallKey = CallKey(entryId, callId)
 
 private[sessions] object Decode:
   private def json[A: JsonDecoder](what: String, s: String): IO[AppError, A] =
@@ -37,10 +27,28 @@ private[sessions] object Decode:
   def entries(rs: List[EntryRow]): IO[AppError, List[Entry]] = ZIO.foreach(rs)(entry)
 
   def call(r: ToolCallRow): IO[AppError, Call] =
-    for
-      pause  <- ZIO.foreach(r.pause)(json[Pause]("挂起", _))
-      result <- ZIO.foreach(r.result)(json[CallResult]("工具结果", _))
-    yield Call(r.entryId, r.callId, r.seq, r.name, r.args, r.state, pause, result, r.startedAt, r.finishedAt)
+    status(r).map(Call(r.entryId, r.callId, r.seq, r.name, r.args, _))
+
+  /** 库里平铺的状态列还原成 [[CallStatus]]（写入只经 [[CallTx.save]]，对不上的组合只可能来自库被外部改过）。 */
+  private def status(r: ToolCallRow): IO[AppError, CallStatus] =
+    def pause = ZIO.fromOption(r.pause).orElseFail(broken(r)).flatMap(json[Pause]("挂起", _))
+    def started = ZIO.fromOption(r.startedAt).orElseFail(broken(r))
+    (r.state, r.result, r.finishedAt) match
+      case (CallState.Pending, _, _)   => ZIO.succeed(CallStatus.Pending)
+      case (CallState.Running, _, _)   => started.map(CallStatus.Running(_))
+      case (CallState.Suspended, _, _) => pause.zipWith(started)(CallStatus.Suspended(_, _))
+      case (CallState.Approved | CallState.ApprovedAlways, _, _) =>
+        pause.flatMap {
+          case a: Pause.Approval => started.map(CallStatus.Approved(a, r.state == CallState.ApprovedAlways, _))
+          case _                 => ZIO.fail(broken(r))
+        }
+      case (CallState.Done, Some(res), Some(t)) => callResult(res).map(CallStatus.Done(_, r.startedAt, t))
+      case (CallState.Done, _, _)               => ZIO.fail(broken(r))
+
+  def callResult(s: String): IO[AppError, CallResult] = json[CallResult]("工具结果", s)
+
+  private def broken(r: ToolCallRow): AppError =
+    AppError.Internal(s"库里的工具调用 ${r.callId.value} 状态不完整（${r.state.label}）")
 
   def calls(rs: List[ToolCallRow]): IO[AppError, List[Call]] = ZIO.foreach(rs)(call)
 
@@ -114,7 +122,7 @@ private[sessions] object ModelView:
             case _                     => true
           }
           val results = cs.sortBy(_.seq).map { c =>
-            val r = c.result.getOrElse(CallResult.error(Interrupted.restartedBeforeStart))
+            val r = c.status.outcome.getOrElse(CallResult.error(Interrupted.restartedBeforeStart))
             UserPart.ToolResult(c.callId.value, resultParts(r, a), r.isError)
           }
           List(A(visible)).filter(_.parts.nonEmpty) ++ Option.when(results.nonEmpty)(U(Chunk.fromIterable(results))).toList

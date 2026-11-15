@@ -15,7 +15,7 @@ object Timeline:
   def pending(p: Pause): PendingView = p match
     case Pause.AskUser(qs) =>
       PendingView.Question(qs.map(q => QuestionView(q.question, q.header, q.options.map(o => OptionView(o.label, o.description)), q.multiSelect)))
-    case Pause.Approval(_, summary, _) => PendingView.Approval(summary)
+    case Pause.Approval(summary, _)    => PendingView.Approval(summary)
     case Pause.AwaitThread(_, th, ag)  => PendingView.Agent(th, ag)
 
   def call(c: Call, display: String => Display): CallView =
@@ -24,11 +24,11 @@ object Timeline:
       name = c.name,
       args = c.args,
       display = display(c.name),
-      state = c.state,
-      result = c.result.map(result),
-      pending = c.pause.filter(_ => c.state == CallState.Suspended).map(pending),
-      startedAt = c.startedAt,
-      finishedAt = c.finishedAt
+      state = c.status.state,
+      result = c.status.outcome.map(result),
+      pending = c.status.waitingOn.map(pending),
+      startedAt = c.status.started,
+      finishedAt = c.status.finished
     )
 
   /** 一段回复。工具调用有记录时带上状态与结果；还没落库的（正在生成）是待执行。 */

@@ -20,29 +20,56 @@ object ModelSpec extends ZIOSpecDefault:
         CronSpec.parse("61 * * * *").isLeft
       )
     },
-    test("配置按种类解读：只认这个种类的字段，缺的、多的都报；不带时区的时刻按服务器时区") {
-      val once = Mode.parse(TriggerKind.Once, TriggerConfig(at = Some("2026-10-22T10:30")), shanghai)
-      val extra = Mode.parse(TriggerKind.Schedule, TriggerConfig(cron = Some("* * * * *"), command = Some("x")), shanghai)
-      val missing = Mode.parse(TriggerKind.Stream, TriggerConfig(), shanghai)
-      val stream = Mode.parse(TriggerKind.Stream, TriggerConfig(command = Some("tail -f x"), debounceSeconds = Some(1.5)), shanghai)
+    test("给模型的平铺配置按种类读：只认这个种类的字段，缺的、多的都报") {
+      import TriggerTools.ConfigIn
       assertTrue(
-        once == Right(Mode.Once(Instant.parse("2026-10-22T02:30:00Z"))),
-        extra.left.exists(_.contains("不用 command")),
-        missing.left.exists(_.contains("缺少 command")),
-        stream == Right(Mode.Stream("tail -f x", Nil, 1500.millis)),
+        ConfigIn(cron = Some("* * * * *"), command = Some("x")).toConfig(TriggerKind.Schedule).left.exists(_.contains("不用 command")),
+        ConfigIn().toConfig(TriggerKind.Stream).left.exists(_.contains("缺少 command")),
+        ConfigIn(command = Some("c")).toConfig(TriggerKind.Stream) == Right(TriggerConfig.Stream("c", Nil, 5.0)),
+        ConfigIn.of(TriggerConfig.Stream("c", List("K"), 2)).toConfig(TriggerKind.Stream) == Right(TriggerConfig.Stream("c", List("K"), 2))
+      )
+    },
+    test("配置解读：不带时区的时刻按服务器时区；解读出的是停用的") {
+      val once   = Mode.parse(TriggerConfig.Once("2026-10-22T10:30"), shanghai)
+      val stream = Mode.parse(TriggerConfig.Stream("tail -f x", Nil, 1.5), shanghai)
+      assertTrue(
+        once == Right(Mode.Once(Instant.parse("2026-10-22T02:30:00Z"), OnceState.Off)),
+        stream == Right(Mode.Stream("tail -f x", Nil, 1500.millis, on = false)),
+        Mode.parse(TriggerConfig.Stream(" ", Nil, 1), shanghai).isLeft,
         TriggerKind.parse("cron").isLeft,
         TriggerName.make("Daily_Report").isLeft,
         TriggerName.make("daily-report-2").isRight
       )
     },
-    test("配置写回再读一样（库里存的就是它）") {
-      val modes = List(
-        Mode.parse(TriggerKind.Schedule, TriggerConfig(cron = Some("*/5 * * * *")), shanghai),
-        Mode.parse(TriggerKind.Once, TriggerConfig(at = Some("2026-10-22T10:30+08:00")), shanghai),
-        Mode.parse(TriggerKind.Stream, TriggerConfig(command = Some("c"), secrets = Some(List("K")), debounceSeconds = Some(2)), shanghai)
-      ).map(_.toOption.get)
-      val again = modes.map(m => Mode.parse(m.kind, m.config(shanghai), shanghai).toOption.get)
-      assertTrue(again.map(_.config(shanghai)) == modes.map(_.config(shanghai)))
+    test("配置写回再读一样，JSON 里带 kind（库里存的就是它）") {
+      val configs = List(TriggerConfig.Schedule("*/5 * * * *"), TriggerConfig.Once("2026-10-22T10:30+08:00"), TriggerConfig.Stream("c", List("K"), 2))
+      val again   = configs.map(c => Mode.parse(c, shanghai).toOption.get.config(shanghai))
+      import zio.json.*
+      assertTrue(
+        again == configs,
+        configs.map(_.toJson.fromJson[TriggerConfig]) == configs.map(Right(_)),
+        (TriggerConfig.Schedule("* * * * *"): TriggerConfig).toJson.contains("\"kind\":\"Schedule\"")
+      )
+    },
+    test("开关与进度：启用从此刻算下次，到期定时推进、一次性结束，结束了的不再变；库里的列还原成同样的状态") {
+      val now   = Instant.parse("2026-01-01T00:00:30Z")
+      val sched = Mode.parse(TriggerConfig.Schedule("* * * * *"), shanghai).toOption.get.switched(true, now, shanghai)
+      val due   = Instant.parse("2026-01-01T00:01:00Z").toEpochMilli
+      val once  = Mode.parse(TriggerConfig.Once("2026-01-01T08:02:00"), shanghai).toOption.get.switched(true, now, shanghai)
+      val done  = once.consumed(due, shanghai).get
+      assertTrue(
+        sched.nextAt.contains(due),
+        sched.consumed(due, shanghai).flatMap(_.nextAt).contains(due + 60000),
+        sched.switched(false, now, shanghai).nextAt.isEmpty,
+        sched.switched(false, now, shanghai).consumed(due, shanghai).isEmpty,
+        done.finishedAt.contains(due),
+        !done.enabled,
+        done.switched(true, now, shanghai) == done,
+        done.consumed(due, shanghai).isEmpty,
+        CronSpec.parse("*/5 * * * *") == CronSpec.parse(" */5 * * * * "),
+        Mode.stored(TriggerConfig.Once("2026-01-01T08:02:00"), enabled = true, None, Some(due), shanghai) == Right(done),
+        Mode.stored(TriggerConfig.Schedule("* * * * *"), enabled = true, Some(due), None, shanghai) == Right(sched)
+      )
     },
     test("前置检查：output 有输出才触发；changed 第一次记基线、没变不触发、变了附 diff 和当前输出") {
       assertTrue(

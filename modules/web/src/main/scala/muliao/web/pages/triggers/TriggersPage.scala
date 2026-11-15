@@ -57,7 +57,7 @@ object Card:
           div(cls := "truncate font-medium", child.text <-- t.map(_.name.value)),
           div(
             cls := "mt-1 flex flex-wrap items-center gap-1.5",
-            child <-- t.map(x => Ui.chip(x.kind.title)()),
+            child <-- t.map(x => Ui.chip(x.config.kind.title)()),
             Option.when(showAgent)(child <-- t.map(x => Ui.chip(x.agentName, Tone.Accent)())),
             child.maybe <-- t.map(x => Show.warning(x).map(w => Ui.chip(w, Tone.Warning)()))
           )
@@ -132,7 +132,7 @@ object Detail:
           Dialog.heading(cls := "break-all", child.text <-- t.map(_.name.value)),
           div(
             cls := "mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted",
-            child <-- t.map(x => Ui.chip(x.kind.title)()),
+            child <-- t.map(x => Ui.chip(x.config.kind.title)()),
             child <-- t.map(x => Ui.chip(x.agentName, Tone.Accent)()),
             child <-- t.map(kindStatus),
             child.maybe <-- t.map(_.finishedAt.map(f => span(s"· 完成 ${Ui.formatTime(f)}")))
@@ -148,18 +148,18 @@ object Detail:
     )
 
   /** 这种方式自己的运行状态：下次时间、进程等。 */
-  private def kindStatus(t: TriggerView): HtmlElement = t.kind match
-    case TriggerKind.Schedule =>
+  private def kindStatus(t: TriggerView): HtmlElement = t.config match
+    case TriggerConfig.Schedule(cron) =>
       span(
-        code(cls := "rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs", t.config.cron.getOrElse("")),
-        t.nextAt.filter(_ => t.enabled).map(n => s" · 下次 ${Ui.formatTime(n)}"),
+        code(cls := "rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs", cron),
+        t.nextAt.map(n => s" · 下次 ${Ui.formatTime(n)}"),
         Option.when(t.skipped > 0)(span(cls := "text-warning", s" · 已连续跳过 ${t.skipped} 次：上次的会话还没做完"))
       )
-    case TriggerKind.Once => span(s"计划 ${Show.planned(t, Ui.formatTime)}")
-    case TriggerKind.Stream =>
+    case TriggerConfig.Once(_) => span(s"计划 ${Show.planned(t, Ui.formatTime)}")
+    case TriggerConfig.Stream(command, _, _) =>
       span(
         cls := "flex flex-col gap-1",
-        code(cls := "break-all rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs", t.config.command.getOrElse("")),
+        code(cls := "break-all rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs", command),
         span(
           t.runningSince.fold("未在运行")(s => s"运行中，自 ${Ui.formatTime(s)}"),
           " · stderr：",

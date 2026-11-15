@@ -98,13 +98,14 @@
 - 验收脚本：`sbt "resources/Test/runMain muliao.resources.RealAssetsCheck <资源目录副本> <agent TSV> <主密钥文件>"`，只读副本，不打印 secret 值。
 
 ## 会话领域的接法（#868，给下游领域）
-- **给 agent 的工具**：`ToolDef[RunContext, In]` 实现出的 `Tool[RunContext]`（`muliao.sessions.RunContext`：agent、会话、运行、调用编号、来源、工作目录、本次运行的资源快照、用户在不在等），放进本领域的 `Contribution`（工具、批准后的执行者、事件订阅、`AgentHook`），由下游领域的纯函数给出；组装入口在 `Sessions.start(SessionPorts(各领域的 Contribution, jobs, unread))` 时一次交进来（只调一次；之前读这些端口的会等到这时）。工具的静态定义另汇进资源领域的 `ToolCatalog`，两者一致由 `AppSpec` 检查。界面用的操作在 `SessionConsole`，不在 `Sessions`。
+- **给 agent 的工具**：`ToolDef[RunContext, In]` 实现出的 `Tool[RunContext, S]`（`S` 是挂起时交出的说明，不会挂起的是 `Nothing`，会挂起的是 `Pause` 的某种；`muliao.sessions.RunContext`：agent、会话、运行、调用编号、来源、工作目录、本次运行的资源快照、用户在不在等），放进本领域的 `Contribution`（工具、事件订阅、`AgentHook`），由下游领域的纯函数给出；组装入口在 `Sessions.start(SessionPorts(各领域的 Contribution, jobs, unread))` 时一次交进来（只调一次；之前读这些端口的会等到这时）。工具的静态定义另汇进资源领域的 `ToolCatalog`，两者一致由 `AppSpec` 检查。界面用的操作在 `SessionConsole`，不在 `Sessions`。
 - **投信**：一律经 `Sessions.deliver(Address, Letter)`：触发器用 `Address.Fresh(agent, Origin.Trigger(名), 标题)`，看板用 `Address.IssueOf(agent, issue, 标题)`（每个 issue + agent 一个会话），事件用 `Source.Event(种类)`；投不进以 `AppError` 说明原因。「回答交给谁」由信里的 `replyTo` 定（用户在等写 `ReplyTo.User`）。
 - **agent 显示名**：`Agents.names(编号)` 一次查出（含已删除的，查不到显示编号）；不逐个 `get`。
 - **工作状态**：`Sessions.states(ids)` 是全系统唯一的判断（running / waiting / idle），看板停滞、触发器防重叠、界面都用它。
 - **会话等的后台任务**：开始时 `Sessions.openJobWait(会话, 任务号, 说明, 心跳)`，结束时 `closeJobWait(任务号, Some(事件信))`；`SessionPorts.jobs` 是必填的 `JobControl`（工作区的 `Workspace.jobControl`：心跳检查里的一句现状、会话被停止时结束任务）。等待项是 ADT `WaitRef = Job | Wake | Delegation`，唤醒与委派由会话领域自己处理。
 - **状态与种类**：跨领域、存库、走接口的状态与种类都是 `Labeled` 枚举（contract 的 `Labels` 给出解析、JSON、tapir 编解码，`Sql` 自动按 `label` 存取，工具参数用 `LabeledArg.schema`），不写字符串比较；带分支字段的接口数据（时间线条目、回复段、实时事件、挂起说明、等待项）是 JSON 里 `kind` 为分支名的 ADT。
-- **要用户批准的执行**：工具返回 `ToolOutcome.Suspended(Pause.Approval(执行者名, 给用户看的摘要, 数据))`，并在本领域的 `Contribution.approvals` 里给出同名 `ApprovalHandler`：用户批准后由它接着执行（`always` 表示用户选了以后不再问）。
+- **要用户批准的执行**：工具返回 `ToolOutcome.Suspended(Pause.Approval(给用户看的摘要, 数据))`，工具本身用 `Approvable(工具)(批准后怎么做)` 包起来：用户批准后会话领域按调用的工具名找回它接着执行（`always` 表示用户选了以后不再问）。
+- **工具调用的状态**：`CallStatus = Pending | Running | Suspended(挂起说明) | Approved(批准说明, always) | Done(结果)`，各步带着自己的数据和时间；库里仍是平铺的列，写入只经 `CallTx.save(调用, 状态)`，读出经 `Decode.call` 还原。
 - **事件**：`Contribution.listener` 订阅 `SessionEvent`（提交后按贡献的顺序同步逐个调用）：`Settled`（回到空闲/最终失败/被停止，`toUser` 表示用户在等；最终失败无论谁在等都该通知用户）、`NeedsUser`（提问、等批准）、`Deleted`。未读是必填的 `SessionPorts.unread`（通知领域的 `SessionLink.unread`）。
 - **时间线**：`Sessions.timeline(id)` 给出界面与 `session_read` 共用的投影（`TimelineItem`，来信的 `source` 就是 USER/TRIGGER/ISSUE/DELEGATION/EVENT 标签）。
 
@@ -141,7 +142,7 @@
 ## 触发器领域的接法（#872，给组装入口与迁移）
 - **组装**：`Triggers.layer`（要 `Database`、`ChangeBus`、`Sessions`、`Agents`、`Notifications`、`AgentExec`、`ResourcePaths`、`GeneralSettings`、`TriggerSettings`）；`Triggers.contribution`：6 个工具（静态定义在 `Triggers.specs`）和 agent 删除时的清理（`forgetAgent`）。`Sessions.start`、`Jobs.recover` 之后调 `Triggers.start` 起到期扫描与常驻流托管；它们跑在 layer 的 scope 里，关停时随之停下（常驻命令整组结束）。接口 `TriggersHttp(...).routes`，主题 `triggers`。
 - **配置**：`[triggers] precheck_timeout_seconds`（默认 60）。cron 与不带时区的时刻按 `[general] timezone` 解释。
-- **数据**（表 `trigger_def`、`trigger_fault`）：`kind` + `config`（`TriggerConfig` 的 JSON，键名驼峰：`cron`、`at`、`command`、`secrets`、`debounceSeconds`）、`precheck`（`PrecheckSpec` 的 JSON：`command`、`fireWhen`、`secrets`），读出时一次解析成 `Mode` / `Precheck`，读不懂报内部错误（不自动停用）。`next_at` 为空的启用中的定时、一次性，扫描时按「现在」补上（迁移可以不填）；已结束的一次性 `finished_at` 非空，名字只在没结束的之间唯一。迁移进来的开关照搬旧版（#881 正式切换：先停旧版再迁移，两边不会同时开着）。
+- **数据**（表 `trigger_def`、`trigger_fault`）：`config` 是 `TriggerConfig` 的 JSON（带 `kind` 的 ADT：`Schedule{cron}`、`Once{at}`、`Stream{command, secrets, debounceSeconds}`，接口也是它；给模型的工具参数仍是平铺的 `ConfigIn`，按种类读成它）、`precheck`（`PrecheckSpec` 的 JSON：`command`、`fireWhen`、`secrets`）。读出时连同 `enabled`、`next_at`、`finished_at` 一次解析成 `Mode`（每种带自己的状态：定时 `Armed = Off | On(下次到期)`、一次性 `OnceState = Off | Waiting | Finished(时间)`、常驻流开关）与 `Precheck`，读不懂报内部错误（不自动停用）；写回时这三列由 `Mode` 派生。已结束的一次性 `finished_at` 非空、`enabled = 0`（#889 迁移 V2 补齐旧行），名字只在没结束的之间唯一。迁移进来的开关照搬旧版（#881 正式切换：先停旧版再迁移，两边不会同时开着）。
 - **触发只有一个出口** `Core.fire`：agent 能不能接活（归档：定时跳过、一次性推送用户没做、流式事件丢弃）→ 防重叠（正在跑前置检查的靠内存集合；上次开的会话不空闲就跳过，定时计入 `skipped`，挡路会话在等待时通知用户一次）→ 前置检查（`bash` 开 pipefail，事件行从标准输入喂入）→ 在一个事务里经 `Sessions.deliverIn` 开会话并记下这次触发。
 - **测试**：`ModelSpec`（纯函数）、`ScheduleSpec`（测试时钟：定时、防重叠、停机补一次、停用不补、一次性、归档）、`CommandSpec`（真实进程：前置检查各模式与失败/超时、常驻流防抖与排队、退避重启与故障、工具、HTTP）。用测试时钟拨时间的测试把资源目录轮询调大（`TestEnv.layer(assetPoll = 1.hour)`），否则拨一次时钟要跑成千上万次轮询。
 

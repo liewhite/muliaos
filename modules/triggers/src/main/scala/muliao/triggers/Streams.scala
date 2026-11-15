@@ -106,7 +106,7 @@ private[triggers] final case class Streams(core: Core, scope: Scope, hosted: Ref
         case None => ZIO.unit
         case Some(t) =>
           blocker(t).flatMap {
-            case Some((s, state)) => noteBlocked(t, s, state) *> Clock.sleep(tuning.busyPoll) *> deliver(lines)
+            case Some(by) => blocked(t, Occasion.Events(lines), Some(by)) *> Clock.sleep(tuning.busyPoll) *> deliver(lines)
             case None =>
               queue.takeAll.flatMap { more =>
                 fire(t, Occasion.Events(lines ++ more)).flatMap {

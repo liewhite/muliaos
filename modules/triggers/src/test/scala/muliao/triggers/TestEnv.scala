@@ -128,10 +128,10 @@ object TestEnv:
   def read(p: Path): UIO[String] = ZIO.attemptBlocking(if JFiles.exists(p) then JFiles.readString(p) else "").orDie
 
   def schedule(name: String, agent: AgentId, cron: String, prompt: String = "定时任务", precheck: Option[PrecheckSpec] = None): NewTrigger =
-    NewTrigger(name, agent, TriggerKind.Schedule, TriggerConfig(cron = Some(cron)), prompt, precheck = precheck)
+    NewTrigger(name, agent, TriggerConfig.Schedule(cron), prompt, precheck = precheck)
 
   def streamOf(name: String, agent: AgentId, command: String, debounce: Double = 0.3, precheck: Option[PrecheckSpec] = None): NewTrigger =
-    NewTrigger(name, agent, TriggerKind.Stream, TriggerConfig(command = Some(command), debounceSeconds = Some(debounce)), "处理事件", precheck = precheck)
+    NewTrigger(name, agent, TriggerConfig.Stream(command, Nil, debounce), "处理事件", precheck = precheck)
 
   /** 不经工具直接用到的类型，免得测试文件逐个 import。 */
   export muliao.sessions.TestEnv.{Script, dirs, fakeModels, probe, text, call, lastUserText, userTexts, agent}

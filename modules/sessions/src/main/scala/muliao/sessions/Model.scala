@@ -1,7 +1,6 @@
 package muliao.sessions
 
 import muliao.contract.*
-import muliao.toolkit.Suspension
 import zio.Chunk
 import zio.json.*
 import zio.json.ast.Json
@@ -13,10 +12,6 @@ type DelegationId = DelegationId.Type
 /** 一项进行中的异步工作的登记。 */
 object WaitId extends LongId
 type WaitId = WaitId.Type
-
-/** 批准后接着执行挂起调用的执行者名（见 [[ApprovalHandler]]）。 */
-object ApproverName extends StringId
-type ApproverName = ApproverName.Type
 
 /** 会话的来源：谁开的。 */
 enum Origin:
@@ -141,8 +136,8 @@ final case class Question(
 
 final case class QuestionOption(label: String, description: String) derives JsonCodec
 
-/** 工具调用挂起时在等什么。只有这几种：工具返回 [[muliao.toolkit.ToolOutcome.Suspended]] 时交出其中之一。 */
-sealed trait Pause extends Suspension derives JsonCodec:
+/** 工具调用挂起时在等什么。只有这几种：本领域的工具是 `Tool[RunContext, Pause]`，挂起时交出其中之一。 */
+sealed trait Pause derives JsonCodec:
   /** 用户发来新信时当作没答复（等用户的提问与批准）；等别的 agent 回答的不算。 */
   def declinable: Boolean = this match
     case _: Pause.AskUser | _: Pause.Approval => true
@@ -152,11 +147,56 @@ object Pause:
   /** 等用户回答选择题（只在用户在等时可用）。 */
   final case class AskUser(questions: List[Question]) extends Pause
 
-  /** 等用户批准；批准后由名为 `handler` 的 [[ApprovalHandler]] 接着执行，`payload` 是它要的数据。 */
-  final case class Approval(handler: ApproverName, summary: String, payload: Json) extends Pause
+  /** 等用户批准；批准后由发起调用的工具（[[Approvable]]）接着执行，`payload` 是它要的数据。 */
+  final case class Approval(summary: String, payload: Json) extends Pause
 
   /** 等委派的 thread 回答（`ask_agent`）。 */
   final case class AwaitThread(delegation: DelegationId, thread: ThreadName, agent: AgentName) extends Pause
+
+/** 一次工具调用走到哪一步，各步带着它的数据。 */
+enum CallStatus:
+  /** 还没开始 */
+  case Pending
+  case Running(startedAt: Long)
+  /** 挂起：等用户回答、批准，或等别的 agent 回答 */
+  case Suspended(pause: Pause, startedAt: Long)
+  /** 用户批准了，等接着执行；`always`：以后同样的调用不再问 */
+  case Approved(approval: Pause.Approval, always: Boolean, startedAt: Long)
+  /** 有了结果；没开始就收尾的（被打断、跳过）没有开始时间 */
+  case Done(result: CallResult, startedAt: Option[Long], finishedAt: Long)
+
+  def state: CallState = this match
+    case Pending               => CallState.Pending
+    case Running(_)            => CallState.Running
+    case Suspended(_, _)       => CallState.Suspended
+    case Approved(_, false, _) => CallState.Approved
+    case Approved(_, true, _)  => CallState.ApprovedAlways
+    case Done(_, _, _)         => CallState.Done
+
+  def started: Option[Long] = this match
+    case Pending           => None
+    case Running(t)        => Some(t)
+    case Suspended(_, t)   => Some(t)
+    case Approved(_, _, t) => Some(t)
+    case Done(_, t, _)     => t
+
+  def finished: Option[Long] = this match
+    case Done(_, _, t) => Some(t)
+    case _             => None
+
+  def outcome: Option[CallResult] = this match
+    case Done(r, _, _) => Some(r)
+    case _             => None
+
+  /** 挂起着的话在等什么。 */
+  def waitingOn: Option[Pause] = this match
+    case Suspended(p, _) => Some(p)
+    case _               => None
+
+  /** 驱动接下来要执行它。 */
+  def runnable: Boolean = this match
+    case Pending | Approved(_, _, _) => true
+    case _                           => false
 
 /** 用户对挂起调用的答复。 */
 enum Answer:

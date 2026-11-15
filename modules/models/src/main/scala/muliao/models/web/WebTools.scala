@@ -37,14 +37,14 @@ object WebTools:
   /** 本领域工具的静态定义（进全部内置工具目录）。 */
   val specs: List[ToolSpec] = List(WebSearchDef, WebFetchDef).map(_.spec)
 
-  def all(web: Web): Chunk[Tool[Any]] = Chunk(search(web), fetch(web))
+  def all(web: Web): Chunk[Tool[Any, Nothing]] = Chunk(search(web), fetch(web))
 
-  def search(web: Web): Tool[Any] =
+  def search(web: Web): Tool[Any, Nothing] =
     WebSearchDef { (in, _) =>
       web.search(in.query, in.limit.max(1)).mapBoth(ToolFailure.fromAppError, hits => ToolOutcome.text(hits.toJsonPretty))
     }
 
-  def fetch(web: Web): Tool[Any] =
+  def fetch(web: Web): Tool[Any, Nothing] =
     WebFetchDef { (in, _) =>
       web.fetch(in.url).mapBoth(
         ToolFailure.fromAppError,

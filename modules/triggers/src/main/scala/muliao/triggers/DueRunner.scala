@@ -14,22 +14,14 @@ private[triggers] final case class DueRunner(core: Core, scope: Scope):
   def run: UIO[Nothing] =
     (round.catchAllCause(c => ZIO.logErrorCause("触发器到期扫描出错", c).as(None)).flatMap(wait)).forever
 
-  /** 一轮：补上缺下次到期时间的（如迁移进来的），触发到期的，返回之后最早的到期时间。 */
+  /** 一轮：触发到期的，返回之后最早的到期时间。 */
   private def round: IO[AppError, Option[Long]] =
     for
       t0   <- now
-      all  <- active
-      _    <- ZIO.foreachDiscard(all.filter(_.nextAt.isEmpty))(t => ZIO.foreachDiscard(t.mode.firstDue(instant(t0), zone))(d => schedule(t, d.toEpochMilli)))
-      due   = all.filter(_.nextAt.exists(_ <= t0))
+      due  <- active.map(_.filter(_.mode.nextAt.exists(_ <= t0)))
       _    <- ZIO.foreachDiscard(due)(t => consume(t, t0).flatMap(ZIO.foreachDiscard(_)(fireDue(_).forkIn(scope))))
       rest <- active
-    yield rest.flatMap(_.nextAt).minOption
-
-  private def schedule(t: Trigger, at: Long): IO[AppError, Unit] =
-    db.write(Repo.get(t.id).flatMap {
-      case Some(r) if r.nextAt.isEmpty && r.finishedAt.isEmpty => Repo.save(r.copy(nextAt = Some(at))) *> changed
-      case _                                                   => ZIO.unit
-    })
+    yield rest.flatMap(_.mode.nextAt).minOption
 
   private def wait(next: Option[Long]): UIO[Unit] =
     next match
@@ -40,30 +32,21 @@ private[triggers] final case class DueRunner(core: Core, scope: Scope):
   /** 在事务里消耗这次到期；行已被改动（停用、删除、到期时间变了）就不消耗，返回 None。 */
   private def consume(t: Trigger, at: Long): IO[AppError, Option[Trigger]] =
     db.write(
-      Repo.get(t.id).flatMap {
-        case Some(r) if r.enabled && r.finishedAt.isEmpty && r.nextAt == t.nextAt =>
-          decode(r).flatMap { cur =>
-            val next = cur.mode match
-              case Mode.Once(_) => cur.copy(nextAt = None, finishedAt = Some(at))
-              case m            => cur.copy(nextAt = m.nextAfter(instant(at), zone).map(_.toEpochMilli))
-            Repo.save(encode(next)) *> changed.as(Some(next))
-          }
+      Repo.get(t.id).flatMap(ZIO.foreach(_)(decode)).flatMap {
+        case Some(cur) if cur.mode.nextAt == t.mode.nextAt =>
+          ZIO.foreach(cur.mode.consumed(at, zone).map(m => cur.copy(mode = m)))(next => Repo.save(encode(next)) *> changed.as(next))
         case _ => ZIO.none
       }
     )
 
+  /** 没做成：错过就没有下一次的（一次性）告诉用户，其余记日志。 */
+  private def missed(t: Trigger, why: String): UIO[Unit] =
+    if t.mode.reportsMiss then notDone(t, why) else ZIO.logWarning(s"触发器 ${t.name.value} 这次没触发：$why")
+
   private def fireDue(t: Trigger): UIO[Unit] =
     fire(t, Occasion.Due)
       .flatMap {
-        case Fired.NotDone(why) =>
-          t.mode match
-            case Mode.Once(_) => notDone(t, why)
-            case _            => ZIO.logWarning(s"触发器 ${t.name.value} 这次没触发：$why")
-        case _ => ZIO.unit
+        case Fired.NotDone(why) => missed(t, why)
+        case _                  => ZIO.unit
       }
-      .catchAll { e =>
-        ZIO.logError(s"触发器 ${t.name.value} 触发失败：${e.message}") *>
-          (t.mode match
-            case Mode.Once(_) => notDone(t, s"触发出错（${e.message}）")
-            case _            => ZIO.unit)
-      }
+      .catchAll(e => ZIO.logError(s"触发器 ${t.name.value} 触发失败：${e.message}") *> missed(t, s"触发出错（${e.message}）"))

@@ -13,6 +13,8 @@ import muliao.triggers.store.Repo
 import muliao.workspace.AgentExec
 import zio.*
 
+import java.time.OffsetDateTime
+
 /** 触发器领域给界面、工具与组装入口的入口。 */
 trait Triggers:
   /** 起到期扫描与常驻流托管。在 [[Sessions.start]] 之后调用；只起一次。 */
@@ -123,9 +125,9 @@ object Triggers:
         val byTrigger = faults.groupBy(_.triggerId)
         ts.map { t =>
           TriggerView(
-            t.id, t.name, t.agent, names(t.agent), t.mode.kind, t.mode.config(zone), t.prompt, t.enabled,
-            t.precheck.map(_.spec), t.nextAt.filter(_ => t.enabled), t.skipped, hs.get(t.id).flatMap(_.runningSince), t.lastSession,
-            t.lastFiredAt, t.finishedAt,
+            t.id, t.name, t.agent, names(t.agent), t.mode.config(zone), t.prompt, t.mode.enabled,
+            t.precheck.map(_.spec), t.mode.nextAt, t.skipped, hs.get(t.id).flatMap(_.runningSince), t.lastSession,
+            t.lastFiredAt, t.mode.finishedAt,
             byTrigger.getOrElse(t.id, Nil).map(f => Fault(f.source, f.error, f.at).view).sortBy(_.source.ordinal),
             t.createdAt, t.updatedAt
           )
@@ -144,10 +146,11 @@ object Triggers:
     private def validPrompt(p: String): IO[AppError, String] =
       if p.trim.isEmpty then ZIO.fail(AppError.invalid("prompt 不能为空：它是每次触发交给 agent 的处理说明")) else ZIO.succeed(p)
 
-    private def mode(kind: TriggerKind, c: TriggerConfig, at: Long): IO[AppError, Mode] =
-      ZIO.fromEither(Mode.parse(kind, c, zone)).mapError(AppError.invalid).tap {
-        case Mode.Once(t) if t.toEpochMilli <= at =>
-          ZIO.fail(AppError.invalid(s"once 的时刻 ${c.at.getOrElse("")} 已经过去，要在将来；要现在跑就用立即运行"))
+    /** 解读新给的配置（得到停用的）；一次性的时刻要在将来。 */
+    private def mode(c: TriggerConfig, at: Long): IO[AppError, Mode] =
+      ZIO.fromEither(Mode.parse(c, zone)).mapError(AppError.invalid).tap {
+        case Mode.Once(t, _) if t.toEpochMilli <= at =>
+          ZIO.fail(AppError.invalid(s"once 的时刻 ${OffsetDateTime.ofInstant(t, zone)} 已经过去，要在将来；要现在跑就用立即运行"))
         case _ => ZIO.unit
       }
 
@@ -158,11 +161,10 @@ object Triggers:
         name   <- ZIO.fromEither(TriggerName.make(req.name.trim)).mapError(AppError.invalid)
         _      <- agents.requireActive(req.agent)
         t0     <- now
-        m      <- mode(req.kind, req.config, t0)
+        m      <- mode(req.config, t0)
         pre    <- ZIO.foreach(req.precheck)(precheck)
         prompt <- validPrompt(req.prompt)
-        draft = Trigger(TriggerId.wrap(1L), name, req.agent, prompt, m, req.enabled, pre,
-                  Option.when(req.enabled)(m.firstDue(instant(t0), zone).map(_.toEpochMilli)).flatten, 0, None, None, None, None, None, t0, t0)
+        draft = Trigger(TriggerId.wrap(1L), name, req.agent, prompt, m.switched(req.enabled, instant(t0), zone), pre, 0, None, None, None, None, t0, t0)
         id <- db.write(
                 for
                   taken <- Repo.live(name)
@@ -181,11 +183,14 @@ object Triggers:
         _ <- db.write(
                for
                  cur <- loadTx(id)
-                 _   <- ZIO.when(cur.finished)(ZIO.fail(AppError.conflict(s"触发器 ${cur.name.value} 已结束，不能再改")))
-                 m   <- ZIO.foreach(patch.config)(c => mode(cur.mode.kind, c, t0)).map(_.getOrElse(cur.mode))
+                 _   <- ZIO.when(cur.mode.finished)(ZIO.fail(AppError.conflict(s"触发器 ${cur.name.value} 已结束，不能再改")))
+                 m <- ZIO.foreach(patch.config)(c =>
+                        if c.kind == cur.mode.kind then mode(c, t0)
+                        else ZIO.fail(AppError.invalid(s"不能把 ${cur.mode.kind.label} 改成 ${c.kind.label}：种类不变，要换种类就删掉重建"))
+                      )
                  pre <- if patch.removePrecheck then ZIO.none else ZIO.foreach(patch.precheck)(precheck).map(_.orElse(cur.precheck))
                  prompt <- ZIO.foreach(patch.prompt)(validPrompt).map(_.getOrElse(cur.prompt))
-                 rev     = revise(cur, m, pre, prompt, patch.enabled.getOrElse(cur.enabled), t0)
+                 rev     = revise(cur, m, pre, prompt, patch.enabled.getOrElse(cur.mode.enabled), t0)
                  _      <- ZIO.when(rev.restart)(Repo.clearFaults(id, None))
                  _ <- Repo.save(encode(rev.next))
                  _ <- changed
@@ -198,18 +203,17 @@ object Triggers:
     /** 改动后的触发器（纯函数）：人工改了怎么触发（配置、前置检查）或重新启用，就从头来（`restart`）——清跳过计数与脚本故障，
       * 前置检查换了基线作废，配置变了或重新启用从此刻重算下次到期。
       */
-    private def revise(cur: Trigger, m: Mode, pre: Option[Precheck], prompt: String, enabled: Boolean, at: Long): Revision =
-      val modeChanged = m.config(zone) != cur.mode.config(zone)
+    private def revise(cur: Trigger, patched: Option[Mode], pre: Option[Precheck], prompt: String, enabled: Boolean, at: Long): Revision =
+      val modeChanged = patched.exists(m => !m.sameFiring(cur.mode))
       val preChanged  = pre != cur.precheck
-      val reEnabled   = enabled && !cur.enabled
+      val reEnabled   = enabled && !cur.mode.enabled
       val restart     = modeChanged || preChanged || reEnabled
+      val firing      = patched.filter(_ => modeChanged).getOrElse(cur.mode)
       Revision(
         cur.copy(
           prompt = prompt,
-          mode = m,
+          mode = if modeChanged || enabled != cur.mode.enabled then firing.switched(enabled, instant(at), zone) else cur.mode,
           precheck = pre,
-          enabled = enabled,
-          nextAt = if modeChanged || reEnabled then m.firstDue(instant(at), zone).map(_.toEpochMilli) else cur.nextAt,
           skipped = if restart then 0 else cur.skipped,
           baseline = if preChanged then None else cur.baseline,
           updatedAt = at
@@ -223,7 +227,7 @@ object Triggers:
     def run(id: TriggerId): IO[AppError, FireResult] =
       for
         t <- load(id).someOrFail(missing(id))
-        _ <- ZIO.when(t.finished)(ZIO.fail(AppError.conflict(s"触发器 ${t.name.value} 已结束，不能再运行")))
+        _ <- ZIO.when(t.mode.finished)(ZIO.fail(AppError.conflict(s"触发器 ${t.name.value} 已结束，不能再运行")))
         r <- fire(t, Occasion.Manual)
       yield r.result
 

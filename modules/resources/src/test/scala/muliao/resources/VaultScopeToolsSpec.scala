@@ -25,9 +25,8 @@ object VaultScopeToolsSpec extends ZIOSpecDefault:
     val session = SessionId.wrap("s")
     val call    = CallId.wrap("c")
 
-  def text(o: ToolOutcome): String = o match
+  def text(o: ToolOutcome[Nothing]): String = o match
     case ToolOutcome.Completed(cs) => cs.collect { case ToolContent.Text(t) => t }.mkString
-    case _                         => ""
 
   val key  = "cw_0x689RpI-jtRR7oE8h_eQsKImvJapLeSbXpwF4e4="
   val spec = suite("vault、可写范围与工具")(

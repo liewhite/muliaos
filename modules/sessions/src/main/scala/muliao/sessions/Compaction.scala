@@ -102,5 +102,5 @@ private[sessions] object Compaction:
         case ReplyPart.Thinking(t, _)      => t.length.toLong
         case ReplyPart.ToolCall(_, n, a, _) => (n.length + a.length).toLong
       }.sum
-      own + calls.flatMap(_.result.toList).flatMap(_.content).collect { case StoredPart.Text(t) => t.length.toLong }.sum
+      own + calls.flatMap(_.status.outcome.toList).flatMap(_.content).collect { case StoredPart.Text(t) => t.length.toLong }.sum
     case _: EntryBody.Compaction | _: EntryBody.Notice => 0L

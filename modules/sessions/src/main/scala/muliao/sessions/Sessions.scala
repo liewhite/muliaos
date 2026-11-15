@@ -258,7 +258,7 @@ object Sessions:
           WaitItem(w.id.value, target, w.label, w.heartbeat, w.createdAt)
         },
         threads = threads,
-        pending = open.collect { case c if c.state == CallState.Suspended => c.pause.map(p => PendingCall(c.entryId, c.callId, c.name, Timeline.pending(p))) }.flatten,
+        pending = open.collect { case Call(e, cid, _, name, _, CallStatus.Suspended(p, _)) => PendingCall(e, cid, name, Timeline.pending(p)) },
         contextTokens = size,
         compactionThreshold = settings.compactionThresholdTokens,
         usage = UsageView(used.map(_.input).sum, used.map(_.output).sum, used.map(_.cacheRead).sum, used.map(_.cacheWrite).sum)

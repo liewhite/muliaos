@@ -1,7 +1,7 @@
 package muliao.triggers.store
 
 import io.getquill.*
-import muliao.contract.{AgentId, FaultSource, SessionId, TriggerId, TriggerKind, TriggerName}
+import muliao.contract.{AgentId, FaultSource, SessionId, TriggerId, TriggerName}
 import muliao.platform.db.*
 import muliao.platform.db.Sql.*
 
@@ -10,7 +10,6 @@ final case class TriggerRow(
     name: TriggerName,
     agentId: AgentId,
     prompt: String,
-    kind: TriggerKind,
     config: String,
     enabled: Boolean,
     precheck: Option[String],

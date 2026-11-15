@@ -73,9 +73,8 @@ object WebSpec extends ZIOSpecDefault:
       a    <- f(s"http://127.0.0.1:$port", seen, out)
     yield a
 
-  def text(o: ToolOutcome): String = o match
+  def text(o: ToolOutcome[Nothing]): String = o match
     case ToolOutcome.Completed(cs) => cs.collect { case ToolContent.Text(t) => t }.mkString
-    case other                     => other.toString
 
   def spec = suite("网页与语音")(
     test("搜索：带鉴权、条数默认 10，结果是 JSON 数组；服务 5xx 是暂时性的") {

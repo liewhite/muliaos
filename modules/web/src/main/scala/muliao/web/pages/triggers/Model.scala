@@ -65,20 +65,23 @@ enum ConfigDraft:
 
   /** 不合法时是原因：保存、创建按钮据此禁用，不会提交上一次的合法值。范围等由服务端校验（不合法时报 422）。 */
   def toConfig: Either[String, TriggerConfig] = this match
-    case Schedule(cron) => nonBlank(cron, "请填 cron 表达式").map(c => TriggerConfig(cron = Some(c.trim)))
-    case Once(at)       => nonBlank(at, "请选择触发时间").map(a => TriggerConfig(at = Some(a)))
+    case Schedule(cron) => nonBlank(cron, "请填 cron 表达式").map(c => TriggerConfig.Schedule(c.trim))
+    case Once(at)       => nonBlank(at, "请选择触发时间").map(TriggerConfig.Once(_))
     case Stream(command, debounce, secrets) =>
       val seconds = debounce.trim match
-        case ""  => Right(None)
-        case txt => txt.toDoubleOption.filter(!_.isNaN).toRight("合并窗口要填数字").map(Some(_))
+        case ""  => Right(ConfigDraft.DefaultDebounce)
+        case txt => txt.toDoubleOption.filter(!_.isNaN).toRight("合并窗口要填数字")
       for
         cmd <- nonBlank(command, "请填常驻命令")
         sec <- seconds
-      yield TriggerConfig(command = Some(cmd), secrets = Some(SecretList.parse(secrets)), debounceSeconds = sec)
+      yield TriggerConfig.Stream(cmd, SecretList.parse(secrets), sec)
 
   private def nonBlank(s: String, why: String): Either[String, String] = Either.cond(s.trim.nonEmpty, s, why)
 
 object ConfigDraft:
+  /** 合并窗口不填时的秒数（与接口的默认值一致）。 */
+  val DefaultDebounce: Double = 5.0
+
   /** 新建时的初始配置：在打开表单、切换方式时才算（一次性的默认时间是那时起一小时后）。 */
   def empty(kind: TriggerKind, nowMs: Double): ConfigDraft = kind match
     case TriggerKind.Schedule => Schedule("*/5 * * * *")
@@ -86,11 +89,10 @@ object ConfigDraft:
     case TriggerKind.Stream   => Stream("", "", "")
 
   /** 已有触发器的配置。 */
-  def of(t: TriggerView): ConfigDraft = t.kind match
-    case TriggerKind.Schedule => Schedule(t.config.cron.getOrElse(""))
-    case TriggerKind.Once     => Once(t.config.at.fold("")(WallClock.of))
-    case TriggerKind.Stream =>
-      Stream(t.config.command.getOrElse(""), t.config.debounceSeconds.fold("")(seconds), SecretList.show(t.config.secrets.getOrElse(Nil)))
+  def of(t: TriggerView): ConfigDraft = t.config match
+    case TriggerConfig.Schedule(cron)       => Schedule(cron)
+    case TriggerConfig.Once(at)             => Once(WallClock.of(at))
+    case TriggerConfig.Stream(cmd, secs, d) => Stream(cmd, seconds(d), SecretList.show(secs))
 
   /** 5.0 显示成 5。 */
   def seconds(d: Double): String = if d == math.floor(d) && !d.isInfinite then d.toLong.toString else d.toString
@@ -116,7 +118,7 @@ final case class NewDraft(name: String, agent: Option[AgentId], config: ConfigDr
       c   <- config.toConfig
       pc  <- precheck.toSpec
       p   <- Either.cond(prompt.trim.nonEmpty, prompt, "请填处理说明")
-    yield NewTrigger(n, a, config.kind, c, p, precheck = pc)
+    yield NewTrigger(n, a, c, p, precheck = pc)
 
 /** 编辑：与开始编辑时的触发器比，只把改过的字段放进 Patch（没动的字段别人可能改过；前置检查改了还会重置 changed 模式的基线）。 */
 object Edit:
@@ -148,15 +150,16 @@ object Show:
     triggers.groupBy(_.agent).toList.sortBy((id, _) => rank.getOrElse(id, rank.size))
 
   private def when(t: TriggerView, fmt: Long => String): String =
-    t.nextAt.map(fmt).orElse(t.config.at.map(WallClock.show)).getOrElse("—")
+    t.nextAt.map(fmt).orElse(t.config match
+      case TriggerConfig.Once(at) => Some(WallClock.show(at))
+      case _                      => None
+    ).getOrElse("—")
 
   /** 卡片上的一行配置摘要，完整内容在详情里。 */
-  def summary(t: TriggerView, fmt: Long => String): String = t.kind match
-    case TriggerKind.Schedule =>
-      val cron = t.config.cron.getOrElse("")
-      t.nextAt.filter(_ => t.enabled).fold(cron)(n => s"$cron · 下次 ${fmt(n)}")
-    case TriggerKind.Once   => s"计划 ${when(t, fmt)}"
-    case TriggerKind.Stream => t.config.command.getOrElse("")
+  def summary(t: TriggerView, fmt: Long => String): String = t.config match
+    case TriggerConfig.Schedule(cron)     => t.nextAt.fold(cron)(n => s"$cron · 下次 ${fmt(n)}")
+    case TriggerConfig.Once(_)            => s"计划 ${when(t, fmt)}"
+    case TriggerConfig.Stream(cmd, _, _)  => cmd
 
   def planned(t: TriggerView, fmt: Long => String): String = when(t, fmt)
 

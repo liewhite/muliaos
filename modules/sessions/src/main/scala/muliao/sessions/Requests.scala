@@ -21,7 +21,7 @@ private[sessions] final case class Kit(
     model: ModelRef,
     thinking: Thinking,
     system: String,
-    tools: Map[String, Tool[RunContext]],
+    tools: Map[String, Tool[RunContext, Pause]],
     defs: Chunk[ToolDef],
     specs: Map[String, ToolSpec],
     mcpProblems: List[String],
@@ -29,7 +29,7 @@ private[sessions] final case class Kit(
 )
 
 /** 连上的 MCP 工具与没连上的原因。 */
-private[sessions] final case class McpTools(tools: List[Tool[RunContext]], problems: List[String])
+private[sessions] final case class McpTools(tools: List[Tool[RunContext, Nothing]], problems: List[String])
 
 /** 给模型看的窗口：最近压缩点的摘要、它之后的各条、其中的调用、用到的附件。 */
 private[sessions] final case class Window(summary: Option[String], entries: List[Entry], calls: Map[Long, List[Call]], attachments: ModelView.Attachments):
@@ -118,7 +118,7 @@ private[sessions] final case class Requests(
       case _                                    => Nil
     }.distinct
     val windowIds  = entries.map(_.id).toSet
-    val resultShas = calls.filter((e, _) => windowIds(e)).values.flatten.flatMap(_.result.toList.flatMap(_.content.collect { case StoredPart.Image(_, s) => s }))
+    val resultShas = calls.filter((e, _) => windowIds(e)).values.flatten.flatMap(_.status.outcome.toList.flatMap(_.content.collect { case StoredPart.Image(_, s) => s }))
     for
       uploads <- db.read(Repo.uploadsOf(fileIds))
       shas     = (uploads.map(_.sha256) ++ resultShas).distinct

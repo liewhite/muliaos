@@ -110,9 +110,9 @@ private[sessions] final case class Delegations(kernel: Kernel, mailbox: Mailbox,
   private def resolveAsk(r: DelegationRow, result: CallResult, t: Long): Tx[Option[SessionId]] =
     (r.callEntry, r.callId) match
       case (Some(e), Some(c)) =>
-        Repo.call(e, c).flatMap {
-          case Some(row) if row.state == CallState.Suspended =>
-            Repo.setCall(e, c, CallState.Done, row.pause, Some(result.toJson), row.startedAt, Some(t)) *> touched(r.requesterId, t).as(Some(r.requesterId))
+        Repo.call(e, c).flatMap(ZIO.foreach(_)(Decode.call)).flatMap {
+          case Some(call @ Call(_, _, _, _, _, CallStatus.Suspended(_, _))) =>
+            CallTx.finish(call, result, t) *> touched(r.requesterId, t).as(Some(r.requesterId))
           case _ => ZIO.none
         }
       case _ => ZIO.none
@@ -122,9 +122,9 @@ private[sessions] final case class Delegations(kernel: Kernel, mailbox: Mailbox,
     Repo.delegation(d).flatMap {
       case Some(r) if r.done =>
         for
-          row <- Repo.call(call.entry, call.call)
-          res  = r.result.getOrElse(CallResult.error("[没有结果]").toJson)
-          _   <- ZIO.foreachDiscard(row)(x => Repo.setCall(call.entry, call.call, CallState.Done, x.pause, Some(res), x.startedAt, Some(t)))
+          row <- Repo.call(call.entry, call.call).flatMap(ZIO.foreach(_)(Decode.call))
+          res <- ZIO.foreach(r.result)(Decode.callResult).map(_.getOrElse(CallResult.error("[没有结果]")))
+          _   <- ZIO.foreachDiscard(row)(CallTx.finish(_, res, t))
         yield ()
       case Some(_) => Repo.setDelegationCall(d, call.entry, call.call)
       case None    => ZIO.unit

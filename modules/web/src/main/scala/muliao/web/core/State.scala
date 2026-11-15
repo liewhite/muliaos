@@ -60,22 +60,19 @@ object Events:
 /** 一份从服务端拉来的数据的状态。 */
 enum Load[+A]:
   case Pending
-  case Ready(value: A)
   /** 第一次就没拉到 */
   case Failed(message: String)
-  /** 重新拉取失败：照常显示之前的内容，顶上提示 */
-  case Stale(value: A, error: String)
+  /** 拿到了数据；`stale`：之后重新拉取失败的原因（照常显示这份内容，顶上提示） */
+  case Loaded(value: A, stale: Option[String] = None)
 
   def data: Option[A] = this match
-    case Ready(d)    => Some(d)
-    case Stale(d, _) => Some(d)
-    case _           => None
+    case Loaded(d, _) => Some(d)
+    case _            => None
 
   def map[B](f: A => B): Load[B] = this match
-    case Pending       => Pending
-    case Ready(d)      => Ready(f(d))
-    case Failed(m)     => Failed(m)
-    case Stale(d, err) => Stale(f(d), err)
+    case Pending      => Pending
+    case Failed(m)    => Failed(m)
+    case Loaded(d, s) => Loaded(f(d), s)
 
 object Remote:
   import Http.ec
@@ -98,8 +95,7 @@ object Remote:
       .merge(EventStream.unit(emitOnce = true), more.throttle(300))
       .flatMapSwitch(_ => EventStream.fromFuture(fetch.transform(Success(_))))
       .scanLeft(Load.Pending: Load[A]) {
-        case (_, Success(a))                  => Load.Ready(a)
-        case (Load.Ready(old), TryFailure(t)) => Load.Stale(old, Http.messageOf(t))
-        case (Load.Stale(old, _), TryFailure(t)) => Load.Stale(old, Http.messageOf(t))
-        case (_, TryFailure(t))               => Load.Failed(Http.messageOf(t))
+        case (_, Success(a))                      => Load.Loaded(a)
+        case (Load.Loaded(old, _), TryFailure(t)) => Load.Loaded(old, Some(Http.messageOf(t)))
+        case (_, TryFailure(t))                   => Load.Failed(Http.messageOf(t))
       }

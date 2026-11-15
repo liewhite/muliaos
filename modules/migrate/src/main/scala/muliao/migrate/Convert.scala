@@ -122,8 +122,12 @@ object Convert:
     val converted = for
       kind  <- TriggerKind.parse(t.kind)
       old   <- t.config.fromJson[OldConfig]
-      config = TriggerConfig(old.cron, old.at, old.command.map(path), old.secrets, old.debounce_seconds)
-      _     <- Mode.parse(kind, config, zone)
+      config <- (kind match
+                  case TriggerKind.Schedule => old.cron.toRight("schedule 缺 cron").map(TriggerConfig.Schedule(_))
+                  case TriggerKind.Once     => old.at.toRight("once 缺 at").map(TriggerConfig.Once(_))
+                  case TriggerKind.Stream =>
+                    old.command.toRight("stream 缺 command").map(c => TriggerConfig.Stream(path(c), old.secrets.getOrElse(Nil), old.debounce_seconds.getOrElse(5.0))))
+      _     <- Mode.parse(config, zone)
       pre   <- t.precheck.filter(_.trim.nonEmpty).fold(Right(None))(_.fromJson[OldPrecheck].map(Some(_)))
       when  <- pre.flatMap(_.fire_when).fold(Right(FireWhen.Output))(FireWhen.parse)
       spec   = pre.map(p => PrecheckSpec(path(p.command), when, p.secrets.getOrElse(Nil)))
@@ -133,7 +137,7 @@ object Convert:
       srcs   <- faults.foldRight[Either[String, List[(FaultSource, OldFault)]]](Right(Nil))((f, acc) => FaultSource.parse(f.source).flatMap(s => acc.map((s, f) :: _)))
     yield
       val baseline = spec.filter(_.fireWhen == FireWhen.Changed).flatMap(_ => t.precheckOutput)
-      val row = TriggerRow(TriggerId.wrap(t.id), TriggerName.wrap(t.name), AgentId.wrap(t.agentId), path(t.prompt), kind, config.toJson, enabled = t.enabled,
+      val row = TriggerRow(TriggerId.wrap(t.id), TriggerName.wrap(t.name), AgentId.wrap(t.agentId), path(t.prompt), config.toJson, enabled = t.enabled && t.finishedAt.isEmpty,
         spec.map(_.toJson), None, state.skipped.getOrElse(0), t.lastSessionId.map(SessionId.wrap), t.lastFiredAt, None, baseline,
         t.finishedAt, t.createdAt, t.lastFiredAt.getOrElse(t.createdAt))
       (row, srcs.map((s, f) => FaultRow(TriggerId.wrap(t.id), s, f.error, now)))

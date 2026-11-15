@@ -143,8 +143,8 @@ object ScheduleSpec extends ZIOSpecDefault:
         for
           a    <- agent("bot")
           tg   <- triggers
-          past <- tg.create(NewTrigger("late", a, TriggerKind.Once, TriggerConfig(at = Some("2025-12-31T00:00:00Z")), "迟了")).either
-          t    <- tg.create(NewTrigger("remind", a, TriggerKind.Once, TriggerConfig(at = Some("2026-01-01T08:02:00")), "提醒一下"))
+          past <- tg.create(NewTrigger("late", a, TriggerConfig.Once("2025-12-31T00:00:00Z"), "迟了")).either
+          t    <- tg.create(NewTrigger("remind", a, TriggerConfig.Once("2026-01-01T08:02:00"), "提醒一下"))
           _    <- TestClock.adjust(2.minutes)
           s    <- eventually("到点触发")(triggerSessions(a))(_.size == 1)
           v    <- eventually("结束")(tg.view(t.id))(_.finishedAt.nonEmpty)
@@ -152,7 +152,7 @@ object ScheduleSpec extends ZIOSpecDefault:
           done <- tg.list(finished = true)
           run  <- tg.run(t.id).either
           upd  <- tg.update(t.id, TriggerPatch(prompt = Some("x"))).either
-          same <- tg.create(NewTrigger("remind", a, TriggerKind.Once, TriggerConfig(at = Some("2026-01-02T08:00:00")), "名字可以重用"))
+          same <- tg.create(NewTrigger("remind", a, TriggerConfig.Once("2026-01-02T08:00:00"), "名字可以重用"))
         yield assertTrue(
           past.left.exists(_.message.contains("已经过去")),
           t.nextAt.contains(minute(2)),
@@ -170,7 +170,7 @@ object ScheduleSpec extends ZIOSpecDefault:
         for
           a  <- agent("old")
           tg <- triggers
-          _  <- tg.create(NewTrigger("remind", a, TriggerKind.Once, TriggerConfig(at = Some("2026-01-01T08:02:00")), "提醒"))
+          _  <- tg.create(NewTrigger("remind", a, TriggerConfig.Once("2026-01-01T08:02:00"), "提醒"))
           _  <- tg.create(schedule("tick", a, "* * * * *"))
           _  <- ZIO.serviceWithZIO[Agents](_.update(a, AgentPatch(archived = Some(true))))
           _  <- TestClock.adjust(2.minutes)

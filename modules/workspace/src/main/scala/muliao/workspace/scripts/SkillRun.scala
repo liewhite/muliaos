@@ -4,7 +4,7 @@ import muliao.exec.{Program, RealPath}
 import muliao.resources.SkillEntry
 import muliao.resources.vault.SecretUse
 import muliao.contract.SkillName
-import muliao.sessions.{ApprovalHandler, ApproverName, Pause, RunContext}
+import muliao.sessions.{Approvable, Pause, RunContext}
 import muliao.toolkit.*
 import muliao.workspace.tools.{CommandRunner, RunMode}
 import zio.*
@@ -31,9 +31,6 @@ object SkillRun:
 
   /** 等批准时记下的：调用本身与当时 skill 文件的摘要（批准的就是用户当时看到的那份）。 */
   final case class Approval(call: SkillRunIn, filesHash: String) derives JsonCodec
-
-  /** 批准后的执行者名。 */
-  val Handler: ApproverName = ApproverName.wrap("skill_run")
 
   /** 一次调用验证过的样子。 */
   private final case class Checked(entry: SkillEntry, script: String, real: RealPath, mode: RunMode, needsApproval: Boolean)
@@ -81,7 +78,7 @@ object SkillRun:
       case RunMode.Background(_) => "（后台）"
     s"运行 skill ${c.entry.doc.name} 的脚本 ${c.script}$args$secrets$how"
 
-  private def execute(runner: CommandRunner, ctx: RunContext, in: SkillRunIn, c: Checked): IO[ToolFailure, ToolOutcome] =
+  private def execute(runner: CommandRunner, ctx: RunContext, in: SkillRunIn, c: Checked): IO[ToolFailure, ToolOutcome[Nothing]] =
     val label = s"skill ${c.entry.doc.name}/${c.script}" + (if in.args.isEmpty then "" else in.args.mkString(" ", " ", ""))
     runner
       .run(ctx, Program.Argv(c.real.path.toString, Chunk.fromIterable(in.args)), in.secrets, SecretUse.Script, c.mode, label)
@@ -101,8 +98,9 @@ object SkillRun:
   /** 本领域工具的静态定义（进全部内置工具目录）。 */
   val specs: List[ToolSpec] = List(SkillRunDef).map(_.spec)
 
-  def tool(runner: CommandRunner, grants: ScriptGrants): Tool[RunContext] =
-    SkillRunDef { (in, ctx) =>
+  /** 要批准的脚本挂起等用户；批准后（[[Approvable]]）确认 skill 文件和请求批准时一样，选了「始终允许」就记下，再执行。 */
+  def tool(runner: CommandRunner, grants: ScriptGrants): Approvable =
+    val ask = SkillRunDef { (in, ctx) =>
       check(in, ctx).flatMap { c =>
         if !c.needsApproval then execute(runner, ctx, in, c)
         else
@@ -111,15 +109,11 @@ object SkillRun:
             ok   <- grants.allowed(key(ctx, c, in, hash)).mapError(ToolFailure.fromAppError)
             out <-
               if ok then execute(runner, ctx, in, c)
-              else ZIO.succeed(ToolOutcome.Suspended(Pause.Approval(Handler, summary(in, c), Approval(in, hash).toJsonAST.getOrElse(Json.Null))))
+              else ZIO.succeed(ToolOutcome.Suspended(Pause.Approval(summary(in, c), Approval(in, hash).toJsonAST.getOrElse(Json.Null))))
           yield out
       }
     }
-
-  /** 用户批准后：确认 skill 文件和请求批准时一样，选了「始终允许」就记下，再执行。 */
-  def approval(runner: CommandRunner, grants: ScriptGrants): ApprovalHandler = new ApprovalHandler:
-    val name = Handler
-    def approved(payload: Json, always: Boolean, ctx: RunContext): IO[ToolFailure, ToolOutcome] =
+    Approvable(ask) { (payload, always, ctx) =>
       for
         a    <- ZIO.fromEither(payload.as[Approval]).mapError(e => ToolFailure.Aborted(s"批准记录读不懂：$e"))
         c    <- check(a.call, ctx)
@@ -130,4 +124,4 @@ object SkillRun:
         _   <- ZIO.when(always)(grants.grant(key(ctx, c, a.call, hash)).mapError(ToolFailure.fromAppError))
         out <- execute(runner, ctx, a.call, c)
       yield out
-
+    }

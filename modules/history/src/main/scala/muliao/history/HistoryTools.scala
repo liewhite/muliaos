@@ -111,9 +111,9 @@ object HistoryTools:
   /** 本领域工具的静态定义（进全部内置工具目录）。 */
   val specs: List[ToolSpec] = List(HistoryAppendDef, HistorySearchDef, ActivityOverviewDef, SessionReadDef).map(_.spec)
 
-  def all(history: History, agents: Agents): List[Tool[RunContext]] =
+  def all(history: History, agents: Agents): List[Tool[RunContext, Nothing]] =
 
-    def run[A](effect: IO[AppError, A])(out: A => String): IO[ToolFailure, ToolOutcome] =
+    def run[A](effect: IO[AppError, A])(out: A => String): IO[ToolFailure, ToolOutcome[Nothing]] =
       effect.mapBoth(ToolFailure.fromAppError, a => ToolOutcome.text(out(a)))
 
     def day(field: String, s: String): IO[AppError, LocalDate] =

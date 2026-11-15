@@ -114,7 +114,7 @@ private[sessions] object SessionTools:
   /** 本领域工具的静态定义（进全部内置工具目录）。 */
   val specs: List[ToolSpec] = List(AskUserDef, DelegateTaskDef, AskAgentDef, ListThreadsDef, StopThreadDef, WakeMeDef).map(_.spec)
 
-  def all(delegations: Delegations, control: Control, waits: Waits, states: States, agents: Agents, zone: java.time.ZoneId): List[Tool[RunContext]] =
+  def all(delegations: Delegations, control: Control, waits: Waits, states: States, agents: Agents, zone: java.time.ZoneId): List[Tool[RunContext, Pause]] =
 
     val askUser = AskUserDef { (in, ctx) =>
       val bad =

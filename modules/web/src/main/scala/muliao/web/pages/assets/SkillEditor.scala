@@ -77,14 +77,8 @@ object SkillEditor:
     // 没给归属时按资源列表找（同名 skill 只有一份生效）
     val index = Remote(ResourcesApi.listAssets)(())
     val owner: Signal[Load[Option[String]]] = ownerParam match
-      case Some(o) => Val(Load.Ready(Some(o)))
-      case None =>
-        index.map {
-          case Load.Ready(i)    => Load.Ready(i.items.find(x => x.kind == AssetItemKind.Skill && x.name == name).map(_.owner))
-          case Load.Stale(i, e) => Load.Stale(i.items.find(x => x.kind == AssetItemKind.Skill && x.name == name).map(_.owner), e)
-          case Load.Failed(m)   => Load.Failed(m)
-          case Load.Pending     => Load.Pending
-        }
+      case Some(o) => Val(Load.Loaded(Some(o)))
+      case None    => index.map(_.map(_.items.find(x => x.kind == AssetItemKind.Skill && x.name == name).map(_.owner)))
     Ui.page(span(cls := "font-mono", name), back = Some(Route.Assets))(
       Ui.loading(owner)(o =>
         child <-- o.distinct.map {

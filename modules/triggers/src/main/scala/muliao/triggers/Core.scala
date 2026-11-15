@@ -16,14 +16,28 @@ import zio.json.*
 
 import java.time.{Instant, ZoneId}
 
-/** 为什么触发。 */
-enum Occasion:
+/** 为什么触发，以及这种触发没做成时怎么办。
+  * @param countsSkip    被挡住时计一次跳过
+  * @param notifiesBlock 被在等待的会话挡住时通知用户（每个挡路会话一次）
+  * @param recordsFault  前置检查失败记成脚本故障（立即运行只报给调用方，免得 agent 验证脚本时开出告警会话）
+  */
+enum Occasion(val countsSkip: Boolean, val notifiesBlock: Boolean, val recordsFault: Boolean):
   /** 定时、一次性到期 */
-  case Due
+  case Due extends Occasion(countsSkip = true, notifiesBlock = true, recordsFault = true)
   /** 常驻流的事件（每项一行） */
-  case Events(lines: Chunk[String])
+  case Events(lines: Chunk[String]) extends Occasion(countsSkip = false, notifiesBlock = true, recordsFault = true)
   /** 立即运行（界面或 trigger_run） */
-  case Manual
+  case Manual extends Occasion(countsSkip = false, notifiesBlock = false, recordsFault = false)
+
+  /** 交给前置检查（标准输入）和 agent（`<event>`）的事件行。 */
+  def eventLines: List[String] = this match
+    case Events(ls) => ls.toList
+    case _          => Nil
+
+  /** agent 已归档或删除时的结局：事件丢弃不算没做成。 */
+  def unavailable(why: String): Fired = this match
+    case Events(_) => Fired.Quiet(s"$why，事件丢弃")
+    case _         => Fired.NotDone(why)
 
 /** 一次触发的结局。 */
 enum Fired:
@@ -80,18 +94,17 @@ private[triggers] final case class Core(
     val parsed =
       for
         config   <- r.config.fromJson[TriggerConfig]
-        mode     <- Mode.parse(r.kind, config, zone)
+        mode     <- Mode.stored(config, r.enabled, r.nextAt, r.finishedAt, zone)
         precheck <- r.precheck.fold(Right(None))(p => p.fromJson[PrecheckSpec].flatMap(Precheck.parse).map(Some(_)))
       yield Trigger(
-        r.id, r.name, r.agentId, r.prompt, mode, r.enabled, precheck, r.nextAt, r.skipped, r.lastSessionId, r.lastFiredAt,
-        r.blockNotified, r.baseline, r.finishedAt, r.createdAt, r.updatedAt
+        r.id, r.name, r.agentId, r.prompt, mode, precheck, r.skipped, r.lastSessionId, r.lastFiredAt, r.blockNotified, r.baseline, r.createdAt, r.updatedAt
       )
     ZIO.fromEither(parsed).mapError(e => AppError.Internal(s"库里的触发器 ${r.name.value}（${r.id}）读不懂：$e"))
 
   def encode(t: Trigger): TriggerRow =
     TriggerRow(
-      t.id, t.name, t.agent, t.prompt, t.mode.kind, t.mode.config(zone).toJson, t.enabled, t.precheck.map(_.spec.toJson), t.nextAt,
-      t.skipped, t.lastSession, t.lastFiredAt, t.blockNotified, t.baseline, t.finishedAt, t.createdAt, t.updatedAt
+      t.id, t.name, t.agent, t.prompt, t.mode.config(zone).toJson, t.mode.enabled, t.precheck.map(_.spec.toJson), t.mode.nextAt,
+      t.skipped, t.lastSession, t.lastFiredAt, t.blockNotified, t.baseline, t.mode.finishedAt, t.createdAt, t.updatedAt
     )
 
   def load(id: TriggerId): IO[AppError, Option[Trigger]] =
@@ -117,29 +130,17 @@ private[triggers] final case class Core(
   def fire(t: Trigger, cause: Occasion): IO[AppError, Fired] =
     agents.get(t.agent).map(_.state).catchAll(_ => ZIO.succeed(AgentState.Deleted)).flatMap {
       case AgentState.Active   => guarded(t, cause)
-      case AgentState.Archived => ZIO.succeed(unavailable(cause, "agent 已归档"))
-      case AgentState.Deleting | AgentState.Deleted => ZIO.succeed(unavailable(cause, "agent 已删除"))
+      case AgentState.Archived => ZIO.succeed(cause.unavailable("agent 已归档"))
+      case AgentState.Deleting | AgentState.Deleted => ZIO.succeed(cause.unavailable("agent 已删除"))
     }
-
-  private def unavailable(cause: Occasion, why: String): Fired = cause match
-    case Occasion.Events(_) => Fired.Quiet(s"$why，事件丢弃")
-    case Occasion.Due | Occasion.Manual => Fired.NotDone(why)
 
   private def guarded(t: Trigger, cause: Occasion): IO[AppError, Fired] =
     inFlight.modify(s => if s(t.id) then (false, s) else (true, s + t.id)).flatMap {
-      case false =>
-        val busy = Fired.Quiet("上一次触发还在跑前置检查，这次没触发")
-        cause match
-          case Occasion.Due => countSkip(t, None).as(busy)
-          case _         => ZIO.succeed(busy)
+      case false => blocked(t, cause, None).as(Fired.Quiet("上一次触发还在跑前置检查，这次没触发"))
       case true =>
         (blocker(t).flatMap {
-          case Some((s, state)) =>
-            cause match
-              case Occasion.Due       => countSkip(t, Some(s -> state)).as(Fired.Blocked(s))
-              case Occasion.Events(_) => noteBlocked(t, s, state).as(Fired.Blocked(s))
-              case Occasion.Manual    => ZIO.succeed(Fired.Blocked(s))
-          case None => checked(t, cause)
+          case Some((s, state)) => blocked(t, cause, Some(s -> state)).as(Fired.Blocked(s))
+          case None             => checked(t, cause)
         }).ensuring(inFlight.update(_ - t.id))
     }
 
@@ -149,27 +150,19 @@ private[triggers] final case class Core(
       case None    => ZIO.none
       case Some(s) => sessions.states(List(s)).map(_.get(s).filter(_ != WorkState.Idle).map(s -> _))
 
-  /** 跳过一次（只在定时到期时计数）。挡路的会话在等待（可能永远等不到）就通知用户，每个挡路会话一次。 */
-  private def countSkip(t: Trigger, by: Option[(SessionId, WorkState)]): IO[AppError, Unit] =
-    db.write(
-      for
-        cur <- loadTx(t.id)
-        notify = by.collect { case (s, WorkState.Waiting) if !cur.blockNotified.contains(s) => s }
-        _ <- ZIO.foreachDiscard(notify)(s => notifications.notifyIn(blockedNotice(cur, s)))
-        _ <- Repo.save(encode(cur.copy(skipped = cur.skipped + 1, blockNotified = notify.orElse(cur.blockNotified))))
-        _ <- changed
-      yield ()
-    )
-
-  /** 常驻流被挡：不计数，同样每个挡路会话通知一次。 */
-  def noteBlocked(t: Trigger, s: SessionId, state: WorkState): IO[AppError, Unit] =
-    ZIO.when(state == WorkState.Waiting && !t.blockNotified.contains(s))(
+  /** 没触发成（上一次还在跑前置检查，或 `by` 这个上一次开的会话没做完）：按触发原因计跳过；挡路的会话在等待
+    * （可能永远等不到）就通知用户，每个挡路会话一次。
+    */
+  def blocked(t: Trigger, cause: Occasion, by: Option[(SessionId, WorkState)]): IO[AppError, Unit] =
+    val waiting = by.collect { case (s, WorkState.Waiting) if cause.notifiesBlock => s }
+    ZIO.when(cause.countsSkip || waiting.exists(s => !t.blockNotified.contains(s)))(
       db.write(
         for
-          cur <- loadTx(t.id)
-          _ <- ZIO.when(!cur.blockNotified.contains(s))(
-                 notifications.notifyIn(blockedNotice(cur, s)) *> Repo.save(encode(cur.copy(blockNotified = Some(s)))) *> changed
-               )
+          cur   <- loadTx(t.id)
+          notify = waiting.filterNot(cur.blockNotified.contains)
+          _     <- ZIO.foreachDiscard(notify)(s => notifications.notifyIn(blockedNotice(cur, s)))
+          _     <- Repo.save(encode(cur.copy(skipped = cur.skipped + (if cause.countsSkip then 1 else 0), blockNotified = notify.orElse(cur.blockNotified))))
+          _     <- changed
         yield ()
       )
     ).unit
@@ -183,21 +176,13 @@ private[triggers] final case class Core(
 
   /** 跑前置检查（如果有），再开会话。 */
   private def checked(t: Trigger, cause: Occasion): IO[AppError, Fired] =
-    val event = cause match
-      case Occasion.Events(lines) => Some(lines.mkString("\n"))
-      case _                   => None
+    val event = Option.when(cause.eventLines.nonEmpty)(cause.eventLines.mkString("\n"))
     t.precheck match
       case None => start(t, event, None, checkedAt = None)
       case Some(p) =>
-        val stdin = cause match
-          case Occasion.Events(lines) => lines.toList
-          case _                   => Nil
-        Checks.run(exec, t.agent, p, stdin, settings.precheckTimeout).flatMap {
+        Checks.run(exec, t.agent, p, cause.eventLines, settings.precheckTimeout).flatMap {
           case Left(err) =>
-            val why = s"前置检查失败：$err"
-            cause match
-              case Occasion.Manual => ZIO.succeed(Fired.NotDone(why)) // 只报给调用方，免得 agent 验证脚本时开出告警会话
-              case _            => recordFault(t, FaultSource.Precheck, err).as(Fired.NotDone(why))
+            recordFault(t, FaultSource.Precheck, err).when(cause.recordsFault).as(Fired.NotDone(s"前置检查失败：$err"))
           case Right(out) =>
             clearFault(t, FaultSource.Precheck) *>
               (Checks.decide(p.fireWhen, t.baseline, out) match

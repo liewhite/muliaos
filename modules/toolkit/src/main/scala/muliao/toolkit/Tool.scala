@@ -57,22 +57,19 @@ enum ToolContent:
   case Text(text: String)
   case Image(mediaType: String, data: Chunk[Byte])
 
-/** 工具调用要等用户（回答提问、批准执行）时交给会话领域的说明；具体种类由会话领域定义。 */
-trait Suspension
-
-/** 工具调用的结果：完成，或挂起等用户。 */
-enum ToolOutcome:
+/** 工具调用的结果：完成，或挂起。`S` 是挂起时交出的说明（具体种类由会话领域定义），不会挂起的工具是 `Nothing`。 */
+enum ToolOutcome[+S]:
   case Completed(content: Chunk[ToolContent])
-  case Suspended(suspension: Suspension)
+  case Suspended(suspension: S)
 
 object ToolOutcome:
-  def text(s: String): ToolOutcome = Completed(Chunk(ToolContent.Text(s)))
+  def text(s: String): ToolOutcome[Nothing] = Completed(Chunk(ToolContent.Text(s)))
 
 /** 工具失败。会话领域按种类处理：
   *   - [[ToolFailure.Rejected]]（请重试）：作为出错的工具结果交给模型，模型改了参数或换个做法再来；
   *   - [[ToolFailure.Unavailable]]（暂时不可用）：不交给模型，整次运行稍后退避重试；
   *   - [[ToolFailure.Aborted]]（中止）：系统性错误，运行失败、让用户看见。
-  * 挂起不是失败，见 [[ToolOutcome.Suspended]]。
+  * 挂起不是失败，见 `ToolOutcome.Suspended`。
   */
 enum ToolFailure:
   case Rejected(message: String)
@@ -87,20 +84,20 @@ object ToolFailure:
     case AppError.Unavailable(m, _, a) => Unavailable(m, a)
     case AppError.Internal(m, c)       => Aborted(m, c)
 
-/** 给 agent 的一个工具。`C` 是它需要的调用上下文。 */
-trait Tool[-C]:
+/** 给 agent 的一个工具。`C` 是它需要的调用上下文，`S` 是它挂起时交出的说明（不会挂起的是 `Nothing`）。 */
+trait Tool[-C, +S]:
   def spec: ToolSpec
-  def invoke(args: Json, ctx: C): IO[ToolFailure, ToolOutcome]
+  def invoke(args: Json, ctx: C): IO[ToolFailure, ToolOutcome[S]]
 
 /** 工具的静态定义：名字、说明、参数结构与类别。它是静态值，所以全部内置工具的目录（分发、校验规则用）不用等各领域起好就能给出；
   * 实现在拿到所需服务后用 [[apply]] 接上。参数结构、JSON Schema 与敏感字段都从 `In` 的 zio-schema 生成，解码失败统一回「请重试」。
   */
 final class ToolDef[C, In] private (val spec: ToolSpec, decode: Json => Either[String, In]):
-  def apply(run: (In, C) => IO[ToolFailure, ToolOutcome]): Tool[C] =
+  def apply[S](run: (In, C) => IO[ToolFailure, ToolOutcome[S]]): Tool[C, S] =
     val s = spec
-    new Tool[C]:
+    new Tool[C, S]:
       val spec = s
-      def invoke(args: Json, ctx: C): IO[ToolFailure, ToolOutcome] =
+      def invoke(args: Json, ctx: C): IO[ToolFailure, ToolOutcome[S]] =
         ZIO.fromEither(decode(args)).mapError(ToolFailure.Rejected(_)).flatMap(run(_, ctx))
 
 object ToolDef:
@@ -116,15 +113,3 @@ object ToolDef:
       ToolSpec(name, description, ToolArgs.jsonSchema(schema), access, scheduling, display, ToolArgs.sensitiveFields(schema)),
       ToolArgs.decoder(schema)
     )
-
-object Tool:
-
-  /** 定义并实现一个工具（不进工具目录的场合：测试）。 */
-  def apply[C, In](
-      name: String,
-      description: String,
-      access: Access,
-      scheduling: Scheduling = Scheduling.Concurrent,
-      display: Display = Display.Plain
-  )(run: (In, C) => IO[ToolFailure, ToolOutcome])(using schema: Schema[In]): Tool[C] =
-    ToolDef[C, In](name, description, access, scheduling, display)(run)

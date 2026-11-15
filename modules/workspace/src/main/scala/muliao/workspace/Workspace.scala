@@ -37,7 +37,6 @@ object Workspace:
       runner  = CommandRunner(exec, jobs)
     yield Contribution(
       tools = FileTools.all(access, files) ++ ShellTools.all(runner, jobs) :+ SkillRun.tool(runner, grants),
-      approvals = List(SkillRun.approval(runner, grants)),
       agentHook = Some(
         AgentHook(
           "工作区",

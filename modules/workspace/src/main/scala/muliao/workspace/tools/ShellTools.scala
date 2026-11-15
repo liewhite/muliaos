@@ -103,9 +103,9 @@ object ShellTools:
   /** 本领域工具的静态定义（进全部内置工具目录）。 */
   val specs: List[ToolSpec] = List(RunShellDef, JobStatusDef, JobKillDef).map(_.spec)
 
-  def all(runner: CommandRunner, jobs: Jobs): List[Tool[RunContext]] = List(runShell(runner), jobStatus(jobs), jobKill(jobs))
+  def all(runner: CommandRunner, jobs: Jobs): List[Tool[RunContext, Nothing]] = List(runShell(runner), jobStatus(jobs), jobKill(jobs))
 
-  def runShell(runner: CommandRunner): Tool[RunContext] =
+  def runShell(runner: CommandRunner): Tool[RunContext, Nothing] =
     RunShellDef { (in, ctx) =>
       for
         _    <- ZIO.when(in.command.isBlank)(ZIO.fail(ToolFailure.Rejected("command 不能为空")))
@@ -114,12 +114,12 @@ object ShellTools:
       yield ToolOutcome.text(out)
     }
 
-  def jobStatus(jobs: Jobs): Tool[RunContext] =
+  def jobStatus(jobs: Jobs): Tool[RunContext, Nothing] =
     JobStatusDef { (in, ctx) =>
       jobs.get(ctx.agent, JobId.wrap(in.jobId)).flatMap(jobs.describe(_, StatusLines)).map(ToolOutcome.text).mapError(rejected)
     }
 
-  def jobKill(jobs: Jobs): Tool[RunContext] =
+  def jobKill(jobs: Jobs): Tool[RunContext, Nothing] =
     JobKillDef { (in, ctx) =>
       val id = JobId.wrap(in.jobId)
       (for

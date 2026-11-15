@@ -34,9 +34,9 @@ private[sessions] final class Driver(
       pending <- db.read(Repo.callsIn(List(CallState.Pending)))
       _ <- db.write(
              ZIO.foreachDiscard(running)(c =>
-               Repo.setCall(c.entryId, c.callId, CallState.Done, c.pause, Some(CallResult.error(Interrupted.restartedWhileRunning).toJson), c.startedAt, Some(t))
+               CallTx.save(CallKey(c.entryId, c.callId), CallStatus.Done(CallResult.error(Interrupted.restartedWhileRunning), c.startedAt, t))
              ) *> ZIO.foreachDiscard(pending)(c =>
-               Repo.setCall(c.entryId, c.callId, CallState.Done, c.pause, Some(CallResult.error(Interrupted.restartedBeforeStart).toJson), None, Some(t))
+               CallTx.save(CallKey(c.entryId, c.callId), CallStatus.Done(CallResult.error(Interrupted.restartedBeforeStart), None, t))
              )
            )
       _ <- ZIO.when(running.nonEmpty || pending.nonEmpty)(ZIO.logWarning(s"启动：${running.size} 个执行中、${pending.size} 个没开始的工具调用标成被打断"))
@@ -204,7 +204,7 @@ private[sessions] final class Driver(
       pending <- db.write(
                    for
                      open <- Repo.openCalls(id).flatMap(Decode.calls)
-                     _    <- ZIO.foreachDiscard(open)(c => CallTx.finish(c, CallResult.error(failedNote(c.state)), t))
+                     _    <- ZIO.foreachDiscard(open)(c => CallTx.finish(c, CallResult.error(failedNote(c.status)), t))
                      _    <- Repo.setRunState(run, RunState.Failed, Some(message), Some(t))
                      _    <- noticeTx(id, Some(run), NoticeKind.Failed, message, t)
                      p    <- mailbox.takePendingReply(id)
@@ -216,10 +216,10 @@ private[sessions] final class Driver(
       _ <- delegations.handBack(i, pending, Outcome.Failed(message))
     yield ()
 
-  private def failedNote(s: CallState): String = s match
-    case CallState.Running   => "[运行失败时这个调用还在执行，被打断；它的副作用可能已经发生，先核实。]"
-    case CallState.Suspended => "[运行失败，没等到答复。]"
-    case _                   => "[运行失败，这个调用没有执行。]"
+  private def failedNote(s: CallStatus): String = s match
+    case CallStatus.Running(_)      => "[运行失败时这个调用还在执行，被打断；它的副作用可能已经发生，先核实。]"
+    case CallStatus.Suspended(_, _) => "[运行失败，没等到答复。]"
+    case _                          => "[运行失败，这个调用没有执行。]"
 
   private def failLastRun(id: SessionId, message: String): IO[AppError, Unit] =
     db.read(Repo.lastRun(id)).flatMap {
@@ -232,9 +232,9 @@ private[sessions] final class Driver(
     for
       t <- now
       _ <- db.write(ZIO.foreachDiscard(cs) { c =>
-             val note = c.pause match
-               case Some(_: Pause.Approval) => "[用户没有批准（改发了新消息，见下），没有执行。]"
-               case _                       => "[用户没有回答这个问题，而是发来了新消息（见下）。]"
+             val note = c.status match
+               case CallStatus.Suspended(_: Pause.Approval, _) => "[用户没有批准（改发了新消息，见下），没有执行。]"
+               case _                                          => "[用户没有回答这个问题，而是发来了新消息（见下）。]"
              CallTx.finish(c, CallResult.error(note), t)
            } *> touched(id, t))
     yield ()
