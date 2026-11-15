@@ -117,23 +117,23 @@ object Convert:
   private object OldFault:
     given JsonDecoder[OldFault] = DeriveJsonDecoder.gen
 
-  /** 触发器一律停用（两个版本同时跑时不重复触发对外动作）；配置与前置检查按新版的规则校验一遍。 */
-  def trigger(t: Old.Trigger, zone: ZoneId, now: Long): Either[String, (TriggerRow, List[FaultRow])] =
+  /** 开关照搬旧版（正式切换时旧版已停，不会两边同时触发，#881）；配置与前置检查按新版的规则校验一遍；提示、命令、前置检查里的旧主目录路径经 `path` 换成新版的。 */
+  def trigger(t: Old.Trigger, zone: ZoneId, now: Long, path: String => String = identity): Either[String, (TriggerRow, List[FaultRow])] =
     val converted = for
       kind  <- TriggerKind.parse(t.kind)
       old   <- t.config.fromJson[OldConfig]
-      config = TriggerConfig(old.cron, old.at, old.command, old.secrets, old.debounce_seconds)
+      config = TriggerConfig(old.cron, old.at, old.command.map(path), old.secrets, old.debounce_seconds)
       _     <- Mode.parse(kind, config, zone)
       pre   <- t.precheck.filter(_.trim.nonEmpty).fold(Right(None))(_.fromJson[OldPrecheck].map(Some(_)))
       when  <- pre.flatMap(_.fire_when).fold(Right(FireWhen.Output))(FireWhen.parse)
-      spec   = pre.map(p => PrecheckSpec(p.command, when, p.secrets.getOrElse(Nil)))
+      spec   = pre.map(p => PrecheckSpec(path(p.command), when, p.secrets.getOrElse(Nil)))
       _     <- spec.fold(Right(()))(Precheck.parse(_).map(_ => ()))
       state <- t.state.filter(_.trim.nonEmpty).fold(Right(OldState()))(_.fromJson[OldState])
       faults <- t.faults.filter(_.trim.nonEmpty).fold(Right(Nil))(_.fromJson[List[OldFault]])
       srcs   <- faults.foldRight[Either[String, List[(FaultSource, OldFault)]]](Right(Nil))((f, acc) => FaultSource.parse(f.source).flatMap(s => acc.map((s, f) :: _)))
     yield
       val baseline = spec.filter(_.fireWhen == FireWhen.Changed).flatMap(_ => t.precheckOutput)
-      val row = TriggerRow(TriggerId.wrap(t.id), TriggerName.wrap(t.name), AgentId.wrap(t.agentId), t.prompt, kind, config.toJson, enabled = false,
+      val row = TriggerRow(TriggerId.wrap(t.id), TriggerName.wrap(t.name), AgentId.wrap(t.agentId), path(t.prompt), kind, config.toJson, enabled = t.enabled,
         spec.map(_.toJson), None, state.skipped.getOrElse(0), t.lastSessionId.map(SessionId.wrap), t.lastFiredAt, None, baseline,
         t.finishedAt, t.createdAt, t.lastFiredAt.getOrElse(t.createdAt))
       (row, srcs.map((s, f) => FaultRow(TriggerId.wrap(t.id), s, f.error, now)))

@@ -138,7 +138,7 @@
 ## 触发器领域的接法（#872，给组装入口与迁移）
 - **组装**：`Triggers.layer`（要 `Database`、`ChangeBus`、`Sessions`、`SessionHooks`、`Agents`、`AgentHooks`、`Notifications`、`AgentExec`、`ResourcePaths`、`GeneralSettings`、`TriggerSettings`）在 `Sessions.start` 之前构建：它把 6 个工具（名字与类别在 `Triggers.toolInfos`，汇进 `ToolCatalog`）和 agent 删除时的清理登记到上游。`Sessions.start`、`Jobs.recover` 之后调 `Triggers.start` 起到期扫描与常驻流托管；它们跑在 layer 的 scope 里，关停时随之停下（常驻命令整组结束）。接口 `TriggersHttp.endpoints(auth)`，主题 `triggers`。
 - **配置**：`[triggers] precheck_timeout_seconds`（默认 60）。cron 与不带时区的时刻按 `[general] timezone` 解释。
-- **数据**（表 `trigger_def`、`trigger_fault`）：`kind` + `config`（`TriggerConfig` 的 JSON，键名驼峰：`cron`、`at`、`command`、`secrets`、`debounceSeconds`）、`precheck`（`PrecheckSpec` 的 JSON：`command`、`fireWhen`、`secrets`），读出时一次解析成 `Mode` / `Precheck`，读不懂报内部错误（不自动停用）。`next_at` 为空的启用中的定时、一次性，扫描时按「现在」补上（迁移可以不填）；已结束的一次性 `finished_at` 非空，名字只在没结束的之间唯一。迁移进来的一律 `enabled = 0`（#864 红线）。
+- **数据**（表 `trigger_def`、`trigger_fault`）：`kind` + `config`（`TriggerConfig` 的 JSON，键名驼峰：`cron`、`at`、`command`、`secrets`、`debounceSeconds`）、`precheck`（`PrecheckSpec` 的 JSON：`command`、`fireWhen`、`secrets`），读出时一次解析成 `Mode` / `Precheck`，读不懂报内部错误（不自动停用）。`next_at` 为空的启用中的定时、一次性，扫描时按「现在」补上（迁移可以不填）；已结束的一次性 `finished_at` 非空，名字只在没结束的之间唯一。迁移进来的开关照搬旧版（#881 正式切换：先停旧版再迁移，两边不会同时开着）。
 - **触发只有一个出口** `Core.fire`：agent 能不能接活（归档：定时跳过、一次性推送用户没做、流式事件丢弃）→ 防重叠（正在跑前置检查的靠内存集合；上次开的会话不空闲就跳过，定时计入 `skipped`，挡路会话在等待时通知用户一次）→ 前置检查（`bash` 开 pipefail，事件行从标准输入喂入）→ 在一个事务里经 `Sessions.deliverIn` 开会话并记下这次触发。
 - **测试**：`ModelSpec`（纯函数）、`ScheduleSpec`（测试时钟：定时、防重叠、停机补一次、停用不补、一次性、归档）、`CommandSpec`（真实进程：前置检查各模式与失败/超时、常驻流防抖与排队、退避重启与故障、工具、HTTP）。用测试时钟拨时间的测试把资源目录轮询调大（`TestEnv.layer(assetPoll = 1.hour)`），否则拨一次时钟要跑成千上万次轮询。
 
@@ -151,14 +151,14 @@
 - **本地起服务与真实模型验收**：见上文「工具链与开发」；`dev-data/` 下放配置（从现有配置取服务商密钥生成，不打印）。
 
 ## 数据迁移（migrate，#876）
-- **用法**：`java -cp <migrate 类路径> muliao.migrate.Main ~/.muliao ~/.muliao-scala [--no-workspaces]`（类路径 `sbt "export migrate/Runtime/fullClasspath"`）。新版主目录必须不存在或为空，不覆盖；`--no-workspaces` 只在开发试跑时用。不读工作目录约 15 秒，加工作目录（约 85G，APFS 克隆）另计。
-- **做法**：旧库在线备份成 `migration/source.db` 后只读快照；用各领域自己的迁移建库（与启动时一样），在一个事务里按行类型写入（列名 = 行字段名的蛇形）；附件、资源目录、工作目录 `cp -c -R -p` 克隆，推送私钥原样复制；配置由旧配置生成（端口 1081、权限 600、登录签名密钥新生成）；逐表条数（旧条数 / 写入 / 新库里）与没搬的、问题写进 `migration/report.md`。
+- **用法**：`java -cp <migrate 类路径> muliao.migrate.Main ~/.muliao ~/.muliao-scala [--no-workspaces] [--port=1080]`（类路径 `sbt "export migrate/Runtime/fullClasspath"`）。新版主目录必须不存在或为空，不覆盖；`--no-workspaces` 只在开发试跑时用。不读工作目录约 15 秒，加工作目录（约 85G，APFS 克隆）另计。
+- **做法**：旧库在线备份成 `migration/source.db` 后只读快照；用各领域自己的迁移建库（与启动时一样），在一个事务里按行类型写入（列名 = 行字段名的蛇形）；附件、资源目录、工作目录 `cp -c -R -p` 克隆，推送私钥原样复制；资源目录里写死的 `~/.muliao/{assets,data,config.toml,muliao.log}` 换成新主目录的（触发器的提示、命令、前置检查也换，#878）；配置由旧配置生成（端口按 `--port`，默认 1081、权限 600、登录签名密钥新生成）；逐表条数（旧条数 / 写入 / 新库里）与没搬的、问题写进 `migration/report.md`。
 - **对应关系**：旧消息按段拆成新时间线（`Transcript`）：助手消息 → 回复（签名、OpenAI 输出项等协议数据放进 `Seal`，续聊时原样回传）+ 工具调用行；用户消息里运行上下文那段 → 上下文条目，信件文字（连同紧跟的附件段）→ 来信（来源按旧版标记），工具结果 → 对应调用的结果；失败、被停止、没结束的运行各记一条提示。迁移后每个调用都有结果（旧版缺的补说明）、运行都已结束、收件箱与等待为空，所以新版启动时不续跑、不执行任何东西。
-- **不搬**：触发器一律停用；排队中的信、进行中的异步工作、等批准、唤醒；看板的「请 agent 表态」动态（新版只记在 `issue_nudge`）。旧版早期状态 todo / waiting 在历史动态里按 in_progress / blocked 记。同一 agent 同一 issue 有多个会话的，只保留最近的为 issue 会话，其余记成用户会话。
+- **不搬**：排队中的信、进行中的异步工作、等批准、唤醒；看板的「请 agent 表态」动态（新版只记在 `issue_nudge`）。旧版早期状态 todo / waiting 在历史动态里按 in_progress / blocked 记。同一 agent 同一 issue 有多个会话的，只保留最近的为 issue 会话，其余记成用户会话。
 - **验收**：迁移后起服务（无 ERROR、续跑 0 个会话），逐个读全部会话详情与时间线、全部 issue、各 agent 后台任务与各列表接口，（`modules/migrate/verify.sh <配置> <端口>`），并在 Claude、OpenAI 两种协议的旧会话里各续聊一轮。
 
 ## 打包与部署（#877）
-- **位置**（与 Rust 版完全分开）：主目录 `~/.muliao-scala`（`config.toml`、`data/`、`assets/`、`muliao.log`、`launchd.log`、`app/`、`codesign/`、`build/`），launchd 服务 `com.muliao.scala`，端口 1081。脚本都在 `deploy/`，路径可用 `MULIAO_HOME`、`MULIAO_LABEL`、`MULIAO_PORT` 改（演练用），说明在 `deploy/lib.sh` 开头。
+- **位置**（与 Rust 版完全分开）：主目录 `~/.muliao-scala`（`config.toml`、`data/`、`assets/`、`muliao.log`、`launchd.log`、`app/`、`codesign/`、`build/`），launchd 服务 `com.muliao.scala`，端口 1080（#881 起是正式服务；Rust 版的 `com.muliao` 已 bootout 并 disable，`~/.muliao` 留作回退）。脚本都在 `deploy/`，路径可用 `MULIAO_HOME`、`MULIAO_LABEL`、`MULIAO_PORT` 改（演练用），说明在 `deploy/lib.sh` 开头。
 - **单文件程序**：`deploy/build.sh <版本> <输出>`：Vite 构建前端 → `sbt app/assembly` 打 fat jar（前端作为 `web/` 资源，清单写版本号与 `Enable-Native-Access`）→ jdeps 算模块、jlink 裁 JRE → JRE 与 jar 打成 tar.gz 编进启动器 `deploy/launcher.c` 的 Mach-O 段。启动器第一次运行把载荷解到程序旁边的 `.muliao-<载荷编号>/`，再以子进程起 java、转发终止信号、带回退出码（不 exec，保持签名身份）。版本号 = 版本目录名 `<时间>-<commit>`，`muliao version` 打印它。
 - **签名**：rcodesign 用 `~/.muliao-scala/codesign/` 下固定的自签证书、固定标识 `muliao-scala` 签名；程序路径固定为 `app/current/muliao`（真目录，换版本是整目录复制），「完全磁盘访问」授权一次后换版本不丢。
 - **流程**：第一次：`deploy/install.sh` → 在服务外（agent 里经 `ssh -F /dev/null -i ~/.ssh/id_rsa localhost`）跑 `deploy/service.sh install` 写 plist 并加载 → `deploy/selfcheck.sh`。之后每次：`deploy/install.sh [ref]`（在 `build/src` 检出、打包、签名、放进 `app/<时间>-<commit>/` 并复制成 `app/current`，留最近 3 版）→ `deploy/activate.sh --restart-only`（重启并等健康）→ `deploy/selfcheck.sh <commit>`。退回上一版：`deploy/activate.sh --previous`；换成指定版本：`deploy/activate.sh <版本目录>`。从本服务自己的命令里跑 activate 会自动脱离到后台，输出在 `deploy.log`。

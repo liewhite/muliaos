@@ -10,17 +10,18 @@ import scala.collection.mutable
 /** 一次性迁移工具：只读地把旧版（Rust 版）muliao 的数据复制并转换进新版的主目录。
   *
   * {{{
-  * migrate <旧版主目录 ~/.muliao> <新版主目录 ~/.muliao-scala> [--no-workspaces]
+  * migrate <旧版主目录 ~/.muliao> <新版主目录 ~/.muliao-scala> [--no-workspaces] [--port=<端口，默认 1081>]
   * }}}
   *
   * 做的事（新版主目录必须还不存在或是空的，不覆盖任何东西）：
   *   1. 把旧库在线备份成快照（`migration/source.db`），之后只读快照；
   *   2. 用新版各领域的迁移建库，在一个事务里写入全部转换后的数据（失败整体回滚）；
-  *   3. APFS 克隆复制附件、资源目录、各 agent 工作目录与推送私钥；
-  *   4. 生成新版配置（端口 1081、数据目录指向新目录；secret 只随资源目录复制密文，任何密钥值不打印）；
+  *   3. APFS 克隆复制附件、资源目录、各 agent 工作目录与推送私钥；资源目录里写死的旧主目录路径换成新版的（[[Rewrite]]）；
+  *   4. 生成新版配置（端口按 `--port`、数据目录指向新目录；secret 只随资源目录复制密文，任何密钥值不打印）；
   *   5. 逐表核对条数，报告写进 `migration/report.md` 并打印。
   *
-  * 触发器一律停用；旧版排队中的信、进行中的异步工作（后台任务、委派、唤醒、等批准）不搬，新版启动后没有要续跑的东西。
+  * 触发器开关照搬旧版（正式切换时用：先停旧版再迁移，#881）；旧版排队中的信、进行中的异步工作（后台任务、委派、唤醒、等批准）不搬，
+  * 新版启动后没有要续跑的东西。
   * `--no-workspaces` 只在开发时试跑用（工作目录约 80G）。
   */
 object Main extends ZIOAppDefault:
@@ -28,16 +29,18 @@ object Main extends ZIOAppDefault:
   def run: ZIO[ZIOAppArgs, Any, Any] =
     getArgs.flatMap { args =>
       val flags = args.filter(_.startsWith("--")).toSet
+      val port  = flags.collectFirst { case s"--port=$n" => n.toIntOption }
+      val known = flags.forall(f => f == "--no-workspaces" || f.startsWith("--port=")) && !port.contains(None)
       args.filterNot(_.startsWith("--")) match
-        case Chunk(from, to) if flags.subsetOf(Set("--no-workspaces")) =>
+        case Chunk(from, to) if known =>
           ZIO
-            .attemptBlocking(migrate(Layout(home(from), home(to)), workspaces = !flags("--no-workspaces")))
+            .attemptBlocking(migrate(Layout(home(from), home(to)), workspaces = !flags("--no-workspaces"), port.flatten.getOrElse(NewConfig.defaultPort)))
             .foldZIO(
               e => Console.printLineError(s"迁移失败：${e.getMessage}").ignore.as(ExitCode.failure),
               report => Console.printLine(report).ignore.as(ExitCode.success)
             )
         case _ =>
-          Console.printLineError("用法：migrate <旧版主目录> <新版主目录> [--no-workspaces]").ignore.as(ExitCode(2))
+          Console.printLineError("用法：migrate <旧版主目录> <新版主目录> [--no-workspaces] [--port=<端口>]").ignore.as(ExitCode(2))
     }
 
   private def home(p: String): Path =
@@ -45,10 +48,11 @@ object Main extends ZIOAppDefault:
 
   private def fail(msg: String): Nothing = throw IllegalStateException(msg)
 
-  def migrate(layout: Layout, workspaces: Boolean): String =
+  def migrate(layout: Layout, workspaces: Boolean, port: Int = NewConfig.defaultPort): String =
     val started = java.lang.System.currentTimeMillis()
     if Files.exists(layout.newHome) && Files.list(layout.newHome).findAny().isPresent then
       fail(s"${layout.newHome} 已存在且不是空的；迁移不覆盖，确认不要了先删掉它")
+    val rewrite = Rewrite.of(layout)
     val old = OldConfig.load(layout.oldConfig).fold(fail, identity)
     val oldDb = old.dataDir.resolve("muliao.db")
     val watched = List(layout.oldHome, old.dataDir, layout.oldAssets, old.dataDir.resolve("files"), old.dataDir.resolve("workspaces"))
@@ -68,7 +72,7 @@ object Main extends ZIOAppDefault:
     val dst    = NewDb.open(layout.newDb)
     val report = Report()
     try
-      convertAll(src, dst, zone, started, report)
+      convertAll(src, dst, zone, started, report, rewrite.fold(identity[String])(_.text))
       dst.commit()
       report.counted(dst)
     finally
@@ -82,18 +86,20 @@ object Main extends ZIOAppDefault:
       Copy.file(old.dataDir.resolve("vapid_private.pem"), layout.newData.resolve("vapid_private.pem"))
     ) ++ Option.when(workspaces)(Copy.tree(old.dataDir.resolve("workspaces"), layout.newData.resolve("workspaces"))).toList
     if !workspaces then Files.createDirectories(layout.newData.resolve("workspaces")): Unit
+    val rewritten = rewrite.map(_.tree(layout.newAssets)).getOrElse(Nil)
 
     // 4. 配置
-    val (config, skippedKeys) = NewConfig.render(old, layout).fold(fail, identity)
+    val (config, skippedKeys) = NewConfig.render(old, layout, port).fold(fail, identity)
     NewConfig.write(layout.newConfig, config)
 
     // 5. 核对与报告
     val mtimesAfter = watched.map(p => p -> Files.getLastModifiedTime(p))
-    val text = report.render(layout, copies, skippedKeys, mtimesBefore, mtimesAfter, workspaces, java.lang.System.currentTimeMillis() - started)
+    val text = report.render(layout, copies, skippedKeys, mtimesBefore, mtimesAfter, workspaces, port, rewrite, rewritten,
+      java.lang.System.currentTimeMillis() - started)
     Files.writeString(layout.reportFile, text)
     text
 
-  private def convertAll(src: Old.Db, dst: NewDb.Writer, zone: ZoneId, now: Long, report: Report): Unit =
+  private def convertAll(src: Old.Db, dst: NewDb.Writer, zone: ZoneId, now: Long, report: Report, path: String => String): Unit =
     // agent
     val agents = src.agents
     report.table("agents", agents.size, "agent", dst.insert("agent", agents.map(Convert.agent)))
@@ -106,10 +112,11 @@ object Main extends ZIOAppDefault:
 
     // 触发器（会话的来源要用名字）
     val triggers = src.triggers
-    val converted = triggers.map(t => Convert.trigger(t, zone, now))
+    val converted = triggers.map(t => Convert.trigger(t, zone, now, path))
     converted.collect { case Left(e) => e }.foreach(report.problem)
     val ok = converted.collect { case Right(v) => v }
-    report.table("triggers", triggers.size, "trigger_def", dst.insert("trigger_def", ok.map(_._1)), "全部停用")
+    report.table("triggers", triggers.size, "trigger_def", dst.insert("trigger_def", ok.map(_._1)),
+      s"开关照搬：启用 ${ok.count(_._1.enabled)}（其中没结束的 ${ok.count(r => r._1.enabled && r._1.finishedAt.isEmpty)}）")
     report.table("triggers.faults", ok.map(_._2.size).sum, "trigger_fault", dst.insert("trigger_fault", ok.flatMap(_._2)))
     val triggerName = triggers.map(t => t.id -> t.name).toMap
 
@@ -243,6 +250,9 @@ final class Report:
       before: List[(Path, java.nio.file.attribute.FileTime)],
       after: List[(Path, java.nio.file.attribute.FileTime)],
       workspaces: Boolean,
+      port: Int,
+      rewrite: Option[Rewrite],
+      rewritten: List[(Path, Int)],
       tookMs: Long
   ): String =
     val b = StringBuilder()
@@ -259,7 +269,13 @@ final class Report:
     b ++= "\n## 文件\n\n"
     copies.foreach(c => b ++= s"- ${c.from} → ${c.to}：${if c.ok then "完成" else s"有 ${c.problems.size} 处出错"}\n" + c.problems.take(20).map(p => s"  - $p\n").mkString)
     if !workspaces then b ++= "- 工作目录：按 --no-workspaces 跳过（只建了空目录）\n"
-    b ++= s"\n## 配置\n\n已生成 ${layout.newConfig}（权限 600，端口 ${NewConfig.port}；登录签名密钥新生成，要重新登录）。"
+    rewrite match
+      case None => b ++= "- 路径改写：新旧主目录不都在用户主目录下，没有改写\n"
+      case Some(r) =>
+        b ++= s"- 路径改写：资源目录和触发器里 ~/${r.oldName}/{assets,data,config.toml,muliao.log} 换成 ~/${r.newName}/…：" +
+          s"${rewritten.size} 个文件、${rewritten.map(_._2).sum} 处\n"
+        rewritten.sortBy(_._1.toString).foreach((p, n) => b ++= s"  - ${layout.newAssets.relativize(p)}：$n\n")
+    b ++= s"\n## 配置\n\n已生成 ${layout.newConfig}（权限 600，端口 $port；登录签名密钥新生成，要重新登录）。"
     b ++= (if skippedKeys.isEmpty then "旧配置的键都已对应。\n" else s"旧配置里没搬的键：${skippedKeys.mkString("、")}。\n")
     b ++= "\n## 原目录\n\n"
     before.zip(after).foreach { case ((p, t0), (_, t1)) => b ++= s"- $p 修改时间${if t0 == t1 then "未变" else s"变了：$t0 → $t1（旧版服务在跑时数据目录会自己变）"}\n" }

@@ -41,7 +41,7 @@ object OldConfig:
   * 返回文件内容与「旧配置里有、新版没有对应项而没搬的键」（只列键名）。
   */
 object NewConfig:
-  val port = 1081
+  val defaultPort = 1081
 
   /** 搬过去的旧键（其余列为没搬）。 */
   private val carried = Set(
@@ -52,7 +52,7 @@ object NewConfig:
   )
   private val providerKeys = Set("type", "base_url", "api_key", "max_concurrency", "max_output_tokens")
 
-  def render(old: OldConfig, layout: Layout): Either[String, (String, List[String])] =
+  def render(old: OldConfig, layout: Layout, port: Int = defaultPort): Either[String, (String, List[String])] =
     def need(k: String): Either[String, String] = old.str(k).toRight(s"旧配置缺少 $k")
     for
       password <- need("auth.password")

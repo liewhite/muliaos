@@ -50,6 +50,7 @@ object Old:
       kind: String,
       config: String,
       state: Option[String],
+      enabled: Boolean,
       lastFiredAt: Option[Long],
       lastSessionId: Option[String],
       precheck: Option[String],
@@ -154,7 +155,7 @@ object Old:
     def triggers: List[Trigger] =
       query("SELECT * FROM triggers ORDER BY id")(r =>
         Trigger(r.getLong("id"), r.getString("name"), r.getString("agent_id"), r.getString("prompt"), r.getString("kind"),
-          r.getString("config"), str(r, "state"), timeOpt(r, "last_fired_at"), str(r, "last_session_id"), str(r, "precheck"),
+          r.getString("config"), str(r, "state"), r.getInt("enabled") != 0, timeOpt(r, "last_fired_at"), str(r, "last_session_id"), str(r, "precheck"),
           str(r, "precheck_output"), str(r, "faults"), timeOpt(r, "finished_at"), time(r, "created_at"))
       )
 

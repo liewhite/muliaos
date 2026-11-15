@@ -116,15 +116,28 @@ object MigrateSpec extends ZIOSpecDefault:
         un == Right(None)
       )
     },
-    test("触发器一律停用，配置换成新版写法") {
-      val t = Old.Trigger(5, "watch", "a1", "看看", "stream", """{"command":"tail -f x","secrets":["K"],"debounce_seconds":1.0}""",
-        Some("""{"skipped":2}"""), None, None, Some("""{"command":"true","fire_when":"changed"}"""), Some("old"), None, None, 0)
-      val r = Convert.trigger(t, java.time.ZoneId.of("Asia/Shanghai"), 9)
+    test("触发器开关照搬，配置换成新版写法，旧主目录路径换成新版的") {
+      val rw = Rewrite(".muliao", ".muliao-scala", "/Users/u")
+      val t = Old.Trigger(5, "watch", "a1", "看 ~/.muliao/assets/x", "stream", """{"command":"cd ~/.muliao/data/workspaces/w && tail -f x","secrets":["K"],"debounce_seconds":1.0}""",
+        Some("""{"skipped":2}"""), true, None, None, Some("""{"command":"cat /Users/u/.muliao/muliao.log","fire_when":"changed"}"""), Some("old"), None, None, 0)
+      val r = Convert.trigger(t, java.time.ZoneId.of("Asia/Shanghai"), 9, rw.text)
+      val off = Convert.trigger(t.copy(enabled = false), java.time.ZoneId.of("Asia/Shanghai"), 9)
       assertTrue(
-        r.map(_._1.enabled) == Right(false),
+        r.map(_._1.enabled) == Right(true),
+        off.map(_._1.enabled) == Right(false),
+        r.map(_._1.prompt) == Right("看 ~/.muliao-scala/assets/x"),
+        r.map(_._1.precheck.exists(_.contains("/Users/u/.muliao-scala/muliao.log"))) == Right(true),
         r.map(_._1.skipped) == Right(2),
         r.map(_._1.baseline) == Right(Some("old")),
-        r.map(_._1.config.fromJson[muliao.contract.TriggerConfig]) == Right(Right(muliao.contract.TriggerConfig(command = Some("tail -f x"), secrets = Some(List("K")), debounceSeconds = Some(1.0))))
+        r.map(_._1.config.fromJson[muliao.contract.TriggerConfig]) == Right(Right(muliao.contract.TriggerConfig(command = Some("cd ~/.muliao-scala/data/workspaces/w && tail -f x"), secrets = Some(List("K")), debounceSeconds = Some(1.0))))
+      )
+    },
+    test("路径改写：只换旧主目录下的资源、数据、配置、日志") {
+      val rw = Rewrite(".muliao", ".muliao-scala", "/Users/u")
+      assertTrue(
+        rw("~/.muliao/assets/a $HOME/.muliao/data/b ${HOME}/.muliao/config.toml /Users/u/.muliao/muliao.log. ~/.muliao/assets.") ==
+          ("~/.muliao-scala/assets/a $HOME/.muliao-scala/data/b ${HOME}/.muliao-scala/config.toml /Users/u/.muliao-scala/muliao.log. ~/.muliao-scala/assets.", 5),
+        rw("~/.muliao/app/current ~/.muliao-scala/assets ~/.muliao/assets2 /Users/v/.muliao/assets ~/.muliao/muliao.log.1")._2 == 0
       )
     },
     test("旧版时间的几种写法") {

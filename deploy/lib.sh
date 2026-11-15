@@ -1,4 +1,4 @@
-# deploy/ 下各脚本共用的路径与服务操作（被 . 引入，不单独执行）。Scala 版 muliao，与 Rust 版（~/.muliao、com.muliao、1080）完全分开。
+# deploy/ 下各脚本共用的路径与服务操作（被 . 引入，不单独执行）。Scala 版 muliao：#881 起是正式服务（端口 1080）；Rust 版（~/.muliao、com.muliao）已停用，留作回退。
 #
 # 服务怎么启动：launchd 服务 $LABEL（plist 由 service.sh 生成）运行 $APP/current/muliao serve $CONFIG。
 # $APP/current 是真目录（不是链接），换版本就是把某个版本目录整个复制成它（activate）：macOS 的文件访问授权
@@ -10,10 +10,10 @@
 # 路径都可以用环境变量改，演练时指到临时目录和别的 launchd label：
 #   MULIAO_HOME   配置与数据所在目录（默认 ~/.muliao-scala）：config.toml、data/、muliao.log、app/、codesign/
 #   MULIAO_LABEL  launchd 服务名（默认 com.muliao.scala）
-#   MULIAO_PORT   服务端口（默认 1081，须与 config.toml 的 server.port 一致），健康检查用
+#   MULIAO_PORT   服务端口（默认 1080，须与 config.toml 的 server.port 一致），健康检查用
 MULIAO_HOME=${MULIAO_HOME:-$HOME/.muliao-scala}
 LABEL=${MULIAO_LABEL:-com.muliao.scala}
-PORT=${MULIAO_PORT:-1081}
+PORT=${MULIAO_PORT:-1080}
 SVC=gui/$(id -u)/$LABEL
 CONFIG=$MULIAO_HOME/config.toml
 LOGFILE=$MULIAO_HOME/muliao.log
