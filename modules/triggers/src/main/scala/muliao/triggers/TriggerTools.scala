@@ -1,6 +1,5 @@
 package muliao.triggers
 
-import muliao.resources.ToolInfo
 import muliao.contract.*
 import muliao.platform.AppError
 import muliao.resources.agents.Agents
@@ -84,16 +83,41 @@ object TriggerTools:
       finishedAt: Option[String]
   ) derives JsonEncoder
 
-  val catalog: List[ToolInfo] = List(
-    ToolInfo("trigger_kinds", Access.Read),
-    ToolInfo("trigger_list", Access.Read),
-    ToolInfo("trigger_create", Access.Write),
-    ToolInfo("trigger_update", Access.Write),
-    ToolInfo("trigger_run", Access.Write),
-    ToolInfo("trigger_delete", Access.Write)
+  private def fail(e: AppError): ToolFailure = ToolFailure.fromAppError(e)
+
+  val TriggerKindsDef = ToolDef[RunContext, NoIn]("trigger_kinds", "列出触发器的种类和各自的 config 写法。", Access.Read, display = Display.JsonData)
+
+  val TriggerListDef = ToolDef[RunContext, ListIn](
+    "trigger_list",
+    "列出触发器：name、kind、config、status（定时与一次性：next_run_at、连续跳过次数 skipped；常驻流：running_since、stderr_log）、agent、prompt、enabled、precheck、faults（脚本故障：source、error）、last_session_id、finished_at。结果是一段 JSON 数组。",
+    Access.Read,
+    display = Display.JsonData
   )
 
-  private def fail(e: AppError): ToolFailure = ToolFailure.fromAppError(e)
+  val TriggerCreateDef = ToolDef[RunContext, CreateIn](
+    "trigger_create",
+    """建一个触发器：没人发消息时让 agent 自己醒来做事。每次触发新开一个会话，把 prompt（有事件时附 <event>）交给它；会话里的回答不自动推送，要通知用户就在 prompt 里写明何时调 notify_user。
+      |频繁的检查（如每分钟）加 precheck：先跑一条便宜的命令，只有真有事才唤醒 agent。检查有时限（配置 [triggers] precheck_timeout_seconds，默认 60 秒），超时或退出码非 0 记为脚本故障，从正常变为故障时给所属 agent 开一个会话告警。
+      |种类与 config 见 trigger_kinds。""".stripMargin,
+    Access.Write
+  )
+
+  val TriggerUpdateDef = ToolDef[RunContext, UpdateIn](
+    "trigger_update",
+    "改一个触发器，只改给出的字段。改 config、改或去掉 precheck、重新启用会清掉脚本故障与跳过计数；常驻流改 config 会重启命令，只改了它跑的脚本要重启就先停用再启用。已结束的一次性触发器不能改。",
+    Access.Write
+  )
+
+  val TriggerRunDef = ToolDef[RunContext, NameIn](
+    "trigger_run",
+    "立即触发一次（不带事件）：先跑前置检查（所以也用来测试检查脚本，检查失败只报给你、不记故障），上一次开的会话没做完就不触发。不消耗一次性触发器那一次到点。",
+    Access.Write
+  )
+
+  val TriggerDeleteDef = ToolDef[RunContext, NameIn]("trigger_delete", "删除一个触发器（也可以删已结束的）；它开过的会话保留。", Access.Write)
+
+  /** 本领域工具的静态定义（进全部内置工具目录）。 */
+  val specs: List[ToolSpec] = List(TriggerKindsDef, TriggerListDef, TriggerCreateDef, TriggerUpdateDef, TriggerRunDef, TriggerDeleteDef).map(_.spec)
 
   def all(t: Triggers, agents: Agents): List[Tool[RunContext]] =
     List(kinds(t), list(t), create(t, agents), update(t), run(t), delete(t))
@@ -132,30 +156,19 @@ object TriggerTools:
     )
 
   private def kinds(t: Triggers): Tool[RunContext] =
-    Tool[RunContext, NoIn]("trigger_kinds", "列出触发器的种类和各自的 config 写法。", Access.Read, display = Display.JsonData)((_, _) =>
+    TriggerKindsDef((_, _) =>
       ZIO.succeed(ToolOutcome.text(t.kinds.toJsonPretty))
     )
 
   private def list(t: Triggers): Tool[RunContext] =
-    Tool[RunContext, ListIn](
-      "trigger_list",
-      "列出触发器：name、kind、config、status（定时与一次性：next_run_at、连续跳过次数 skipped；常驻流：running_since、stderr_log）、agent、prompt、enabled、precheck、faults（脚本故障：source、error）、last_session_id、finished_at。结果是一段 JSON 数组。",
-      Access.Read,
-      display = Display.JsonData
-    )((in, _) =>
+    TriggerListDef((in, _) =>
       t.list(in.finished)
         .map(vs => vs.map(v => listed(v, t.zone, Streams.logName(v.name))))
         .mapBoth(fail, ls => ToolOutcome.text(ls.toJsonPretty))
     )
 
   private def create(t: Triggers, agents: Agents): Tool[RunContext] =
-    Tool[RunContext, CreateIn](
-      "trigger_create",
-      """建一个触发器：没人发消息时让 agent 自己醒来做事。每次触发新开一个会话，把 prompt（有事件时附 <event>）交给它；会话里的回答不自动推送，要通知用户就在 prompt 里写明何时调 notify_user。
-        |频繁的检查（如每分钟）加 precheck：先跑一条便宜的命令，只有真有事才唤醒 agent。检查有时限（配置 [triggers] precheck_timeout_seconds，默认 60 秒），超时或退出码非 0 记为脚本故障，从正常变为故障时给所属 agent 开一个会话告警。
-        |种类与 config 见 trigger_kinds。""".stripMargin,
-      Access.Write
-    ) { (in, ctx) =>
+    TriggerCreateDef { (in, ctx) =>
       (for
         agent <- in.agent.fold(ZIO.succeed(ctx.agent))(n => agents.resolve(n).map(_.id))
         v     <- t.create(NewTrigger(in.name, agent, in.kind, in.config.toConfig, in.prompt, enabled = true, in.precheck.map(_.toSpec)))
@@ -164,11 +177,7 @@ object TriggerTools:
     }
 
   private def update(t: Triggers): Tool[RunContext] =
-    Tool[RunContext, UpdateIn](
-      "trigger_update",
-      "改一个触发器，只改给出的字段。改 config、改或去掉 precheck、重新启用会清掉脚本故障与跳过计数；常驻流改 config 会重启命令，只改了它跑的脚本要重启就先停用再启用。已结束的一次性触发器不能改。",
-      Access.Write
-    ) { (in, _) =>
+    TriggerUpdateDef { (in, _) =>
       (for
         id   <- t.named(in.name)
         v    <- t.update(id, TriggerPatch(in.prompt, in.config.map(_.toConfig), in.enabled, in.precheck.map(_.toSpec), in.removePrecheck))
@@ -177,16 +186,12 @@ object TriggerTools:
     }
 
   private def run(t: Triggers): Tool[RunContext] =
-    Tool[RunContext, NameIn](
-      "trigger_run",
-      "立即触发一次（不带事件）：先跑前置检查（所以也用来测试检查脚本，检查失败只报给你、不记故障），上一次开的会话没做完就不触发。不消耗一次性触发器那一次到点。",
-      Access.Write
-    ) { (in, _) =>
+    TriggerRunDef { (in, _) =>
       t.named(in.name).flatMap(t.run).mapBoth(fail, r => ToolOutcome.text(r.note))
     }
 
   private def delete(t: Triggers): Tool[RunContext] =
-    Tool[RunContext, NameIn]("trigger_delete", "删除一个触发器（也可以删已结束的）；它开过的会话保留。", Access.Write) { (in, _) =>
+    TriggerDeleteDef { (in, _) =>
       (for
         id <- t.named(in.name, orFinished = true)
         _  <- t.delete(id)

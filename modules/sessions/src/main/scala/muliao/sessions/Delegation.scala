@@ -68,7 +68,7 @@ private[sessions] final case class Delegations(kernel: Kernel, mailbox: Mailbox,
   def handBack(i: SessionInfo, pending: List[ReplyTo], outcome: Outcome): IO[AppError, Unit] =
     for
       _ <- ZIO.foreachDiscard(pending.collect { case ReplyTo.Delegation(d) => d })(d => finish(d, i, outcome))
-      _ <- hooks.emit(SessionEvent.Settled(i.id, i.agent, i.origin, outcome, pending.contains(ReplyTo.User)))
+      _ <- ports.emit(SessionEvent.Settled(i.id, i.agent, i.origin, outcome, pending.contains(ReplyTo.User)))
     yield ()
 
   /** thread 的一段工作有了结局：交回发起方（作为事件，或作为它等着的调用的结果）。已交回过的不再交。 */

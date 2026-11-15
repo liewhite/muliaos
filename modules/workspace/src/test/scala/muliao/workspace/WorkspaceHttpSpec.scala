@@ -13,13 +13,13 @@ import zio.test.*
 /** 本领域的 HTTP 接口：经真的 HTTP 服务调用。 */
 object WorkspaceHttpSpec extends ZIOSpecDefault:
 
-  private def server: ZIO[Scope & WorkspaceHttp & ChangeBus, Throwable, (Client, Client)] =
+  private def server: ZIO[Scope & TestEnv.Env, Throwable, (Client, Client)] =
     for
-      http     <- ZIO.service[WorkspaceHttp]
+      http     <- ZLayer.derive[WorkspaceHttp].build.map(_.get[WorkspaceHttp])
       bus      <- ZIO.service[ChangeBus]
       settings  = ServerSettings(port = 0, password = "pw", cookieSecret = "s" * 32)
       auth     <- Auth.layer.build.map(_.get[Auth]).provideSomeLayer[Scope](ZLayer.succeed(settings))
-      port     <- HttpServer.serve(settings, auth, bus, http.endpoints(auth), "test")
+      port     <- HttpServer.serve(settings, auth, bus, http.routes, "test")
       in        = Client(s"http://127.0.0.1:$port")
       _        <- in.call("POST", "/api/auth/login", Some("""{"password":"pw"}"""))
     yield (in, Client(s"http://127.0.0.1:$port"))

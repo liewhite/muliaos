@@ -13,9 +13,8 @@ import muliao.resources.agents.Agents
 import muliao.resources.guard.AssetGuard
 import muliao.resources.tree.AssetStore
 import muliao.resources.vault.Vault
-import muliao.sessions.{Files, LiveHub, SessionHooks, SessionPaths, SessionSettings, Sessions}
+import muliao.sessions.{Files, LiveHub, SessionConsole, SessionPaths, SessionSettings, Sessions}
 import muliao.sessions.TestEnv as S
-import muliao.toolkit.Access
 import muliao.workspace.Workspace
 import muliao.workspace.TestEnv as W
 import zio.*
@@ -29,15 +28,12 @@ object TestEnv:
   val noPush: PushGateway = new PushGateway:
     def send(device: Device, payload: Array[Byte]): IO[PushFailure, Unit] = ZIO.unit
 
-  val toolCatalog: ToolCatalog = ToolCatalog.fixed(
-    (List("echo", "keep_secret", "block", "approve_me") ++ Sessions.toolNames ++ SessionLink.toolNames).map(ToolInfo(_, Access.Write)) ++
-      Workspace.toolInfos ++ Triggers.toolInfos
-  )
+  val toolCatalog: ToolCatalog = S.toolCatalog(SessionLink.specs ++ Workspace.specs ++ Triggers.specs)
 
   /** 测试用的节奏：重启、跑稳都很快。 */
   val quick: Tuning = Tuning(busyPoll = 100.millis, restartFirst = 50.millis, restartMax = 200.millis, stableAfter = 1.second)
 
-  type Env = Triggers & TriggersHttp & Notifications & Workspace.Services & Sessions & SessionHooks & Agents & Database & AgentHooks & ChangeBus &
+  type Env = Triggers & TriggersHttp & Notifications & Workspace.Services & Sessions & SessionConsole & Agents & Database & ChangeBus & S.EventLog &
     Files & Resources & AssetStore & ResourcePaths & Vault
 
   /** `assetPoll`：资源目录轮询间隔；用测试时钟拨时间的测试调大，免得拨一次要跑成千上万次轮询。 */
@@ -67,7 +63,6 @@ object TestEnv:
       ZLayer.succeed(VaultSettings(S.vaultKey)),
       ZLayer.succeed(toolCatalog),
       ZLayer.succeed(S.modelCheck),
-      AgentHooks.layer,
       AccessEditor.layer,
       Agents.layer,
       Resources.layer,
@@ -78,7 +73,6 @@ object TestEnv:
       ZLayer.succeed(SessionSettings()),
       ZLayer.succeed(SessionPaths(d.data.resolve("files"))),
       ZLayer.succeed(GeneralSettings(d.data, d.assets)),
-      SessionHooks.layer,
       LiveHub.layer,
       Files.layer,
       Sessions.layer,
@@ -93,17 +87,16 @@ object TestEnv:
       ),
       ZLayer.succeed(settings),
       Triggers.layerWith(tuning),
-      TriggersHttp.layer
+      ZLayer.derive[TriggersHttp],
+      ZLayer(Ref.make(List.empty[muliao.sessions.SessionEvent]).map(S.EventLog(_)))
     )
 
   /** 接好测试工具并按组装入口的顺序启动：会话 → 收尾后台任务 → 触发器。 */
-  def start(p: S.Probe): ZIO[Sessions & SessionHooks & muliao.workspace.jobs.Jobs & Triggers, AppError, Unit] =
+  def start(p: S.Probe): ZIO[Env, AppError, Unit] =
     for
-      hooks <- ZIO.service[SessionHooks]
-      _     <- hooks.addTools(S.tools(p))
-      _     <- hooks.addApproval(S.approval(p))
-      _     <- W.start
-      _     <- ZIO.serviceWithZIO[Triggers](_.start)
+      t <- Triggers.contribution
+      _ <- W.startWith(List(S.probeContribution(p), t))
+      _ <- ZIO.serviceWithZIO[Triggers](_.start)
     yield ()
 
   // ---- 读状态（都用真实时钟等待，免得测试时钟下卡住） ----
@@ -114,8 +107,8 @@ object TestEnv:
     triggers.flatMap(t => t.named(name, orFinished = true).flatMap(t.view))
 
   /** 这个 agent 由触发器开出的会话（旧的在前）。 */
-  def triggerSessions(agent: AgentId): ZIO[Sessions, AppError, List[SessionSummary]] =
-    ZIO.serviceWithZIO[Sessions](_.list(Some(agent), None, None, 200)).map(_.items.filter(_.origin == OriginKind.Trigger).sortBy(_.createdAt))
+  def triggerSessions(agent: AgentId): ZIO[SessionConsole, AppError, List[SessionSummary]] =
+    ZIO.serviceWithZIO[SessionConsole](_.list(Some(agent), None, None, 200)).map(_.items.filter(_.origin == OriginKind.Trigger).sortBy(_.createdAt))
 
   def eventually[R, A](what: String)(get: ZIO[R, AppError, A])(ok: A => Boolean): ZIO[R, AppError, A] =
     Live.live(S.eventually(what)(get)(ok))

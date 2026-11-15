@@ -79,6 +79,45 @@ object AgentTools:
 
   private def fail(e: AppError): ToolFailure = ToolFailure.fromAppError(e)
 
+  val ListAgentsDef = ToolDef[ToolContext, NoArgs](
+    "list_agents",
+    "列出全部 agent 和各自管什么（按分组）。委派前用它找该交给谁。归档的不列。",
+    Access.Read,
+    display = Display.JsonData
+  )
+
+  val GetAgentDef = ToolDef[ToolContext, AgentRef](
+    "get_agent",
+    "看一个 agent 的配置、最终能用的工具（tools）和资源（assets：`种类:名字`）、全部角色与全部内置工具。看自己的用自己的名字。",
+    Access.Read,
+    display = Display.JsonData
+  )
+
+  val CreateAgentDef = ToolDef[ToolContext, CreateAgent](
+    "create_agent",
+    "新建一个长期存在的 agent（有自己的记忆、skill、工作目录），例如以后会反复委派的专人。一次性的活委派给自己（delegate_task / ask_agent 用自己的名字），不用新建。",
+    Access.Admin,
+    Scheduling.Ordered,
+    Display.JsonData
+  )
+
+  val DeleteAgentDef = ToolDef[ToolContext, AgentRef](
+    "delete_agent",
+    "删除另一个 agent：连同它的会话、记忆、私有资源（仍被别人用着的转给平台）、触发器和工作目录，不可撤销。它忙时拒绝。不能删自己。",
+    Access.Admin,
+    Scheduling.Ordered
+  )
+
+  val VaultSetDef = ToolDef[ToolContext, VaultSet](
+    "vault_set",
+    "把用户给的 secret 加密存进你的 `secrets/<KEY>.toml`（新 key 归你；改已有的要有改它的权限），值不进会话记录。之后用 `run_shell(secrets=[KEY])` / `skill_run(secrets=[KEY])` 当环境变量用，或在 MCP 配置里写 `${vault:KEY}`。",
+    Access.Write,
+    Scheduling.Ordered
+  )
+
+  /** 本领域工具的静态定义（进全部内置工具目录）。 */
+  val specs: List[ToolSpec] = List(ListAgentsDef, GetAgentDef, CreateAgentDef, DeleteAgentDef, VaultSetDef).map(_.spec)
+
   def all(
       agents: Agents,
       resources: Resources,
@@ -88,12 +127,7 @@ object AgentTools:
       paths: ResourcePaths
   ): List[Tool[ToolContext]] =
 
-    val listAgents = Tool[ToolContext, NoArgs](
-      "list_agents",
-      "列出全部 agent 和各自管什么（按分组）。委派前用它找该交给谁。归档的不列。",
-      Access.Read,
-      display = Display.JsonData
-    ) { (_, _) =>
+    val listAgents = ListAgentsDef { (_, _) =>
       (for
         as   <- agents.list.map(_.filter(_.state == AgentState.Active))
         snap <- store.snapshot
@@ -130,22 +164,11 @@ object AgentTools:
         problems = snap.problems.filter(_.owner.contains(Owner.Agent(a.name))).map(p => s"${p.path}：${p.reason}")
       )
 
-    val getAgent = Tool[ToolContext, AgentRef](
-      "get_agent",
-      "看一个 agent 的配置、最终能用的工具（tools）和资源（assets：`种类:名字`）、全部角色与全部内置工具。看自己的用自己的名字。",
-      Access.Read,
-      display = Display.JsonData
-    ) { (in, _) =>
+    val getAgent = GetAgentDef { (in, _) =>
       agents.resolve(in.agent).flatMap(view).map(json(_)).mapError(fail)
     }
 
-    val createAgent = Tool[ToolContext, CreateAgent](
-      "create_agent",
-      "新建一个长期存在的 agent（有自己的记忆、skill、工作目录），例如以后会反复委派的专人。一次性的活委派给自己（delegate_task / ask_agent 用自己的名字），不用新建。",
-      Access.Admin,
-      Scheduling.Ordered,
-      Display.JsonData
-    ) { (in, _) =>
+    val createAgent = CreateAgentDef { (in, _) =>
       (for
         thinking <- ZIO.fromEither(Thinking.parse(in.thinking)).mapError(AppError.invalid)
         rec <- agents.create(NewAgent(in.name, in.description, in.model, thinking, in.group, in.roles.map(RoleName.wrap), in.allow, in.deny))
@@ -153,12 +176,7 @@ object AgentTools:
         .mapError(fail)
     }
 
-    val deleteAgent = Tool[ToolContext, AgentRef](
-      "delete_agent",
-      "删除另一个 agent：连同它的会话、记忆、私有资源（仍被别人用着的转给平台）、触发器和工作目录，不可撤销。它忙时拒绝。不能删自己。",
-      Access.Admin,
-      Scheduling.Ordered
-    ) { (in, ctx) =>
+    val deleteAgent = DeleteAgentDef { (in, ctx) =>
       (for
         a <- agents.resolve(in.agent)
         _ <- ZIO.when(a.id == ctx.agent)(ZIO.fail(AppError.invalid("不能删除自己")))
@@ -166,12 +184,7 @@ object AgentTools:
       yield ToolOutcome.text(s"已删除 agent ${a.name.value}。")).mapError(fail)
     }
 
-    val vaultSet = Tool[ToolContext, VaultSet](
-      "vault_set",
-      "把用户给的 secret 加密存进你的 `secrets/<KEY>.toml`（新 key 归你；改已有的要有改它的权限），值不进会话记录。之后用 `run_shell(secrets=[KEY])` / `skill_run(secrets=[KEY])` 当环境变量用，或在 MCP 配置里写 `${vault:KEY}`。",
-      Access.Write,
-      Scheduling.Ordered
-    ) { (in, ctx) =>
+    val vaultSet = VaultSetDef { (in, ctx) =>
       vault
         .set(Actor.Agent(ctx.agent), in.key, in.value, Some(in.description), in.allowShell, Owner.Platform)
         .map(created => ToolOutcome.text(if created then s"已新建 secret ${in.key}。" else s"已更新 secret ${in.key}。"))

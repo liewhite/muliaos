@@ -113,16 +113,18 @@ object TestEnv:
     def approved(payload: Json, always: Boolean, ctx: RunContext): IO[ToolFailure, ToolOutcome] =
       p.approvals.update(_ :+ always).as(ToolOutcome.text(s"批准后执行了，always=$always"))
 
-  /** `more`：下游领域测试时一并登记的工具名。 */
-  def toolCatalog(more: List[String] = Nil): ToolCatalog = ToolCatalog.fixed(
-    (List("echo", "keep_secret", "block", "approve_me") ++ Sessions.toolNames ++ more).map(ToolInfo(_, Access.Write))
-  )
+  /** 全部内置工具：测试工具、本领域的，加上 `more`（下游领域测试时一并接上的）。 */
+  def toolCatalog(more: List[ToolSpec] = Nil): ToolCatalog =
+    ToolCatalog(List("echo", "keep_secret", "block", "approve_me").map(ToolInfo(_, Access.Write)) ++ ToolCatalog.of(Sessions.specs ++ more).tools)
 
   val modelCheck: ModelCheck = new ModelCheck:
     val defaultModel                         = "fake:m"
     def check(model: String): Option[String] = Option.unless(model.startsWith("fake:"))("只有 fake")
 
-  type Env = Sessions & SessionHooks & Agents & Database & AgentHooks & ChangeBus & Files
+  /** 全部会话事件（启动时作为订阅方接上）。 */
+  final class EventLog(val events: Ref[List[SessionEvent]])
+
+  type Env = Sessions & SessionConsole & Agents & Database & ChangeBus & Files & EventLog
 
   /** 在 `d` 上起一套环境（同一个 `d` 起第二套就是模拟重启）。 */
   /** `more` / `moreTools`：下游领域测试时一并执行的迁移、一并登记的工具名。 */
@@ -131,7 +133,7 @@ object TestEnv:
       models: FakeModels,
       settings: SessionSettings = SessionSettings(),
       more: List[muliao.platform.db.Migrations] = Nil,
-      moreTools: List[String] = Nil
+      moreTools: List[ToolSpec] = Nil
   ): ZLayer[Any, AppError, Env] =
     val paths = ResourcePaths(d.assets, d.workspaces, d.data.resolve("resources"), Nil)
     ZLayer.make[Env](
@@ -143,7 +145,6 @@ object TestEnv:
       ZLayer.succeed(VaultSettings(vaultKey)),
       ZLayer.succeed(toolCatalog(moreTools)),
       ZLayer.succeed(modelCheck),
-      AgentHooks.layer,
       AccessEditor.layer,
       Agents.layer,
       Resources.layer,
@@ -153,31 +154,44 @@ object TestEnv:
       ZLayer.succeed(settings),
       ZLayer.succeed(SessionPaths(d.data.resolve("files"))),
       ZLayer.succeed(GeneralSettings(d.data, d.assets)),
-      SessionHooks.layer,
       LiveHub.layer,
       Files.layer,
-      Sessions.layer
+      Sessions.layer,
+      ZLayer(Ref.make(List.empty[SessionEvent]).map(EventLog(_)))
     )
 
   /** 建一个 agent。 */
   def agent(name: String): ZIO[Agents, AppError, AgentId] =
     ZIO.serviceWithZIO[Agents](_.create(NewAgent(name, s"测试 agent $name", Some("fake:m")))).map(_.id)
 
-  /** 接好测试工具与批准执行者并启动。 */
-  def start(p: Probe): ZIO[Sessions & SessionHooks, AppError, Unit] =
+  /** 测试里没有后台任务与未读的领域时用。 */
+  val noJobs: JobControl = new JobControl:
+    def status(job: JobId): UIO[String] = ZIO.succeed("（测试里没有后台任务）")
+    def cancel(job: JobId): UIO[Unit]   = ZIO.unit
+
+  val noUnread: UnreadSource = new UnreadSource:
+    def unread(ids: List[SessionId]): UIO[Set[SessionId]] = ZIO.succeed(Set.empty)
+    def markRead(id: SessionId): UIO[Unit]                = ZIO.unit
+
+  /** 按组装入口的顺序启动：会话（接上事件记录与 `more`）→ agent（定下生命周期参与方）。 */
+  def startWith(more: List[Contribution], jobs: JobControl = noJobs, unread: UnreadSource = noUnread): ZIO[Sessions & Agents & EventLog, AppError, Unit] =
     for
-      hooks <- ZIO.service[SessionHooks]
-      _     <- hooks.addTools(tools(p))
-      _     <- hooks.addApproval(approval(p))
-      _     <- ZIO.serviceWithZIO[Sessions](_.start)
+      log      <- ZIO.service[EventLog]
+      sessions <- ZIO.service[Sessions]
+      events    = Contribution(listener = Some(e => log.events.update(_ :+ e)))
+      _        <- sessions.start(SessionPorts(events :: more, jobs, unread))
+      _        <- ZIO.serviceWithZIO[Agents](_.start(sessions.agentHook :: more.flatMap(_.agentHook)))
     yield ()
 
-  /** 记下全部会话事件。 */
-  def recordEvents: ZIO[SessionHooks, Nothing, Ref[List[SessionEvent]]] =
-    for
-      ref <- Ref.make(List.empty[SessionEvent])
-      _   <- ZIO.serviceWithZIO[SessionHooks](_.addListener(e => ref.update(_ :+ e)))
-    yield ref
+  /** 同 [[startWith]]，另接上测试工具与批准执行者。 */
+  def start(p: Probe, more: List[Contribution] = Nil, jobs: JobControl = noJobs, unread: UnreadSource = noUnread): ZIO[Sessions & Agents & EventLog, AppError, Unit] =
+    startWith(probeContribution(p) :: more, jobs, unread)
+
+  /** 测试工具与批准执行者。 */
+  def probeContribution(p: Probe): Contribution = Contribution(tools(p), List(approval(p)))
+
+  /** 启动以来的全部会话事件。 */
+  def recordEvents: URIO[EventLog, Ref[List[SessionEvent]]] = ZIO.serviceWith[EventLog](_.events)
 
   /** 每 20 毫秒看一次，直到满足（最多 10 秒）。 */
   def eventually[R, A](what: String)(get: ZIO[R, AppError, A])(ok: A => Boolean): ZIO[R, AppError, A] =

@@ -71,7 +71,7 @@ private[sessions] final case class CallRunner(kernel: Kernel, files: Files, dele
       case CallState.Approved | CallState.ApprovedAlways =>
         c.pause match
           case Some(Pause.Approval(handler, _, payload)) =>
-            hooks.approval(handler).flatMap {
+            ports.approval(handler).flatMap {
               case Some(h) => h.approved(payload, c.state == CallState.ApprovedAlways, ctx)
               case None    => ZIO.fail(ToolFailure.Aborted(s"批准后的执行者 ${handler.value} 没有登记"))
             }
@@ -147,9 +147,9 @@ private[sessions] final case class CallRunner(kernel: Kernel, files: Files, dele
         ) *> info(i.id).map(_.userWaiting).flatMap { waiting =>
           p match
             case Pause.AskUser(qs) =>
-              hooks.emit(SessionEvent.NeedsUser(i.id, i.agent, UserNeed.Answers(qs.size), waiting))
+              ports.emit(SessionEvent.NeedsUser(i.id, i.agent, UserNeed.Answers(qs.size), waiting))
             case Pause.Approval(_, summary, _) =>
-              hooks.emit(SessionEvent.NeedsUser(i.id, i.agent, UserNeed.Approval(summary), waiting))
+              ports.emit(SessionEvent.NeedsUser(i.id, i.agent, UserNeed.Approval(summary), waiting))
             case _: Pause.AwaitThread => ZIO.unit
         }
 

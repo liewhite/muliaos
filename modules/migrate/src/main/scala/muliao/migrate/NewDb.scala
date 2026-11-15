@@ -10,20 +10,8 @@ import java.sql.{Connection, DriverManager, PreparedStatement, Types}
 
 /** 新版的库：先用各领域自己的迁移建表（与新版启动时完全一样），再在一个事务里批量写入；中途失败整体回滚。 */
 object NewDb:
-  /** 新版全部有表的领域（与组装入口 `Assembly` 的领域列表一致）。 */
-  private val domains = List(
-    muliao.resources.Module,
-    muliao.models.Module,
-    muliao.sessions.Module,
-    muliao.workspace.Module,
-    muliao.notifications.Module,
-    muliao.board.Module,
-    muliao.triggers.Module,
-    muliao.history.Module
-  )
-
   def create(file: Path): IO[AppError, Unit] =
-    ZIO.scoped(Database.layer(Database.Settings(file), domains.map(_.migrations)).build).unit
+    ZIO.scoped(Database.layer(Database.Settings(file), muliao.app.Assembly.domains.map(_.migrations)).build).unit
 
   def open(file: Path): Writer =
     val c = DriverManager.getConnection(s"jdbc:sqlite:${file.toAbsolutePath}")

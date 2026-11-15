@@ -8,7 +8,7 @@ import muliao.platform.config.ConfigSection
   *
   * 给别的领域与组装入口用的接口：
   *   - [[Triggers]]：界面与工具的入口；`start` 在 `Sessions.start` 之后调用，起到期扫描与常驻流托管（随 layer 的 scope 停下）；
-  *   - [[Triggers.layer]]：起服务，并把 6 个工具（名字在 [[Triggers.toolInfos]]）与 agent 删除时的清理登记到上游，要在 `Sessions.start` 之前构建；
+  *   - [[Triggers.contribution]]：交给会话与资源领域的 6 个工具（静态定义在 [[Triggers.specs]]）与 agent 删除时的清理；
   *   - [[TriggersHttp]]：界面的接口。
   *
   * 本领域自己的表结构迁移放在 `resources/db/triggers/`。
@@ -16,4 +16,4 @@ import muliao.platform.config.ConfigSection
 object Module extends DomainModule:
   val name = "triggers"
 
-  val sections: List[ConfigSection[?]] = List(TriggerSettings.section)
+  override val sections: List[ConfigSection[?]] = List(TriggerSettings.section)

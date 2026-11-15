@@ -41,13 +41,13 @@ object SessionsHttpSpec extends ZIOSpecDefault:
       finally lines.close()
     }
 
-  private def server: ZIO[Scope & Sessions & Files & Agents & SessionHooks & ChangeBus, Throwable, Client] =
+  private def server: ZIO[Scope & Sessions & SessionConsole & Files & Agents & ChangeBus, Throwable, Client] =
     for
-      http     <- SessionsHttp.layer.build.map(_.get[SessionsHttp])
+      http     <- ZLayer.derive[SessionsHttp].build.map(_.get[SessionsHttp])
       bus      <- ZIO.service[ChangeBus]
       settings  = ServerSettings(port = 0, password = "pw", cookieSecret = "s" * 32)
       auth     <- Auth.layer.build.map(_.get[Auth]).provideSomeLayer[Scope](ZLayer.succeed(settings))
-      port     <- HttpServer.serve(settings, auth, bus, http.endpoints(auth), "test")
+      port     <- HttpServer.serve(settings, auth, bus, http.routes, "test")
       client    = Client(s"http://127.0.0.1:$port")
       _        <- client.call("POST", "/api/auth/login", Some("""{"password":"pw"}"""))
     yield client
@@ -76,7 +76,7 @@ object SessionsHttpSpec extends ZIOSpecDefault:
                    miss  <- c.call("GET", "/api/sessions?q=nothing")
                    _     <- c.call("POST", s"/api/sessions/${id.value}/messages", Some(MessageIn("慢慢写").toJson))
                    _     <- eventually("在写")(stateOf(id))(_ == WorkState.Running)
-                   _     <- eventually("开始生成")(ZIO.serviceWithZIO[Sessions](s => ZIO.scoped(s.subscribe(id).map(_._1))))(_.exists(_.nonEmpty))
+                   _     <- eventually("开始生成")(ZIO.serviceWithZIO[SessionConsole](s => ZIO.scoped(s.subscribe(id).map(_._1))))(_.exists(_.nonEmpty))
                    ev    <- c.firstEvent(s"/api/sessions/${id.value}/live")
                    busy  <- c.call("DELETE", s"/api/sessions/${id.value}")
                    st    <- c.call("POST", s"/api/sessions/${id.value}/stop")

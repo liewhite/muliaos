@@ -33,7 +33,7 @@ object HistorySpec extends ZIOSpecDefault:
                d,
                m,
                more = List(muliao.notifications.Module.migrations, muliao.board.Module.migrations, muliao.history.Module.migrations),
-               moreTools = SessionLink.toolNames ++ BoardTools.toolNames ++ HistoryTools.toolNames
+               moreTools = SessionLink.specs ++ BoardTools.specs ++ HistoryTools.specs
              ).build
       n   <- Notifications.make(env.get[Database], env.get[ChangeBus], noPush, "PUBLIC", Retry.Policy(10.millis, 40.millis, 400.millis))
       gen  = GeneralSettings(d.data, d.assets)
@@ -41,7 +41,12 @@ object HistorySpec extends ZIOSpecDefault:
       h   <- History.layer.build.provideSomeEnvironment[Scope](_ ++ env.add(n).add(b).add(gen)).map(_.get[History])
       all  = env.add(n).add(b).add(gen).add(h).add(d)
       p   <- probe
-      a   <- (SessionLink.attach *> BoardLink.attach *> HistoryLink.attach *> start(p) *> body).provideSomeEnvironment[Scope](_ ++ all)
+      a <- (for
+             cs <- ZIO.collectAll(List(SessionLink.contribution, BoardLink.contribution, HistoryLink.contribution))
+             u  <- SessionLink.unread
+             _  <- start(p, cs, unread = u)
+             r  <- body
+           yield r).provideSomeEnvironment[Scope](_ ++ all)
     yield a
 
   private def history = ZIO.service[History]
@@ -160,7 +165,7 @@ object HistorySpec extends ZIOSpecDefault:
           today <- h.today
           (s1, _) <- ask(bob, "帮我部署")
           s2    <- userSession(bob, "这次会失败")
-          _     <- eventually("失败")(ZIO.serviceWithZIO[Sessions](_.detail(s2)))(_.run.exists(_.state == RunState.Failed))
+          _     <- eventually("失败")(ZIO.serviceWithZIO[SessionConsole](_.detail(s2)))(_.run.exists(_.state == RunState.Failed))
           (s3, _) <- ask(carol, "carol 的事")
           ids   <- b.create(By.user, List(Draft(None, "bob 的活", bob, status = IssueStatus.Backlog, assignee = Some(Assignee.Agent(bob))),
                      Draft(None, "carol 的活", carol, status = IssueStatus.Backlog)))
@@ -258,7 +263,7 @@ object HistorySpec extends ZIOSpecDefault:
           bus  <- ZIO.service[ChangeBus]
           set   = ServerSettings(port = 0, password = "pw", cookieSecret = "s" * 32)
           auth <- Auth.layer.build.map(_.get[Auth]).provideSomeLayer[Scope](ZLayer.succeed(set))
-          port <- HttpServer.serve(set, auth, bus, HistoryHttp(h).endpoints(auth), "test").orDie
+          port <- HttpServer.serve(set, auth, bus, HistoryHttp(h).routes, "test").orDie
           c     = muliao.sessions.SessionsHttpSpec.Client(s"http://127.0.0.1:$port")
           call  = (m: String, p: String) => c.call(m, p, None).orDie
           _    <- c.call("POST", "/api/auth/login", Some("""{"password":"pw"}""")).orDie

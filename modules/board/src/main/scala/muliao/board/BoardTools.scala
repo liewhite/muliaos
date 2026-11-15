@@ -16,8 +16,6 @@ import java.time.format.DateTimeFormatter
 /** 本领域给 agent 的工具：issue_list、issue_show、issue_create、issue_update、issue_comment、issue_stop。 */
 object BoardTools:
 
-  val toolNames: List[String] = List("issue_list", "issue_show", "issue_create", "issue_update", "issue_comment", "issue_stop")
-
   // ---- 参数里的枚举（JSON 里的写法与界面一致） ----
 
   given Schema[IssueStatus] = LabeledArg.schema
@@ -113,6 +111,55 @@ object BoardTools:
       @jsonField("updated_at") updatedAt: String
   ) derives JsonEncoder
 
+  val IssueListDef = ToolDef[RunContext, ListIn](
+    "issue_list",
+    "列出看板上的 issue，最近更新的在前。每项带 owner、status、priority、assignee，assignee_state（指派的 agent 处理它的会话：running / waiting / idle，没有为 null）、stalled（in_progress 指派给 agent、不等上游，但它的会话空闲或还没有：没人在处理）、depends_on 与 waiting_on（还没结束的上游）。",
+    Access.Read,
+    display = Display.JsonData
+  )
+
+  val IssueShowDef = ToolDef[RunContext, IssueRef](
+    "issue_show",
+    "看一个 issue 的全部：描述、依赖（在等哪些）、被谁依赖（blocks）、处理它的会话、完整时间线（评论与每个改动）。",
+    Access.Read,
+    display = Display.Markdown
+  )
+
+  val IssueCreateDef = ToolDef[RunContext, CreateIn](
+    "issue_create",
+    """建 issue。指派给 agent 且 in_progress 的，建好就投进那个 agent 专门处理它的会话（每个 issue + agent 一个），之后每条新动态都投到那里；指派给你自己也一样：在这里建，在那个会话里做。
+      |要按顺序做就给 depends_on：全部上游结束（done 或 cancelled）才投递，所以一条链可以一次建好、都设 in_progress，上一步做完下一步自动开始。
+      |一次建几个互相依赖的用 issues（每项给 key，别的项在 depends_on_keys 里引用）；拆大活时把步骤和一个依赖全部步骤的父 issue（写总目标）一起建。""".stripMargin,
+    Access.Write,
+    Scheduling.Ordered
+  )
+
+  val IssueUpdateDef = ToolDef[RunContext, UpdateIn](
+    "issue_update",
+    """改 issue，只改给出的字段。改动投给正在处理它的 agent（你在它自己的 issue 会话里改的不投回给你）；指派给用户会通知他。
+      |做完：没有别的 issue 依赖它就设 in_review、指派 user，由用户审核后设 done；有下游依赖它（issue_show 的「被依赖」）就自己设 done，下游才开始。
+      |只有用户能处理的设 blocked、指派 user，并评论说明要他做什么。改状态不会停下正在跑的会话，要叫停用 issue_stop。""".stripMargin,
+    Access.Write,
+    Scheduling.Ordered
+  )
+
+  val IssueCommentDef = ToolDef[RunContext, CommentIn](
+    "issue_comment",
+    "在 issue 上评论（Markdown）：进展、发现、结果、给用户的问题。用户看的是 issue，不是你的会话，结论要记在这里。评论投给正在处理它的 agent；没人处理时，用户的评论投给 owner。",
+    Access.Write,
+    Scheduling.Ordered
+  )
+
+  val IssueStopDef = ToolDef[RunContext, StopIn](
+    "issue_stop",
+    "叫停指派的 agent 正在处理某 issue 的会话（像用户点停止：当前运行结束、排队的消息丢弃、它开的 thread 一并停下），再把 issue 改成 status。message 记成你的评论并投给那个会话，它会再跑一次照此收尾或改方向。用来叫停已不需要的工作；只改状态不会停下正在跑的会话。不能在这个 issue 自己的会话里用（那里用 issue_update）。",
+    Access.Write,
+    Scheduling.Ordered
+  )
+
+  /** 本领域工具的静态定义（进全部内置工具目录）。 */
+  val specs: List[ToolSpec] = List(IssueListDef, IssueShowDef, IssueCreateDef, IssueUpdateDef, IssueCommentDef, IssueStopDef).map(_.spec)
+
   def all(board: Board, agents: Agents, zone: ZoneId): List[Tool[RunContext]] =
     val iso  = DateTimeFormatter.ISO_OFFSET_DATE_TIME.withZone(zone)
     val time = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(zone)
@@ -135,12 +182,7 @@ object BoardTools:
     def run[A](effect: IO[AppError, A])(out: A => String): IO[ToolFailure, ToolOutcome] =
       effect.mapBoth(ToolFailure.fromAppError, a => ToolOutcome.text(out(a)))
 
-    val issueList = Tool[RunContext, ListIn](
-      "issue_list",
-      "列出看板上的 issue，最近更新的在前。每项带 owner、status、priority、assignee，assignee_state（指派的 agent 处理它的会话：running / waiting / idle，没有为 null）、stalled（in_progress 指派给 agent、不等上游，但它的会话空闲或还没有：没人在处理）、depends_on 与 waiting_on（还没结束的上游）。",
-      Access.Read,
-      display = Display.JsonData
-    ) { (in, _) =>
+    val issueList = IssueListDef { (in, _) =>
       run(
         for
           a  <- ZIO.foreach(in.assignee)(assignee)
@@ -175,12 +217,7 @@ object BoardTools:
          |## 动态
          |${events.mkString("\n")}""".stripMargin
 
-    val issueShow = Tool[RunContext, IssueRef](
-      "issue_show",
-      "看一个 issue 的全部：描述、依赖（在等哪些）、被谁依赖（blocks）、处理它的会话、完整时间线（评论与每个改动）。",
-      Access.Read,
-      display = Display.Markdown
-    ) { (in, _) => run(issueId(in.issueId).flatMap(board.show))(show) }
+    val issueShow = IssueShowDef { (in, _) => run(issueId(in.issueId).flatMap(board.show))(show) }
 
     def draft(i: ItemIn): IO[AppError, Draft] =
       for
@@ -189,14 +226,7 @@ object BoardTools:
         up <- ZIO.foreach(i.dependsOn)(issueId)
       yield Draft(i.key, i.title, o, i.description, i.status, i.priority, a, up.map(Upstream.Existing(_)) ++ i.dependsOnKeys.map(Upstream.Key(_)))
 
-    val issueCreate = Tool[RunContext, CreateIn](
-      "issue_create",
-      """建 issue。指派给 agent 且 in_progress 的，建好就投进那个 agent 专门处理它的会话（每个 issue + agent 一个），之后每条新动态都投到那里；指派给你自己也一样：在这里建，在那个会话里做。
-        |要按顺序做就给 depends_on：全部上游结束（done 或 cancelled）才投递，所以一条链可以一次建好、都设 in_progress，上一步做完下一步自动开始。
-        |一次建几个互相依赖的用 issues（每项给 key，别的项在 depends_on_keys 里引用）；拆大活时把步骤和一个依赖全部步骤的父 issue（写总目标）一起建。""".stripMargin,
-      Access.Write,
-      Scheduling.Ordered
-    ) { (in, ctx) =>
+    val issueCreate = IssueCreateDef { (in, ctx) =>
       val single = in.title.isDefined || in.owner.isDefined
       val drafts: IO[AppError, List[Draft]] = (single, in.issues) match
         case (true, _ :: _) => ZIO.fail(AppError.invalid("给了 issues 就不要再给单项的 title、owner"))
@@ -213,14 +243,7 @@ object BoardTools:
       )
     }
 
-    val issueUpdate = Tool[RunContext, UpdateIn](
-      "issue_update",
-      """改 issue，只改给出的字段。改动投给正在处理它的 agent（你在它自己的 issue 会话里改的不投回给你）；指派给用户会通知他。
-        |做完：没有别的 issue 依赖它就设 in_review、指派 user，由用户审核后设 done；有下游依赖它（issue_show 的「被依赖」）就自己设 done，下游才开始。
-        |只有用户能处理的设 blocked、指派 user，并评论说明要他做什么。改状态不会停下正在跑的会话，要叫停用 issue_stop。""".stripMargin,
-      Access.Write,
-      Scheduling.Ordered
-    ) { (in, ctx) =>
+    val issueUpdate = IssueUpdateDef { (in, ctx) =>
       val patch =
         for
           id <- issueId(in.issueId)
@@ -233,19 +256,9 @@ object BoardTools:
       run(patch.flatMap((id, p) => board.update(by(ctx), id, p).as(id)))(id => s"已更新 #${id.value}")
     }
 
-    val issueComment = Tool[RunContext, CommentIn](
-      "issue_comment",
-      "在 issue 上评论（Markdown）：进展、发现、结果、给用户的问题。用户看的是 issue，不是你的会话，结论要记在这里。评论投给正在处理它的 agent；没人处理时，用户的评论投给 owner。",
-      Access.Write,
-      Scheduling.Ordered
-    ) { (in, ctx) => run(issueId(in.issueId).flatMap(id => board.comment(by(ctx), id, in.body).as(id)))(id => s"已评论 #${id.value}") }
+    val issueComment = IssueCommentDef { (in, ctx) => run(issueId(in.issueId).flatMap(id => board.comment(by(ctx), id, in.body).as(id)))(id => s"已评论 #${id.value}") }
 
-    val issueStop = Tool[RunContext, StopIn](
-      "issue_stop",
-      "叫停指派的 agent 正在处理某 issue 的会话（像用户点停止：当前运行结束、排队的消息丢弃、它开的 thread 一并停下），再把 issue 改成 status。message 记成你的评论并投给那个会话，它会再跑一次照此收尾或改方向。用来叫停已不需要的工作；只改状态不会停下正在跑的会话。不能在这个 issue 自己的会话里用（那里用 issue_update）。",
-      Access.Write,
-      Scheduling.Ordered
-    ) { (in, ctx) =>
+    val issueStop = IssueStopDef { (in, ctx) =>
       run(
         for
           id <- issueId(in.issueId)

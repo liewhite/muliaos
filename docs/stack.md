@@ -62,22 +62,22 @@
 | triggers | 触发器 | sessions、workspace、notifications |
 | history | 工作历史、活动回顾、用量 | sessions、board |
 | app | 组装全部领域、程序入口 | 全部领域 |
-| migrate | 一次性数据迁移 | 全部领域 |
+| migrate | 一次性数据迁移 | app（领域列表与组装入口同一份） |
 | web | 前端 | contract（JS） |
 
 - 依赖方向只在 `build.sbt` 的 `domain(...)` 参数里定义；sbt 模块依赖不能成环，反向 import 编译期就找不到类。要加一条依赖先在这里讲清理由。
 - 下游领域要上游做的事走上游定义的接口；上游要通知下游（如会话结束要发通知）时由上游定义一个接口（port），下游实现，app 组装时接上，不反向依赖。
 
 ## 平台基础的用法约定
-- **配置**：一个 TOML 文件，每个领域声明自己的段 `ConfigSection[A]("段名")`（`A` 是带 `JsonCodec` 的 case class，键名蛇形 `@jsonMemberNames(SnakeCase)`），加进 `app/Main.sections`。未知的段、段里（含嵌套）未知的键、缺必填项都在启动时报错。程序不读环境变量。
+- **配置**：一个 TOML 文件，每个领域声明自己的段 `ConfigSection[A]("段名")`（`A` 是带 `JsonCodec` 的 case class，键名蛇形 `@jsonMemberNames(SnakeCase)`），列在本领域 `Module` 的 `sections`（配了才有的功能列在 `optionalSections`）；配置文件允许出现的段名由这些派生，`AppConfig` 读成字段，`AppConfig.layer` 交给各领域。未知的段、段里（含嵌套）未知的键、缺必填项都在启动时报错。程序不读环境变量。
 - **数据库**：`Database.read(q)` 走只读连接池，`Database.write(tx)` 在唯一的写连接上串行执行一个事务；`tx` 以 `AppError` 失败整体回滚。查询写法：`import io.getquill.*`、`import muliao.platform.db.Sql.*`，`Sql.run(...).orInternal`。所有 `Newtype` 编号自动按底层类型存取。提交后才做的事用 `TxHooks.afterCommit`（如 `bus.publishAfterCommit(Topic.Issues)`）。
 - **「数据变了」**：主题是 contract 的 `enum Topic`，前后端共用；读接口在 contract 里用 `.refreshedBy(主题...)` 声明跟着哪些主题刷新，前端 `Remote` 据此订阅。每个领域只在一处发：会话领域的写都经 `Kernel.touched(会话, 时间)`（更新活动时间、广播 sessions、推该会话的实时事件 `Changed`），看板经记动态（`record`），后台任务经 `Jobs` 的 `write`。
 - **迁移**：脚本放 `modules/<领域>/src/main/resources/db/<领域>/V<n>__<说明>.sql`，每个领域自己的版本记录表 `schema_history_<领域>`，版本号互不干扰；一个领域待执行的迁移在一个事务里，失败整体回滚；库里有程序不认识的迁移（库比程序新）拒绝启动。领域之间不建外键。
 - **错误**：领域失败归入 `AppError` 四类（`Domain`/`Unavailable`/`External`/`Internal`）；接口层 `AppError.toApi` 转统一错误体；工具层 `ToolFailure.fromAppError` 转「请重试 / 暂时不可用 / 中止」，挂起用 `ToolOutcome.Suspended`。
 - **重试**：外部调用 `.retryTransient()`（2 秒起翻倍、单次最长 5 分钟、累计 30 分钟放弃，遵守 Retry-After），只重试 `Unavailable`。
 - **出站 HTTP**：一律经 `OutboundHttp`（系统代理及其例外列表、统一 User-Agent、状态码与连接错误分类），不直接用 zio-http 客户端。`send`/`open` 只把 2xx 当成功；要按对方契约自己解读状态码（跟随跳转、区分错误体）用 `exchange`。
-- **接口**：在 contract 里基于 `Api.base`/`Api.secure` 声明，服务端用 `Endpoints.secured(auth)` / `.public` 接上逻辑，交给 `HttpServer.serve` 的 `domainEndpoints`。
-- **工具**：`Tool[Ctx, In](名字, 说明, Access, Scheduling, Display)((in, ctx) => ...)`，参数类型 `In` 派生 zio-schema，字段说明用 `@description`，敏感字段标 `@sensitive`。
+- **接口**：在 contract 里基于 `Api.base`/`Api.secure` 声明，服务端用 `Endpoints.secured(逻辑)`（流式用 `securedStream`）得到 `Route`，登录校验由 `HttpServer.serve` 统一套上，领域不经手登录；不要登录的用 `Route.unsecured`。各领域的 `XHttp(服务...).routes` 由组装入口直接调用，不做成 layer。
+- **工具**：静态定义 `val XxxDef = ToolDef[Ctx, In](名字, 说明, Access, Scheduling, Display)`（参数类型 `In` 派生 zio-schema，字段说明用 `@description`，敏感字段标 `@sensitive`），拿到服务后 `XxxDef { (in, ctx) => ... }` 得到 `Tool`。每个领域导出 `specs`（全部定义的 `spec`），组装入口据此静态给出全部内置工具目录；`Tool(...)(...)` 只在测试里用。
 - **命令**：`Exec.run(spec, timeout)` / `Exec.start(spec)`；走标准输入输出对话的（本地 MCP server）用 `Exec.attach(spec)`；沙箱 `Sandbox.Confined(可写, 私有, 只读)` 只收 `RealPath`（`RealPath.resolve` 解析出的真实路径），可写范围由调用方按权限算好；平台自己判断能不能写用同一份规则的 `permits`。「解析真实路径后是否在某根目录下」一律用 `RealPath.under(根, 路径)`。
 - **可选配置段**：配了才有的功能（网页工具、语音转写）用 `ConfigFile.optionalSection`，文件里没有这一段得到 `None`。
 
@@ -90,39 +90,39 @@
 
 ## 资源、agent 与权限（resources，#866）
 - 资源目录的文件格式与布局与现有 `~/.muliao/assets` 兼容（agent 目录名就是 agent 名；`platform/access.toml` 里 `[agents.<编号>]`；secret 是 Fernet 密文，主密钥在配置 `[vault] key`）。SKILL.md 的 frontmatter 用 snakeyaml-engine 解析。
-- agent 的身份（编号、名字、归档、默认、改名/删除进度）在库里（表 `agent`），可编辑配置在 `agent.toml`。改名先记库再挪目录，删除先标「正在删」再清理；两者中途重启由 `Agents.resumePending` 接着做（组装入口起动时调用）。
+- agent 的身份（编号、名字、归档、默认、改名/删除进度）在库里（表 `agent`），可编辑配置在 `agent.toml`。改名先记库再挪目录，删除先标「正在删」再清理；两者中途重启由 `Agents.start(各领域的 AgentHook)` 接着做（组装入口在 `Sessions.start` 之后调用；归档、删除在它之前会等它）。
 - 资源文件的位置与路径只在 `AssetPath` 互换：`classify`（路径 → 位置）、`render`（资源文件 → 路径，测试保证往返一致）、`home`（某资源归某主人时放在哪）；不手拼 `skills/`、`secrets/` 这类路径。每种文件的规格（名字、内容解析）只在 `FileSpec.load`，扫描与写入口共用。
 - 资源目录每 2 秒按指纹（路径、大小、纳秒修改时间、inode）轮询，变了才重新解析并广播主题 `assets`；平台自己写文件后立即刷新。
 - access.toml 写坏时沿用上一份有效的（副本在数据目录 `resources/access.last-good.toml`，重启后仍有效），平台经 `AccessEditor` 改它会被拒绝直到修好；平台写回 access.toml 时按固定格式重排（角色、agent 按名字排序，`[agents.<编号>] # 名字`），手写的注释不保留。
-- 组装时要提供：`ModelCheck`（模型领域：默认模型、模型写法能不能跑）、`ToolCatalog`（全部内置工具的名字与类别，从各工具的 `spec` 汇总）、`ResourcePaths.privatePaths`（配置文件、备份、推送私钥）、各领域的 `AgentHook`（忙碌判断与删除清理，登记到 `AgentHooks`）。
+- 组装时要提供：`ModelCheck`（模型领域：默认模型、模型写法能不能跑）、`ToolCatalog`（全部内置工具的名字与类别，由各领域静态的 `specs` 给出）、`ResourcePaths.privatePaths`（配置文件、备份、推送私钥）；启动时把各领域的 `AgentHook`（名字、删除清理，有「忙」的再给忙碌判断）交给 `Agents.start`。
 - 验收脚本：`sbt "resources/Test/runMain muliao.resources.RealAssetsCheck <资源目录副本> <agent TSV> <主密钥文件>"`，只读副本，不打印 secret 值。
 
 ## 会话领域的接法（#868，给下游领域）
-- **给 agent 的工具**：`Tool[RunContext, In]`（`muliao.sessions.RunContext`：agent、会话、运行、调用编号、来源、工作目录、本次运行的资源快照、用户在不在等），组装时 `SessionHooks.addTools` 接进去；`Sessions.start` 要在全部工具接好之后调用（启动续跑要用）。工具名同时汇进资源领域的 `ToolCatalog`。
+- **给 agent 的工具**：`ToolDef[RunContext, In]` 实现出的 `Tool[RunContext]`（`muliao.sessions.RunContext`：agent、会话、运行、调用编号、来源、工作目录、本次运行的资源快照、用户在不在等），放进本领域的 `Contribution`（工具、批准后的执行者、事件订阅、`AgentHook`），由下游领域的纯函数给出；组装入口在 `Sessions.start(SessionPorts(各领域的 Contribution, jobs, unread))` 时一次交进来（只调一次；之前读这些端口的会等到这时）。工具的静态定义另汇进资源领域的 `ToolCatalog`，两者一致由 `AppSpec` 检查。界面用的操作在 `SessionConsole`，不在 `Sessions`。
 - **投信**：一律经 `Sessions.deliver(Address, Letter)`：触发器用 `Address.Fresh(agent, Origin.Trigger(名), 标题)`，看板用 `Address.IssueOf(agent, issue, 标题)`（每个 issue + agent 一个会话），事件用 `Source.Event(种类)`；投不进以 `AppError` 说明原因。「回答交给谁」由信里的 `replyTo` 定（用户在等写 `ReplyTo.User`）。
 - **agent 显示名**：`Agents.names(编号)` 一次查出（含已删除的，查不到显示编号）；不逐个 `get`。
 - **工作状态**：`Sessions.states(ids)` 是全系统唯一的判断（running / waiting / idle），看板停滞、触发器防重叠、界面都用它。
-- **会话等的后台任务**：开始时 `Sessions.openJobWait(会话, 任务号, 说明, 心跳)`，结束时 `closeJobWait(任务号, Some(事件信))`；`SessionHooks.setJobs` 接上 `JobControl`（心跳检查里的一句现状、会话被停止时结束任务）。等待项是 ADT `WaitRef = Job | Wake | Delegation`，唤醒与委派由会话领域自己处理。
+- **会话等的后台任务**：开始时 `Sessions.openJobWait(会话, 任务号, 说明, 心跳)`，结束时 `closeJobWait(任务号, Some(事件信))`；`SessionPorts.jobs` 是必填的 `JobControl`（工作区的 `Workspace.jobControl`：心跳检查里的一句现状、会话被停止时结束任务）。等待项是 ADT `WaitRef = Job | Wake | Delegation`，唤醒与委派由会话领域自己处理。
 - **状态与种类**：跨领域、存库、走接口的状态与种类都是 `Labeled` 枚举（contract 的 `Labels` 给出解析、JSON、tapir 编解码，`Sql` 自动按 `label` 存取，工具参数用 `LabeledArg.schema`），不写字符串比较；带分支字段的接口数据（时间线条目、回复段、实时事件、挂起说明、等待项）是 JSON 里 `kind` 为分支名的 ADT。
-- **要用户批准的执行**：工具返回 `ToolOutcome.Suspended(Pause.Approval(执行者名, 给用户看的摘要, 数据))`，并 `SessionHooks.addApproval` 登记同名 `ApprovalHandler`：用户批准后由它接着执行（`always` 表示用户选了以后不再问）。
-- **事件**：`SessionHooks.addListener` 订阅 `SessionEvent`：`Settled`（回到空闲/最终失败/被停止，`toUser` 表示用户在等；最终失败无论谁在等都该通知用户）、`NeedsUser`（提问、等批准）、`Deleted`。未读由通知领域实现 `UnreadSource` 后 `setUnread` 接上。
+- **要用户批准的执行**：工具返回 `ToolOutcome.Suspended(Pause.Approval(执行者名, 给用户看的摘要, 数据))`，并在本领域的 `Contribution.approvals` 里给出同名 `ApprovalHandler`：用户批准后由它接着执行（`always` 表示用户选了以后不再问）。
+- **事件**：`Contribution.listener` 订阅 `SessionEvent`（提交后按贡献的顺序同步逐个调用）：`Settled`（回到空闲/最终失败/被停止，`toUser` 表示用户在等；最终失败无论谁在等都该通知用户）、`NeedsUser`（提问、等批准）、`Deleted`。未读是必填的 `SessionPorts.unread`（通知领域的 `SessionLink.unread`）。
 - **时间线**：`Sessions.timeline(id)` 给出界面与 `session_read` 共用的投影（`TimelineItem`，来信的 `source` 就是 USER/TRIGGER/ISSUE/DELEGATION/EVENT 标签）。
 
 ## 通知与推送（notifications，#870）
 - **配置**：`[push]` 必填：`vapid_subject`（`mailto:` 或 `https://` 开头）；`vapid_key_file` 可选，默认数据目录下的 `vapid_private.pem`（PKCS#8 PEM，与现有文件同一格式，迁移时原样复制即可，已订阅的设备不用重订；没有就生成，权限 600；读不出来报错、不覆盖）。
 - **发通知**：`Notifications.notifyIn(Notice(标题, 正文, Target))` 在调用方的写事务里写（看板交给用户、触发器告警等与自己的改动同一事务提交），提交后才广播主题 `notifications` 并推送；`notify` 自己开事务。`Target`：`Session(id)`（点开去会话页、打开即已读、随会话删除）、`Page(前端路由)`（如请用户审核的 issue 页 `/issues/<号>`，Service Worker 据此加「通过/打回」）、`Inbox`（系统通知，点开看通知页）。
-- **组装**：`Notifications.layer`（要 `Database`、`ChangeBus`、`OutboundHttp`、`PushSettings`、`GeneralSettings`）；`SessionLink.attach` 在 `Sessions.start` 之前调用：登记 `notify_user` 工具（名字在 `SessionLink.toolNames`，汇进 `ToolCatalog`）、会话事件订阅（规则在纯函数 `SessionRules.wanted`）、会话未读；`NotificationsHttp.endpoints` 交给 HTTP 服务。
+- **组装**：`Notifications.layer`（要 `Database`、`ChangeBus`、`OutboundHttp`、`PushSettings`、`GeneralSettings`）；`SessionLink.contribution`：`notify_user` 工具（静态定义在 `SessionLink.specs`）、会话事件订阅（规则在纯函数 `SessionRules.wanted`）；`SessionLink.unread`：会话未读；`NotificationsHttp(...).routes` 交给 HTTP 服务。
 - **推送载荷**（Service Worker 契约）：`{"title","body","url","badge"}`，`url` 没有时是 `/notifications`，`badge` 是发出那一刻的未读数；标题、正文按字截到 120 / 600。
 - **测试**：`CryptoSpec`（RFC 8291 例子逐字节、VAPID 签名验签、openssl 私钥互通）、`NotificationsSpec`（事务、逐设备重试与订阅清理、已读、会话事件、HTTP）。现有私钥的验收：`sbt "notifications/Test/runMain muliao.notifications.VapidKeyCheck <私钥文件>"`（先复制再读），公钥与 `openssl pkey -pubout` 对照。
 
 ## 工作区领域的接法（#869，给下游领域与组装入口）
-- **组装**：`Workspace.layer`（要 `PageSigner.fromSecret(server.cookieSecret)`）起全部服务，并把 8 个工具、skill 脚本的批准执行者 `skill_run`、异步工作种类 `job`、agent 忙碌判断与删除清理登记到上游；工具名与类别 `Workspace.toolInfos` 汇进资源领域的 `ToolCatalog`。启动顺序：`Sessions.start` 之后调 `Jobs.recover`（上次没收尾的后台任务标为被中断、不盲杀，补交结局）。接口 `WorkspaceHttp.endpoints(auth)`，其中页面文件 `/site/<agent>/<page>/<签名>/<文件>` 不要登录，带隔离响应头（CSP sandbox、nosniff、允许跨源读取）。
+- **组装**：`Workspace.layer`（要 `PageSigner.fromSecret(server.cookieSecret)`）起全部服务；`Workspace.contribution` 给出 8 个工具（静态定义在 `Workspace.specs`）、skill 脚本的批准执行者 `skill_run`、agent 忙碌判断与删除清理；`Workspace.jobControl` 是会话等后台任务时的状态与取消。启动顺序：`Sessions.start` 之后调 `Jobs.recover`（上次没收尾的后台任务标为被中断、不盲杀，补交结局）。接口 `WorkspaceHttp(...).routes`，其中页面文件 `/site/<agent>/<page>/<签名>/<文件>` 不要登录，带隔离响应头（CSP sandbox、nosniff、允许跨源读取）。
 - **以 agent 身份起命令**：一律经 `AgentExec.command(agent, program, secrets, SecretUse)` 得到 `CommandSpec`（工作目录、写沙箱、secret 注入），再 `Exec.run/start`；输出可经 `annotate` 补写沙箱拦截说明。触发器的前置检查与常驻命令用它，不自己算可写范围。
 - **文件读写**：`FileAccess` 按可写范围检查（平台私有文件对非 admin 读写都不行），每次写先经 `AssetGuard.check` 得到 `Vetted`（只有它能造）：`Plain` 是资源目录外的文件、照写，`Asset` 交给 `AssetStore.commit`；平台自己生成的资源文件用 `AssetStore.write(资源文件, 内容)`。读过的文本文件都记指纹；`WriteMode.Overwrite` 要求本次运行读过（读过的指纹按运行记在内存里），`Patch` 不要求。`AssetStore` 写文件覆盖已有文件时沿用原权限位（skill 脚本不丢可执行位）。
 - **后台任务**：输出在工作目录 `jobs/<编号>.log`；关停时结束并标被中断，结局下次启动补交（表 `job` 的 `reported`）。
 
 ## 看板（board，#871）
-- **组装**：`Board.layer`（要 `Database`、`ChangeBus`、`Sessions`、`Notifications`、`Agents`、`GeneralSettings`）；`BoardLink.attach` 在 `Sessions.start` 之前调用：登记 6 个 issue 工具（名字在 `BoardTools.toolNames`，汇进 `ToolCatalog`）、会话事件订阅、删除 agent 时的清理（`AgentHook`）；`BoardHttp.endpoints` 交给 HTTP 服务（接口声明在 contract 的 `BoardApi`）。改动后广播主题 `issues`。
+- **组装**：`Board.layer`（要 `Database`、`ChangeBus`、`Sessions`、`Notifications`、`Agents`、`GeneralSettings`）；`BoardLink.contribution`：6 个 issue 工具（静态定义在 `BoardTools.specs`）、会话事件订阅、删除 agent 时的清理（`AgentHook`）；`BoardHttp(...).routes` 交给 HTTP 服务（接口声明在 contract 的 `BoardApi`）。改动后广播主题 `issues`。
 - **投递与事务**：每次改动在同一个写事务里写 issue、记动态、投信（会话领域的 `Sessions.deliverIn`，提交后会话才开始跑），不会出现「改了没投」或「投了没改」。投不进（agent 已归档等）只记一条「没能投给」的动态，改动照常提交。谁收信由纯函数 `Rules.recipients` 定：in_progress、指派给 agent、上游都结束 → 投给它（它在这个 issue 自己的会话里做的不投回）；否则只有用户的评论投给 owner。上游的「结束与否」变了时，在每个下游记一条动态并按同一规则投递，所以下游在最后一个上游结束时收到第一封信。
 - **停滞与请表态**：停滞在读的时候算（`Rules.stalled`：该有人处理、它的 issue 会话空闲或还没有，状态取 `Sessions.states`）。issue 会话做完一段工作（会话事件 `Settled` 且回答完）后如果 issue 还该它处理，投一封请表态的信；表 `issue_nudge` 记下已请过，下次有动态投给它时清掉，所以不会反复催。会话最终失败只记一条动态，不重投。
 - **审核**：`approve` / `sendBack` 只对指派给用户、还没结束的 issue 有效（否则 409）；打回给最近把指派改成用户的 agent（时间线里找），没有就给 owner。agent 把 issue 交给用户时（`Rules.handedToUser`）在同一事务里发通知，点开 `/issues/<号>`，正文取它刚写的评论。
@@ -131,7 +131,7 @@
 - **测试**：`RulesSpec`（规则纯函数）、`BoardSpec`（真库、真会话与通知领域、假模型：投递规则、依赖放行、停滞与请表态、审核与冲突、会话失败、叫停、开始、删除、删 agent、工具、HTTP）。
 
 ## 工作历史与活动回顾（history，#873）
-- **组装**：`History.layer`（要 `Database`、`ChangeBus`、`Sessions`、`Board`、`Agents`、`GeneralSettings`）；`HistoryLink.attach` 在 `Sessions.start` 之前调用，登记 4 个工具（`HistoryTools.toolNames`，汇进 `ToolCatalog`）；`HistoryHttp.endpoints` 交给 HTTP 服务（接口声明在 contract 的 `HistoryApi`，`GET /api/history`）。记下后广播主题 `history`。删 agent 不清理（工作历史保留），不登记 `AgentHook`。
+- **组装**：`History.layer`（要 `Database`、`ChangeBus`、`Sessions`、`Board`、`Agents`、`GeneralSettings`）；`HistoryLink.contribution`：4 个工具（静态定义在 `HistoryTools.specs`）；`HistoryHttp(...).routes` 交给 HTTP 服务（接口声明在 contract 的 `HistoryApi`，`GET /api/history`）。记下后广播主题 `history`。删 agent 不清理（工作历史保留），没有 `AgentHook`。
 - **只追加**：表 `history_entry` 上的触发器拒绝 UPDATE / DELETE（库级），程序里也没有改、删的入口。一批在一个事务里写，任一条不合法（`NewEntry.make`：标题、摘要不空，日期不在今天之后；重要程度 1–3）整批不记。
 - **检索**：不用 FTS（中文分词、trigram 对两个字的词无效）；SQL 先按 agent、日期、重要程度和最长的那个词（`instr`）筛，再由纯函数 `Search.rank` 要求每个词都出现、按相关度（标题与引用里出现的权重 3、摘要里 1，乘出现次数）排，同分按重要程度、日期。没有关键字时按日期倒序直接在 SQL 里取。
 - **活动回顾**：按配置时区把一天换成 [from, to)，从会话领域 `Sessions.activity`（有来信/回复或运行的会话、来源为用户的来信、最终失败的运行）、看板 `Board.activity`（该 agent 做的，加用户在它当前负责或被指派的 issue 上做的；不给 agent 是用户与全部 agent 的；平台记的不算）和本领域当天的历史取数，文字由纯函数 `OverviewText` 写，按行分页（`Pages`，每次约 4 万字符，最后一行说明 offset）。
@@ -139,18 +139,18 @@
 - **测试**：`PureSpec`（相关度、记录校验、分页、读会话的条目与筛选、回顾的写法）、`HistorySpec`（真库、真会话/看板/通知领域、假模型：四个工具经模型调用、整批拒绝、库级拒绝改删、按天汇总单个与全部 agent 及别的日子、前缀与筛选与续读、HTTP）。
 
 ## 触发器领域的接法（#872，给组装入口与迁移）
-- **组装**：`Triggers.layer`（要 `Database`、`ChangeBus`、`Sessions`、`SessionHooks`、`Agents`、`AgentHooks`、`Notifications`、`AgentExec`、`ResourcePaths`、`GeneralSettings`、`TriggerSettings`）在 `Sessions.start` 之前构建：它把 6 个工具（名字与类别在 `Triggers.toolInfos`，汇进 `ToolCatalog`）和 agent 删除时的清理登记到上游。`Sessions.start`、`Jobs.recover` 之后调 `Triggers.start` 起到期扫描与常驻流托管；它们跑在 layer 的 scope 里，关停时随之停下（常驻命令整组结束）。接口 `TriggersHttp.endpoints(auth)`，主题 `triggers`。
+- **组装**：`Triggers.layer`（要 `Database`、`ChangeBus`、`Sessions`、`Agents`、`Notifications`、`AgentExec`、`ResourcePaths`、`GeneralSettings`、`TriggerSettings`）；`Triggers.contribution`：6 个工具（静态定义在 `Triggers.specs`）和 agent 删除时的清理（`forgetAgent`）。`Sessions.start`、`Jobs.recover` 之后调 `Triggers.start` 起到期扫描与常驻流托管；它们跑在 layer 的 scope 里，关停时随之停下（常驻命令整组结束）。接口 `TriggersHttp(...).routes`，主题 `triggers`。
 - **配置**：`[triggers] precheck_timeout_seconds`（默认 60）。cron 与不带时区的时刻按 `[general] timezone` 解释。
 - **数据**（表 `trigger_def`、`trigger_fault`）：`kind` + `config`（`TriggerConfig` 的 JSON，键名驼峰：`cron`、`at`、`command`、`secrets`、`debounceSeconds`）、`precheck`（`PrecheckSpec` 的 JSON：`command`、`fireWhen`、`secrets`），读出时一次解析成 `Mode` / `Precheck`，读不懂报内部错误（不自动停用）。`next_at` 为空的启用中的定时、一次性，扫描时按「现在」补上（迁移可以不填）；已结束的一次性 `finished_at` 非空，名字只在没结束的之间唯一。迁移进来的开关照搬旧版（#881 正式切换：先停旧版再迁移，两边不会同时开着）。
 - **触发只有一个出口** `Core.fire`：agent 能不能接活（归档：定时跳过、一次性推送用户没做、流式事件丢弃）→ 防重叠（正在跑前置检查的靠内存集合；上次开的会话不空闲就跳过，定时计入 `skipped`，挡路会话在等待时通知用户一次）→ 前置检查（`bash` 开 pipefail，事件行从标准输入喂入）→ 在一个事务里经 `Sessions.deliverIn` 开会话并记下这次触发。
 - **测试**：`ModelSpec`（纯函数）、`ScheduleSpec`（测试时钟：定时、防重叠、停机补一次、停用不补、一次性、归档）、`CommandSpec`（真实进程：前置检查各模式与失败/超时、常驻流防抖与排队、退避重启与故障、工具、HTTP）。用测试时钟拨时间的测试把资源目录轮询调大（`TestEnv.layer(assetPoll = 1.hour)`），否则拨一次时钟要跑成千上万次轮询。
 
 ## 组装入口（app，#874）
-- **配置**：`AppConfig.load` 一次读出全部段（可选段 `[web]`、`[transcription]` 没配就是 None，对应工具和接口不提供）；未知的段、段里未知的键启动即报错。数据目录下的位置：`workspaces/<agent 编号>`、`files/`（附件）、`resources/`（上一份有效的 access.toml）、`backups/`、`vapid_private.pem`；配置文件、备份、推送私钥是平台私有文件。
+- **配置**：`AppConfig.load` 一次读出全部段（可选段 `[web]`、`[transcription]` 没配就是 None，对应工具和接口不提供）；允许的段名由平台段（general、log、server、http）加各领域 `Module` 声明的段派生，未知的段、段里未知的键启动即报错。数据目录下的位置：`workspaces/<agent 编号>`、`files/`（附件）、`resources/`（上一份有效的 access.toml）、`backups/`、`vapid_private.pem`；配置文件、备份、推送私钥是平台私有文件。
 - **装配**：`Assembly.layer(cfg, models)` 用 `ZLayer.make` 装全部领域（少了哪个依赖编译期报错）；`models` 默认真实接入，测试换假模型。
-- **内置工具目录**：唯一来源是实际接进会话领域的工具（名字与类别取自各工具的 `spec`）。`Assembly.boot` 在各领域都接好后核对：重名、该有没接上的、多出来的都拒绝启动，核对过才定下目录（`Assembly.Catalog`，定下前读它是组装顺序错误）。MCP 工具按运行连接，不在目录里。
-- **启动顺序**（`Assembly.boot`）：单实例锁（`Main`，在打开数据库之前）→ 装配（迁移、全局记忆、资源目录轮询）→ 通知/看板/历史接到会话领域，接上 agent 管理与网页工具 → 核对工具 → 接着删没删完的 agent → 会话续跑 → 收尾上次的后台任务 → 触发器 → HTTP。关停是相反顺序（scope 后进先出）：HTTP 与实时连接 → 触发器与常驻命令 → 后台任务（结束并标被中断）→ 会话。
-- **集成测试**：`AppSpec`（真配置文件、全部领域、真 HTTP，假模型）：工具核对、配置报错、接口描述、经 HTTP 与工具走一遍各领域，单实例，关停后同一份数据重启接着用。
+- **内置工具目录**：由各领域静态的工具定义给出（`Assembly.toolSpecs`，每个领域一份 `specs`，网页工具配了 `[web]` 才有），装配时就是定值。实际接进会话领域的工具由 `Assembly.contributions` 给出（每个领域一行）；两者一一对应、没有重名由 `AppSpec` 检查，不在启动时核对。MCP 工具按运行连接，不在目录里。
+- **启动顺序**（`Assembly.boot`）：单实例锁（`Main`，在打开数据库之前）→ 装配（迁移、全局记忆、资源目录轮询）→ 会话启动（交进各领域的贡献与后台任务、未读，续跑）→ agent 启动（交进各领域的 `AgentHook`，接着做没做完的改名与删除；删除要发会话事件、停后台任务，所以排在会话之后）→ 收尾上次的后台任务 → 触发器 → HTTP。关停是相反顺序（scope 后进先出）：HTTP 与实时连接 → 触发器与常驻命令 → 后台任务（结束并标被中断）→ 会话。
+- **集成测试**：`AppSpec`（真配置文件、全部领域、真 HTTP，假模型）：工具目录与实际接上的工具一致、配置报错、接口描述、经 HTTP 与工具走一遍各领域，单实例，关停后同一份数据重启接着用。
 - **本地起服务与真实模型验收**：见上文「工具链与开发」；`dev-data/` 下放配置（从现有配置取服务商密钥生成，不打印）。
 
 ## 数据迁移（migrate，#876）

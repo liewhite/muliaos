@@ -54,11 +54,16 @@ object NotificationsSpec extends ZIOSpecDefault:
       d   <- dirs
       m   <- fakeModels(script)
       gw  <- Ref.make(Map.empty[String, List[Either[PushFailure, Unit]]]).zip(Ref.make(Chunk.empty[(String, String)])).map(FakeGateway(_, _))
-      env <- layer(d, m, more = List(muliao.notifications.Module.migrations), moreTools = SessionLink.toolNames).build
+      env <- layer(d, m, more = List(muliao.notifications.Module.migrations), moreTools = SessionLink.specs).build
       n   <- Notifications.make(env.get[Database], env.get[ChangeBus], gw, "PUBLIC", quick)
       all  = env.add(n)
       p   <- probe
-      a <- (SessionLink.attach *> start(p) *> body(gw, m)).provideSomeEnvironment[Scope](_ ++ all)
+      a <- (for
+             c <- SessionLink.contribution
+             u <- SessionLink.unread
+             _ <- start(p, List(c), unread = u)
+             r <- body(gw, m)
+           yield r).provideSomeEnvironment[Scope](_ ++ all)
     yield a
 
   private def notifications = ZIO.service[Notifications]
@@ -172,9 +177,10 @@ object NotificationsSpec extends ZIOSpecDefault:
           _      <- eventually("提醒完")(timeline(remind))(_.exists(_.parts.exists(_.text.contains("提醒好了"))))
           broken <- userSession(alice, "搞坏它")
           box    <- eventually("五条通知")(inbox)(_.items.size >= 5)
-          page1  <- s.list(None, None, None, 50)
-          _      <- s.markRead(user)
-          page2  <- s.list(None, None, None, 50)
+          con    <- ZIO.service[SessionConsole]
+          page1  <- con.list(None, None, None, 50)
+          _      <- con.markRead(user)
+          page2  <- con.list(None, None, None, 50)
         yield
           val bySession = box.items.groupBy(_.session)
           val unread1   = page1.items.filter(_.unread).map(_.id).toSet
@@ -198,7 +204,7 @@ object NotificationsSpec extends ZIOSpecDefault:
           alice <- agent("alice")
           id    <- userSession(alice, "你好")
           _     <- eventually("有通知")(inbox)(_.items.nonEmpty)
-          _     <- ZIO.serviceWithZIO[Sessions](_.delete(id))
+          _     <- ZIO.serviceWithZIO[SessionConsole](_.delete(id))
           box   <- eventually("通知删了")(inbox)(_.items.isEmpty)
         yield assertTrue(box.unread == 0L)
       ))
@@ -211,7 +217,7 @@ object NotificationsSpec extends ZIOSpecDefault:
           http   = NotificationsHttp(n)
           set    = ServerSettings(port = 0, password = "pw", cookieSecret = "s" * 32)
           authz <- Auth.layer.build.map(_.get[Auth]).provideSomeLayer[Scope](ZLayer.succeed(set))
-          port  <- HttpServer.serve(set, authz, bus, http.endpoints(authz), "test").orDie
+          port  <- HttpServer.serve(set, authz, bus, http.routes, "test").orDie
           c      = muliao.sessions.SessionsHttpSpec.Client(s"http://127.0.0.1:$port")
           call   = (m: String, p: String, b: Option[String]) => c.call(m, p, b).orDie
           _     <- call("POST", "/api/auth/login", Some("""{"password":"pw"}"""))

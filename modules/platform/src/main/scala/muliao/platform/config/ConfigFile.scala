@@ -55,14 +55,6 @@ object ConfigFile:
                 }
     yield ConfigFile(path, tables.toMap)
 
-  /** 给定段名的配置文件做成 layer；各段再用 [[layer]] 取出。 */
-  def fileLayer(path: Path, sections: Set[String]): ZLayer[Any, AppError, ConfigFile] =
-    ZLayer.fromZIO(load(path, sections))
-
-  def layer[A](s: ConfigSection[A]): ZLayer[ConfigFile, AppError, A] =
-    given Tag[A] = s.tag
-    ZLayer.fromZIO(ZIO.serviceWithZIO[ConfigFile](_.section(s)))
-
   /** 文件里有、而解码结果里没有的键（逐层比较）。 */
   private[config] def extraKeys(inFile: Json, decoded: Json, at: String): List[String] =
     (inFile, decoded) match

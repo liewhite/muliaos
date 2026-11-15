@@ -2,7 +2,7 @@ package muliao.workspace
 
 import muliao.contract.{AgentId, WorkspaceApi}
 import muliao.platform.AppError
-import muliao.platform.server.{ApiEndpoint, Auth, Endpoints}
+import muliao.platform.server.{Endpoints, Route}
 import muliao.workspace.jobs.Jobs
 import muliao.workspace.pages.Pages
 import muliao.workspace.scripts.ScriptGrants
@@ -39,19 +39,16 @@ final case class WorkspaceHttp(browse: Browse, jobs: Jobs, pages: Pages, grants:
           }
       }
 
-  def endpoints(auth: Auth): List[ApiEndpoint] =
+  def routes: List[Route] =
     List(
-      WorkspaceApi.listDir.secured(auth)(_ => (agent, path) => browse.listDir(agent, path)),
-      WorkspaceApi.workspaceFile.secured(auth)(_ => (agent, path) => browse.workspaceFile(agent, path).map(asTuple)),
-      WorkspaceApi.skillFile.secured(auth)(_ => (skill, path) => browse.skillFile(skill, path).map(asTuple)),
-      WorkspaceApi.listJobs.secured(auth)(_ => jobs.list),
-      WorkspaceApi.jobLog.secured(auth)(_ => (id, lines) => jobs.tail(id, lines.getOrElse(200).max(1).min(5000))),
-      WorkspaceApi.killJob.secured(auth)(_ => id => jobs.kill(id).unit),
-      WorkspaceApi.listPages.secured(auth)(_ => _ => pages.list),
-      WorkspaceApi.listGrants.secured(auth)(_ => _ => grants.list),
-      WorkspaceApi.revokeGrant.secured(auth)(_ => grants.revoke),
-      pageEndpoint
+      WorkspaceApi.listDir.secured((agent, path) => browse.listDir(agent, path)),
+      WorkspaceApi.workspaceFile.secured((agent, path) => browse.workspaceFile(agent, path).map(asTuple)),
+      WorkspaceApi.skillFile.secured((skill, path) => browse.skillFile(skill, path).map(asTuple)),
+      WorkspaceApi.listJobs.secured(jobs.list),
+      WorkspaceApi.jobLog.secured((id, lines) => jobs.tail(id, lines.getOrElse(200).max(1).min(5000))),
+      WorkspaceApi.killJob.secured(id => jobs.kill(id).unit),
+      WorkspaceApi.listPages.secured(_ => pages.list),
+      WorkspaceApi.listGrants.secured(_ => grants.list),
+      WorkspaceApi.revokeGrant.secured(grants.revoke),
+      Route.unsecured(pageEndpoint)
     )
-
-object WorkspaceHttp:
-  val layer: URLayer[Browse & Jobs & Pages & ScriptGrants, WorkspaceHttp] = ZLayer.derive[WorkspaceHttp]

@@ -57,7 +57,7 @@ private[sessions] final case class Requests(
       _     <- ZIO.foreachDiscard(models.problem(model.toString))(p => ZIO.fail(AppError.invalid(s"agent 的模型 $model 用不了：$p")))
       ws     = paths.workspace(i.agent)
       _     <- ZIO.attemptBlocking(JFiles.createDirectories(ws)).mapError(e => AppError.internal(s"建不了工作目录 $ws：${e.getMessage}", e))
-      builtin <- hooks.tools.map(_.filter(t => r.tools(t.spec.name)))
+      builtin <- ports.tools.map(_.filter(t => r.tools(t.spec.name)))
       conn    <- connectMcp(i, r, ws)
       names    = builtin.map(_.spec.name).toSet
       all      = builtin ++ conn.tools.filterNot(t => names(t.spec.name)).sortBy(_.spec.name)

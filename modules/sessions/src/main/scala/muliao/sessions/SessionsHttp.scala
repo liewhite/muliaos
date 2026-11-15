@@ -2,7 +2,7 @@ package muliao.sessions
 
 import muliao.contract.*
 import muliao.platform.AppError
-import muliao.platform.server.{ApiEndpoint, Auth, Endpoints, Sse}
+import muliao.platform.server.{Endpoints, Route, Sse}
 import muliao.resources.agents.Agents
 import sttp.capabilities.zio.ZioStreams
 import sttp.model.sse.ServerSentEvent
@@ -16,7 +16,7 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 
 /** 本领域的 HTTP 接口：会话列表与搜索、详情、时间线、实时事件、发消息、上传下载附件、停止、重试、压缩、删除、已读、答复、用量。 */
-final case class SessionsHttp(sessions: Sessions, files: Files, agents: Agents, hooks: SessionHooks):
+final case class SessionsHttp(sessions: Sessions, console: SessionConsole, files: Files, agents: Agents):
   import Endpoints.*
 
   /** 会话页的实时事件（SSE）：先给正在生成的部分，再给之后的事件；连接帧（ready、ping）见 [[Sse]]。 */
@@ -27,19 +27,16 @@ final case class SessionsHttp(sessions: Sessions, files: Files, agents: Agents, 
       .name("sessionLive")
       .description("会话页的实时事件（SSE），事件 data 为 LiveView 的 JSON。")
 
-  private def display: UIO[String => Display] =
-    hooks.tools.map(ts => ts.map(t => t.spec.name -> t.spec.display).toMap).map(m => n => m.getOrElse(n, Display.Plain))
-
   private def view(e: LiveEvent, d: String => Display): LiveView = e match
     case LiveEvent.Begin         => LiveView.Begin
     case LiveEvent.Part(i, p)    => LiveView.Part(i, Timeline.part(p, Map.empty, d))
     case LiveEvent.Grew(i, g, t) => LiveView.Grew(i, g, t)
     case LiveEvent.Changed       => LiveView.Changed
 
-  private def live(auth: Auth): ApiEndpoint =
-    liveEndpoint.zServerSecurityLogic(auth.authenticate).serverLogic[Any] { _ => id =>
-      (sessions.info(id) *> display).mapError(AppError.toApi).map { d =>
-        Sse.frames(sessions.subscribe(id).map { (snap, stream) =>
+  private def live: Route =
+    liveEndpoint.securedStream { id =>
+      (sessions.info(id) *> console.display).mapError(AppError.toApi).map { d =>
+        Sse.frames(console.subscribe(id).map { (snap, stream) =>
           (ZStream.fromIterable(snap.map(ps => LiveView.Snapshot(ps.toList.map(Timeline.part(_, Map.empty, d))))) ++ stream.map(view(_, d)))
             .map(v => ServerSentEvent(data = Some((v: LiveView).toJson), eventType = Some("live")))
         })
@@ -60,12 +57,12 @@ final case class SessionsHttp(sessions: Sessions, files: Files, agents: Agents, 
 
   private def answer(id: SessionId, entry: Long, call: CallId, a: AnswerIn): IO[AppError, Unit] =
     (a.answers, a.approved) match
-      case (Some(as), None) => sessions.answer(id, CallKey(entry, call), Answer.Answers(as))
-      case (None, Some(ok)) => sessions.answer(id, CallKey(entry, call), Answer.Decision(ok, a.always))
+      case (Some(as), None) => console.answer(id, CallKey(entry, call), Answer.Answers(as))
+      case (None, Some(ok)) => console.answer(id, CallKey(entry, call), Answer.Decision(ok, a.always))
       case _                => ZIO.fail(AppError.invalid("answers 与 approved 给且只给一个"))
 
   private def compact(id: SessionId): IO[AppError, Unit] =
-    sessions.compact(id).flatMap(done => ZIO.unless(done)(ZIO.fail(AppError.conflict("上次压缩之后不到两步，没什么可压缩的"))).unit)
+    console.compact(id).flatMap(done => ZIO.unless(done)(ZIO.fail(AppError.conflict("上次压缩之后不到两步，没什么可压缩的"))).unit)
 
   /** 只有这些图片内联显示，其余一律作为下载（附件按不可信内容处理）。 */
   private val inlineTypes = Set("image/png", "image/jpeg", "image/gif", "image/webp")
@@ -98,25 +95,23 @@ final case class SessionsHttp(sessions: Sessions, files: Files, agents: Agents, 
     else if starts(0x52, 0x49, 0x46, 0x46) && b.size > 12 && new String(b.slice(8, 12).toArray, StandardCharsets.US_ASCII) == "WEBP" then "image/webp"
     else "application/octet-stream"
 
-  def endpoints(auth: Auth): List[ApiEndpoint] =
+  def routes: List[Route] =
     List(
-      SessionsApi.list.secured(auth)(_ => (agent, origins, q, before, limit) => sessions.list(agent, q, before, limit.getOrElse(50), origins)),
-      SessionsApi.create.secured(auth)(_ => create),
-      SessionsApi.get.secured(auth)(_ => sessions.detail),
-      SessionsApi.timeline.secured(auth)(_ => sessions.timeline),
-      live(auth),
-      SessionsApi.send.secured(auth)(_ => (id, m) => send(id, m)),
-      SessionsApi.stop.secured(auth)(_ => sessions.stop),
-      SessionsApi.retry.secured(auth)(_ => sessions.retry),
-      SessionsApi.compact.secured(auth)(_ => compact),
-      SessionsApi.read.secured(auth)(_ => sessions.markRead),
-      SessionsApi.delete.secured(auth)(_ => sessions.delete),
-      SessionsApi.answer.secured(auth)(_ => (id, e, c, a) => answer(id, e, c, a)),
-      SessionsApi.upload.secured(auth)(_ => (name, ct, bytes) => files.upload(name, ct, Chunk.fromArray(bytes)).map(Timeline.file)),
-      SessionsApi.download.secured(auth)(_ => download),
-      SessionsApi.blob.secured(auth)(_ => blob),
-      SessionsApi.usage.secured(auth)(_ => (from, to) => sessions.usage(from, to))
+      SessionsApi.list.secured((agent, origins, q, before, limit) => console.list(agent, q, before, limit.getOrElse(50), origins)),
+      SessionsApi.create.secured(create),
+      SessionsApi.get.secured(console.detail),
+      SessionsApi.timeline.secured(sessions.timeline),
+      live,
+      SessionsApi.send.secured((id, m) => send(id, m)),
+      SessionsApi.stop.secured(sessions.stop),
+      SessionsApi.retry.secured(console.retry),
+      SessionsApi.compact.secured(compact),
+      SessionsApi.read.secured(console.markRead),
+      SessionsApi.delete.secured(console.delete),
+      SessionsApi.answer.secured((id, e, c, a) => answer(id, e, c, a)),
+      SessionsApi.upload.secured((name, ct, bytes) => files.upload(name, ct, Chunk.fromArray(bytes)).map(Timeline.file)),
+      SessionsApi.download.secured(download),
+      SessionsApi.blob.secured(blob),
+      SessionsApi.usage.secured((from, to) => console.usage(from, to))
     )
 
-object SessionsHttp:
-  val layer: URLayer[Sessions & Files & Agents & SessionHooks, SessionsHttp] = ZLayer.derive[SessionsHttp]

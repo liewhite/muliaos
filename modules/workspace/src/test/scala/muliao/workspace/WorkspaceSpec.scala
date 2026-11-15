@@ -7,7 +7,7 @@ import muliao.platform.events.ChangeBus
 import muliao.resources.ResourcePaths
 import muliao.resources.tree.Owner
 import muliao.resources.vault.{Actor, Vault}
-import muliao.sessions.{Answer, CallKey, Files, Sessions}
+import muliao.sessions.{Answer, CallKey, Files, SessionConsole, Sessions}
 import muliao.sessions.TestEnv as S
 import muliao.sessions.TestEnv.{Script, call as modelCall, text as say}
 import muliao.workspace.TestEnv.*
@@ -341,9 +341,9 @@ object WorkspaceSpec extends ZIOSpecDefault:
                  val skill = d.assets.resolve("alice/skills/deploy")
                  def approve(id: SessionId, ok: Boolean, always: Boolean) =
                    for
-                     det <- S.eventually("等批准")(ZIO.serviceWithZIO[Sessions](_.detail(id)))(_.pending.exists(_.pending.isInstanceOf[PendingView.Approval]))
+                     det <- S.eventually("等批准")(ZIO.serviceWithZIO[SessionConsole](_.detail(id)))(_.pending.exists(_.pending.isInstanceOf[PendingView.Approval]))
                      p    = det.pending.head
-                     _   <- ZIO.serviceWithZIO[Sessions](_.answer(id, CallKey(p.entry, p.call), Answer.Decision(ok, always)))
+                     _   <- ZIO.serviceWithZIO[SessionConsole](_.answer(id, CallKey(p.entry, p.call), Answer.Decision(ok, always)))
                      _   <- S.idle(id)
                    yield p.pending match
                      case PendingView.Approval(s) => s
@@ -361,7 +361,7 @@ object WorkspaceSpec extends ZIOSpecDefault:
                    sum   <- approve(s1, ok = true, always = true)
                    s2    <- S.userSession(alice, "部署 2")
                    _     <- S.idle(s2)
-                   p2    <- ZIO.serviceWithZIO[Sessions](_.detail(s2)).map(_.pending)
+                   p2    <- ZIO.serviceWithZIO[SessionConsole](_.detail(s2)).map(_.pending)
                    gl    <- ZIO.serviceWithZIO[ScriptGrants](_.list)
                    _     <- write(skill.resolve("scripts/go.sh"), "#!/bin/bash\necho deployed v2 $1\n")
                    s3    <- S.userSession(alice, "部署 3")

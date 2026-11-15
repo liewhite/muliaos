@@ -17,8 +17,6 @@ import scala.util.matching.Regex
 /** 本领域给 agent 的工具：history_append、history_search、activity_overview、session_read。 */
 object HistoryTools:
 
-  val toolNames: List[String] = List("history_append", "history_search", "activity_overview", "session_read")
-
   /** 工具参数里「全部 agent」的写法。 */
   val AllAgents = "all"
 
@@ -76,6 +74,43 @@ object HistoryTools:
       importance: Int
   ) derives JsonEncoder
 
+  val HistoryAppendDef = ToolDef[RunContext, AppendIn](
+    "history_append",
+    """往你自己的工作历史追加记录，一件事一条（日期、标题、2–5 行摘要、引用、重要程度）。记下后不能改、不能删，所以先用 history_search（since、until 都设成那天）确认那天还没记过。
+      |一批里任一条不合法（日期格式不对或在今天之后、标题或摘要为空、重要程度不在 1–3）整批不记。""".stripMargin,
+    Access.Write,
+    Scheduling.Ordered
+  )
+
+  val HistorySearchDef = ToolDef[RunContext, SearchIn](
+    "history_search",
+    """检索工作历史（做过什么、什么时候、关联哪些 issue 或提交），结果是 JSON 数组，每项有 id、day、agent、title、summary、refs、importance。
+      |给 query 时每个词都要出现在标题、摘要或引用里，相关的在前；不给 query 就按日期倒序列出（适合列某段日期的全部）。
+      |只记到 agent 自己写下的为止，通常到昨天；今天的事用 activity_overview。都查不到时答「未核实」，不答「没有」。""".stripMargin,
+    Access.Read,
+    display = Display.JsonData
+  )
+
+  val ActivityOverviewDef = ToolDef[RunContext, OverviewIn](
+    "activity_overview",
+    """某天（配置时区）的活动汇总，文字：活跃的会话（编号前 8 位、来源、标题、状态、当天消息数与时间跨度、运行与失败次数）、用户当天亲手发的每条消息（全文）、
+      |对 issue 的操作（该 agent 做的，加上用户在它负责或被指派的 issue 上做的，评论全文）、失败的运行及错误、当天的工作历史。
+      |回顾今天或最近的工作用它（history_search 一般只到昨天），要细看某个会话再用 session_read。输出太长时最后一行说明从哪个 offset 继续。""".stripMargin,
+    Access.Read,
+    display = Display.Markdown
+  )
+
+  val SessionReadDef = ToolDef[RunContext, ReadIn](
+    "session_read",
+    """按时间读一个会话（你的或别的 agent 的）的时间线：来信（USER 是用户在界面上亲手发的，TRIGGER / ISSUE / DELEGATION 是开会话的一方发的，EVENT 是平台事件）、
+      |回答正文（ASSISTANT）、工具调用与结果（call / result / error）、运行上下文、压缩摘要、失败与停止。用户和回答的正文给全文，其余按 clip 截断。
+      |可按标签、正则、时刻筛选；输出太长时最后一行说明从哪个 offset 继续。会话从 activity_overview 或 issue_show 里找。""".stripMargin,
+    Access.Read
+  )
+
+  /** 本领域工具的静态定义（进全部内置工具目录）。 */
+  val specs: List[ToolSpec] = List(HistoryAppendDef, HistorySearchDef, ActivityOverviewDef, SessionReadDef).map(_.spec)
+
   def all(history: History, agents: Agents): List[Tool[RunContext]] =
 
     def run[A](effect: IO[AppError, A])(out: A => String): IO[ToolFailure, ToolOutcome] =
@@ -94,13 +129,7 @@ object HistoryTools:
     def importance(field: String, n: Int): IO[AppError, Importance] =
       ZIO.fromEither(Importance.of(n)).mapError(e => AppError.invalid(s"$field：$e"))
 
-    val append = Tool[RunContext, AppendIn](
-      "history_append",
-      """往你自己的工作历史追加记录，一件事一条（日期、标题、2–5 行摘要、引用、重要程度）。记下后不能改、不能删，所以先用 history_search（since、until 都设成那天）确认那天还没记过。
-        |一批里任一条不合法（日期格式不对或在今天之后、标题或摘要为空、重要程度不在 1–3）整批不记。""".stripMargin,
-      Access.Write,
-      Scheduling.Ordered
-    ) { (in, ctx) =>
+    val append = HistoryAppendDef { (in, ctx) =>
       run(
         for
           today <- history.today
@@ -116,14 +145,7 @@ object HistoryTools:
       )(xs => s"已记 ${xs.size} 条：" + xs.map((e, id) => s"$id ${e.day} ${e.title}").mkString("；"))
     }
 
-    val search = Tool[RunContext, SearchIn](
-      "history_search",
-      """检索工作历史（做过什么、什么时候、关联哪些 issue 或提交），结果是 JSON 数组，每项有 id、day、agent、title、summary、refs、importance。
-        |给 query 时每个词都要出现在标题、摘要或引用里，相关的在前；不给 query 就按日期倒序列出（适合列某段日期的全部）。
-        |只记到 agent 自己写下的为止，通常到昨天；今天的事用 activity_overview。都查不到时答「未核实」，不答「没有」。""".stripMargin,
-      Access.Read,
-      display = Display.JsonData
-    ) { (in, ctx) =>
+    val search = HistorySearchDef { (in, ctx) =>
       run(
         for
           a     <- whose(in.agent, ctx)
@@ -137,14 +159,7 @@ object HistoryTools:
       )(_.toJsonPretty)
     }
 
-    val overview = Tool[RunContext, OverviewIn](
-      "activity_overview",
-      """某天（配置时区）的活动汇总，文字：活跃的会话（编号前 8 位、来源、标题、状态、当天消息数与时间跨度、运行与失败次数）、用户当天亲手发的每条消息（全文）、
-        |对 issue 的操作（该 agent 做的，加上用户在它负责或被指派的 issue 上做的，评论全文）、失败的运行及错误、当天的工作历史。
-        |回顾今天或最近的工作用它（history_search 一般只到昨天），要细看某个会话再用 session_read。输出太长时最后一行说明从哪个 offset 继续。""".stripMargin,
-      Access.Read,
-      display = Display.Markdown
-    ) { (in, ctx) =>
+    val overview = ActivityOverviewDef { (in, ctx) =>
       run(
         for
           a     <- whose(in.agent, ctx)
@@ -171,13 +186,7 @@ object HistoryTools:
 
     def header(i: SessionInfo, agent: String): String = s"# 会话 ${i.id.value}（$agent，${OverviewText.origin(i.origin)}）：${i.title}"
 
-    val read = Tool[RunContext, ReadIn](
-      "session_read",
-      """按时间读一个会话（你的或别的 agent 的）的时间线：来信（USER 是用户在界面上亲手发的，TRIGGER / ISSUE / DELEGATION 是开会话的一方发的，EVENT 是平台事件）、
-        |回答正文（ASSISTANT）、工具调用与结果（call / result / error）、运行上下文、压缩摘要、失败与停止。用户和回答的正文给全文，其余按 clip 截断。
-        |可按标签、正则、时刻筛选；输出太长时最后一行说明从哪个 offset 继续。会话从 activity_overview 或 issue_show 里找。""".stripMargin,
-      Access.Read
-    ) { (in, _) =>
+    val read = SessionReadDef { (in, _) =>
       run(
         for
           _      <- ZIO.fail(AppError.invalid("clip 不能是负数")).when(in.clip < 0)

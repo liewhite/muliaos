@@ -94,8 +94,8 @@ object AgentsSpec extends ZIOSpecDefault:
         db   <- ZIO.service[muliao.platform.db.Database]
         // 模拟：库里已记下新名，目录还没挪
         _    <- db.write(AgentRepo.update(a.copy(name = muliao.contract.AgentName.wrap("carol"), nameKey = "carol", renamedFrom = Some(a.name))))
-        _    <- agents.flatMap(_.resumePending)
-        got  <- agents.flatMap(_.get(a.id))
+        again <- TestEnv.restartAgents
+        got  <- again.get(a.id)
       yield assertTrue(got.renamedFrom.isEmpty, Files.isDirectory(dirs.assets.resolve("carol")), !Files.exists(dirs.assets.resolve("alice")))
     },
     test("默认 agent 至多一个；归档要空闲，归档后不接新工作，也不再是默认") {
@@ -164,8 +164,8 @@ object AgentsSpec extends ZIOSpecDefault:
         e    <- agents.flatMap(_.delete(a.id)).either
         mid  <- agents.flatMap(_.get(a.id))
         list <- agents.flatMap(_.list)
-        _    <- agents.flatMap(_.resumePending)
-        done <- agents.flatMap(_.get(a.id))
+        again <- TestEnv.restartAgents
+        done <- again.get(a.id)
       yield assertTrue(
         e.isLeft,
         mid.state == AgentState.Deleting,

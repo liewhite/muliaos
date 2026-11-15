@@ -2,7 +2,7 @@ package muliao.history
 
 import muliao.contract.*
 import muliao.platform.AppError
-import muliao.platform.server.{ApiEndpoint, Auth, Endpoints}
+import muliao.platform.server.{Endpoints, Route}
 import zio.*
 
 import java.time.LocalDate
@@ -25,8 +25,5 @@ final case class HistoryHttp(history: History):
       HistoryEntryView(e.id, e.agent, ns(e.agent), e.day.toString, e.title, e.summary, e.refs, e.importance.level, e.session, e.createdAt)
     )
 
-  def endpoints(auth: Auth): List[ApiEndpoint] =
-    List(HistoryApi.list.secured(auth)(_ => list))
-
-object HistoryHttp:
-  val layer: URLayer[History, HistoryHttp] = ZLayer.derive[HistoryHttp]
+  def routes: List[Route] =
+    List(HistoryApi.list.secured(list))

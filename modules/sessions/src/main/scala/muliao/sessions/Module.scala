@@ -9,9 +9,10 @@ import muliao.platform.config.ConfigSection
   * 给别的领域用的接口：
   *   - [[Sessions]]：投信 `deliver`（各来源统一入口，投不进说明原因）、工作状态 `states`（全系统唯一判断）、`stop`、
   *     会话等的后台任务 `openJobWait` / `closeJobWait`、时间线 `timeline`（界面与 `session_read` 共用）；
-  *   - [[SessionHooks]]：组装时往本领域接东西——各领域给 agent 的工具（上下文 [[RunContext]]）、[[SessionListener]]（订阅
-  *     [[SessionEvent]]：回到空闲/最终失败/被停止、等用户、删除）、[[JobControl]]（后台任务的状态与取消）、[[ApprovalHandler]]
-  *     （批准后接着执行）、[[UnreadSource]]（未读）；
+  *   - [[SessionPorts]]：启动时（`Sessions.start`）一次交进来的东西——各领域的 [[Contribution]]（给 agent 的工具，上下文 [[RunContext]]；
+  *     [[ApprovalHandler]] 批准后接着执行；[[SessionListener]] 订阅 [[SessionEvent]]：回到空闲/最终失败/被停止、等用户、删除；
+  *     对 agent 生命周期的参与），加上必须接上的 [[JobControl]]（后台任务的状态与取消）与 [[UnreadSource]]（未读）；
+  *   - [[SessionConsole]]：界面用的操作（列表、详情、重试、答复、压缩、删除、已读、用量、实时事件）；
   *   - 工具挂起时交出 [[Pause]]（提问、等批准）；
   *   - [[Files]]：附件按内容存一份；
   *   - [[SessionsHttp]]：界面的会话、附件、用量接口与会话页实时事件（SSE）。
@@ -25,4 +26,4 @@ import muliao.platform.config.ConfigSection
 object Module extends DomainModule:
   val name = "sessions"
 
-  val sections: List[ConfigSection[?]] = List(SessionSettings.section)
+  override val sections: List[ConfigSection[?]] = List(SessionSettings.section)

@@ -92,9 +92,34 @@ trait Tool[-C]:
   def spec: ToolSpec
   def invoke(args: Json, ctx: C): IO[ToolFailure, ToolOutcome]
 
+/** 工具的静态定义：名字、说明、参数结构与类别。它是静态值，所以全部内置工具的目录（分发、校验规则用）不用等各领域起好就能给出；
+  * 实现在拿到所需服务后用 [[apply]] 接上。参数结构、JSON Schema 与敏感字段都从 `In` 的 zio-schema 生成，解码失败统一回「请重试」。
+  */
+final class ToolDef[C, In] private (val spec: ToolSpec, decode: Json => Either[String, In]):
+  def apply(run: (In, C) => IO[ToolFailure, ToolOutcome]): Tool[C] =
+    val s = spec
+    new Tool[C]:
+      val spec = s
+      def invoke(args: Json, ctx: C): IO[ToolFailure, ToolOutcome] =
+        ZIO.fromEither(decode(args)).mapError(ToolFailure.Rejected(_)).flatMap(run(_, ctx))
+
+object ToolDef:
+  def apply[C, In](
+      name: String,
+      description: String,
+      access: Access,
+      scheduling: Scheduling = Scheduling.Concurrent,
+      display: Display = Display.Plain
+  )(using schema: Schema[In]): ToolDef[C, In] =
+    require(ToolSpec.validName(name), s"工具名不合法：$name")
+    new ToolDef(
+      ToolSpec(name, description, ToolArgs.jsonSchema(schema), access, scheduling, display, ToolArgs.sensitiveFields(schema)),
+      ToolArgs.decoder(schema)
+    )
+
 object Tool:
 
-  /** 按参数类型 `In` 定义工具：参数结构、JSON Schema 与敏感字段都从 `In` 的 zio-schema 生成，解码失败统一回「请重试」。 */
+  /** 定义并实现一个工具（不进工具目录的场合：测试）。 */
   def apply[C, In](
       name: String,
       description: String,
@@ -102,10 +127,4 @@ object Tool:
       scheduling: Scheduling = Scheduling.Concurrent,
       display: Display = Display.Plain
   )(run: (In, C) => IO[ToolFailure, ToolOutcome])(using schema: Schema[In]): Tool[C] =
-    require(ToolSpec.validName(name), s"工具名不合法：$name")
-    val decoder = ToolArgs.decoder(schema)
-    val s       = ToolSpec(name, description, ToolArgs.jsonSchema(schema), access, scheduling, display, ToolArgs.sensitiveFields(schema))
-    new Tool[C]:
-      val spec = s
-      def invoke(args: Json, ctx: C): IO[ToolFailure, ToolOutcome] =
-        ZIO.fromEither(decoder(args)).mapError(ToolFailure.Rejected(_)).flatMap(run(_, ctx))
+    ToolDef[C, In](name, description, access, scheduling, display)(run)

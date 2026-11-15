@@ -2,7 +2,7 @@ package muliao.resources
 
 import muliao.contract.*
 import muliao.platform.AppError
-import muliao.platform.server.{ApiEndpoint, Auth, Endpoints}
+import muliao.platform.server.{Endpoints, Route}
 import muliao.resources.access.*
 import muliao.resources.agents.*
 import muliao.resources.guard.{AssetGuard, Expectation, FileFingerprint}
@@ -289,28 +289,24 @@ final case class ResourcesHttp(
   private def deleteAsset(kind: AssetKind, name: String): IO[AppError, Unit] =
     locate(kind, name).flatMap(at => store.delete(at.path))
 
-  def endpoints(auth: Auth): List[ApiEndpoint] =
+  def routes: List[Route] =
     List(
-      ResourcesApi.listAgents.secured(auth)(_ => _ => listAgents),
-      ResourcesApi.createAgent.secured(auth)(_ => createAgent),
-      ResourcesApi.getAgent.secured(auth)(_ => detail),
-      ResourcesApi.updateAgent.secured(auth)(_ => (id, req) => updateAgent(id, req)),
-      ResourcesApi.deleteAgent.secured(auth)(_ => agents.delete),
-      ResourcesApi.previewAgent.secured(auth)(_ => preview),
-      ResourcesApi.agentDefaults.secured(auth)(_ => _ => ZIO.succeed(AgentDefaults(models.defaultModel, Thinking.values.toList))),
-      ResourcesApi.listRoles.secured(auth)(_ => _ => listRoles),
-      ResourcesApi.putRole.secured(auth)(_ => (n, r) => putRole(n, r)),
-      ResourcesApi.deleteRole.secured(auth)(_ => deleteRole),
-      ResourcesApi.checkRules.secured(auth)(_ => checkRules),
-      ResourcesApi.listAssets.secured(auth)(_ => _ => listAssets),
-      ResourcesApi.readAssetFile.secured(auth)(_ => readFile),
-      ResourcesApi.writeAssetFile.secured(auth)(_ => writeFile),
-      ResourcesApi.skillFiles.secured(auth)(_ => skillFiles),
-      ResourcesApi.putSecret.secured(auth)(_ => (k, r) => putSecret(k, r)),
-      ResourcesApi.transferAsset.secured(auth)(_ => (k, n, r) => transfer(k, n, r)),
-      ResourcesApi.deleteAsset.secured(auth)(_ => (k, n) => deleteAsset(k, n))
+      ResourcesApi.listAgents.secured(_ => listAgents),
+      ResourcesApi.createAgent.secured(createAgent),
+      ResourcesApi.getAgent.secured(detail),
+      ResourcesApi.updateAgent.secured((id, req) => updateAgent(id, req)),
+      ResourcesApi.deleteAgent.secured(agents.delete),
+      ResourcesApi.previewAgent.secured(preview),
+      ResourcesApi.agentDefaults.secured(_ => ZIO.succeed(AgentDefaults(models.defaultModel, Thinking.values.toList))),
+      ResourcesApi.listRoles.secured(_ => listRoles),
+      ResourcesApi.putRole.secured((n, r) => putRole(n, r)),
+      ResourcesApi.deleteRole.secured(deleteRole),
+      ResourcesApi.checkRules.secured(checkRules),
+      ResourcesApi.listAssets.secured(_ => listAssets),
+      ResourcesApi.readAssetFile.secured(readFile),
+      ResourcesApi.writeAssetFile.secured(writeFile),
+      ResourcesApi.skillFiles.secured(skillFiles),
+      ResourcesApi.putSecret.secured((k, r) => putSecret(k, r)),
+      ResourcesApi.transferAsset.secured((k, n, r) => transfer(k, n, r)),
+      ResourcesApi.deleteAsset.secured((k, n) => deleteAsset(k, n))
     )
-
-object ResourcesHttp:
-  val layer: ZLayer[Agents & Resources & AssetStore & AssetGuard & Vault & AccessEditor & ModelCheck & ToolCatalog & ResourcePaths, Nothing, ResourcesHttp] =
-    ZLayer.derive[ResourcesHttp]

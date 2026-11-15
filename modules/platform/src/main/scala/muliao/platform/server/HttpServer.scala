@@ -21,14 +21,27 @@ import zio.stream.*
 
 import java.nio.charset.StandardCharsets
 
-/** 一个领域交给 HTTP 服务的接口实现。 */
+/** 交给 HTTP 解释器的接口实现。 */
 type ApiEndpoint = ZServerEndpoint[Any, ZioStreams]
+
+/** 一个领域的接口实现：声明加逻辑。要登录的由 [[HttpServer.serve]] 统一套上登录校验，领域不经手登录。 */
+trait Route:
+  def serve(auth: Auth): ApiEndpoint
+
+object Route:
+  /** 不要登录的领域接口（如靠签名的页面文件）。 */
+  def unsecured(e: ApiEndpoint): Route = _ => e
 
 object Endpoints:
   extension [I, O](e: Endpoint[Option[String], I, ApiError, O, Any])
     /** 需要登录的接口：先校验 cookie，再执行领域逻辑；领域错误统一转成接口错误体。 */
-    def secured(auth: Auth)(logic: Principal => I => IO[AppError, O]): ApiEndpoint =
-      e.zServerSecurityLogic(auth.authenticate).serverLogic[Any](p => i => toApi(e.showShort, logic(p)(i)))
+    def secured(logic: I => IO[AppError, O]): Route =
+      auth => e.zServerSecurityLogic(auth.authenticate).serverLogic[Any](_ => i => toApi(e.showShort, logic(i)))
+
+  extension [I, O](e: Endpoint[Option[String], I, ApiError, O, ZioStreams])
+    /** 需要登录的流式接口（SSE）：逻辑自己给出接口错误体。 */
+    def securedStream(logic: I => IO[ApiError, O]): Route =
+      auth => e.zServerSecurityLogic(auth.authenticate).serverLogic[Any](_ => logic)
 
   extension [I, O](e: PublicEndpoint[I, ApiError, O, Any])
     def public(logic: I => IO[AppError, O]): ApiEndpoint =
@@ -61,13 +74,13 @@ object HttpServer:
 
   /** 平台自带的接口：登录、退出、登录状态、实时刷新。 */
   def platformEndpoints(auth: Auth, bus: ChangeBus): List[ApiEndpoint] =
-    import Endpoints.*
     val login: ApiEndpoint =
       AuthApi.login
         .in(extractFromRequest(sourceOf))
         .zServerLogic((req, source) => auth.login(req.password, source))
-    val logout = AuthApi.logout.secured(auth)(_ => _ => ZIO.succeed(auth.logoutCookie))
-    val session = AuthApi.session.secured(auth)(p => _ => ZIO.succeed(AuthSession(p.expiresAt.getEpochSecond)))
+    val logout: ApiEndpoint = AuthApi.logout.zServerSecurityLogic(auth.authenticate).serverLogic[Any](_ => _ => ZIO.succeed(auth.logoutCookie))
+    val session: ApiEndpoint =
+      AuthApi.session.zServerSecurityLogic(auth.authenticate).serverLogic[Any](p => _ => ZIO.succeed(AuthSession(p.expiresAt.getEpochSecond)))
     val sse: ApiEndpoint = events.zServerSecurityLogic(auth.authenticate).serverLogic[Any] { _ => _ =>
       ZIO.succeed(Sse.frames(bus.subscribe.map(_.map(c => ServerSentEvent(data = Some(zio.json.EncoderOps(c).toJson), eventType = Some("change"))))))
     }
@@ -84,16 +97,16 @@ object HttpServer:
   def openApi(endpoints: List[AnyEndpoint], version: String): String =
     OpenAPIDocsInterpreter().toOpenAPI(endpoints, "muliao", version).asJson.printWith(Printer.spaces2.copy(dropNullValues = true))
 
-  /** 起服务，直到 scope 结束。`domainEndpoints` 是各领域的接口；返回实际监听的端口（配置 0 时随机）。 */
+  /** 起服务，直到 scope 结束。`domain` 是各领域的接口；返回实际监听的端口（配置 0 时随机）。 */
   def serve(
       settings: ServerSettings,
       auth: Auth,
       bus: ChangeBus,
-      domainEndpoints: List[ApiEndpoint],
+      domain: List[Route],
       version: String
   ): ZIO[Scope, Throwable, Int] =
     import Endpoints.*
-    val api      = platformEndpoints(auth, bus) ++ domainEndpoints
+    val api: List[ApiEndpoint] = platformEndpoints(auth, bus) ++ domain.map(_.serve(auth))
     val docJson  = openApi((api :+ openApiEndpoint.public(_ => ZIO.succeed(""))).map(_.endpoint), version)
     val docs     = openApiEndpoint.public(_ => ZIO.succeed(docJson))
     val all      = api ++ List(docs, apiNotFound, StaticFiles.serverEndpoint(settings.webDir))

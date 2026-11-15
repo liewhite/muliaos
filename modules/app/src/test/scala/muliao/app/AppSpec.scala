@@ -6,7 +6,7 @@ import muliao.notifications.Notifications
 import muliao.platform.{AppError, InstanceLock}
 import muliao.platform.http.OutboundHttp
 import muliao.platform.server.HttpServer
-import muliao.sessions.Sessions
+import muliao.sessions.{SessionConsole, Sessions}
 import muliao.sessions.TestEnv.{FakeModels, Script, call, fakeModels, lastUserText, parts, source, text}
 import muliao.triggers.Triggers
 import zio.*
@@ -152,19 +152,23 @@ object AppSpec extends ZIOSpecDefault:
   private def ok(rs: List[(String, String, Boolean)], name: String): Boolean = rs.exists((n, _, e) => n == name && !e)
 
   def spec = suite("组装与集成")(
-    test("工具核对：重名、没接上、多出的都拒绝启动") {
-      val one = muliao.toolkit.Tool[Any, muliao.sessions.TestEnv.NoIn]("a", "x", muliao.toolkit.Access.Read)((_, _) =>
-        ZIO.succeed(muliao.toolkit.ToolOutcome.text(""))
-      )(using muliao.sessions.TestEnv.given_Schema_NoIn)
-      val two = muliao.toolkit.Tool[Any, muliao.sessions.TestEnv.NoIn]("b", "x", muliao.toolkit.Access.Write)((_, _) =>
-        ZIO.succeed(muliao.toolkit.ToolOutcome.text(""))
-      )(using muliao.sessions.TestEnv.given_Schema_NoIn)
-      assertTrue(
-        Assembly.checkTools(List(one, two), Set("a", "b")).map(_.map(i => i.name -> i.access)) ==
-          Right(List("a" -> muliao.toolkit.Access.Read, "b" -> muliao.toolkit.Access.Write)),
-        Assembly.checkTools(List(one, one, two), Set("a", "b")).left.exists(_.contains("工具重名：a")),
-        Assembly.checkTools(List(one), Set("a", "b")).left.exists(_.contains("没接上的工具：b")),
-        Assembly.checkTools(List(one, two), Set("a")).left.exists(_.contains("多出的工具：b"))
+    test("工具目录：各领域的工具定义与实际接进会话的工具一一对应，没有重名") {
+      ZIO.scoped(
+        for
+          h   <- home
+          m   <- fakeModels(script)
+          cfg <- AppConfig.load(h.config)
+          _   <- ZIO.succeed(JFiles.createDirectories(h.data))
+          env <- Assembly.layer(cfg, fake(m)).build
+          cs  <- Assembly.contributions.provideEnvironment(env)
+        yield
+          val wired   = Sessions.specs.map(_.name) ++ cs.flatMap(_.tools).map(_.spec.name)
+          val catalog = Assembly.toolSpecs(web = false).map(_.name)
+          assertTrue(
+            wired.sorted == catalog.sorted,
+            wired.distinct.size == wired.size,
+            Assembly.toolSpecs(web = true).map(_.name).diff(catalog).sorted == List("web_fetch", "web_search")
+          )
       )
     },
     test("配置：未知的段、段里未知的键拒绝启动") {
@@ -206,11 +210,11 @@ object AppSpec extends ZIOSpecDefault:
                  r6 <- step(c, env, s1, tool("list_agents", "{}"))
                  // 看板：建一个指派给 bob 的 issue，bob 在 issue 会话里收到
                  r7 <- step(c, env, s1, tool("issue_create", """{"title":"集成测试","owner":"alice","assignee":"bob","status":"in_progress"}"""))
-                 bobs <- eventually("bob 的 issue 会话")(env.get[Sessions].list(Some(bob), None, None, 50).map(_.items))(_.exists(_.origin == OriginKind.Issue))
+                 bobs <- eventually("bob 的 issue 会话")(env.get[SessionConsole].list(Some(bob), None, None, 50).map(_.items))(_.exists(_.origin == OriginKind.Issue))
                  // 触发器：建、立即运行，开出 alice 的触发器会话
                  r8 <- step(c, env, s1, tool("trigger_create", """{"name":"t-once","kind":"schedule","prompt":"定时说好","config":{"cron":"0 3 * * *"}}"""))
                  r9 <- step(c, env, s1, tool("trigger_run", """{"name":"t-once"}"""))
-                 trig <- eventually("触发器开出的会话")(env.get[Sessions].list(Some(alice), None, None, 50).map(_.items))(_.exists(_.origin == OriginKind.Trigger))
+                 trig <- eventually("触发器开出的会话")(env.get[SessionConsole].list(Some(alice), None, None, 50).map(_.items))(_.exists(_.origin == OriginKind.Trigger))
                  // 通知与工作历史
                  r10 <- step(c, env, s1, tool("notify_user", """{"title":"集成","body":"通知正文"}"""))
                  inbox <- env.get[Notifications].inbox(50).map(_.items)
@@ -246,7 +250,7 @@ object AppSpec extends ZIOSpecDefault:
                  for
                    (c, env) <- boot(h, m)
                    r        <- step(c, env, s1, tool("list_agents", "{}"))
-                   ss       <- env.get[Sessions].list(None, None, None, 100).map(_.items)
+                   ss       <- env.get[SessionConsole].list(None, None, None, 100).map(_.items)
                  yield assertTrue(r.exists(_._2.contains("alice")), ss.exists(_.agent == alice), ss.exists(_.agent == bob))
                )
       yield first && res

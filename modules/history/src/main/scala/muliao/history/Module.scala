@@ -6,7 +6,7 @@ import muliao.platform.DomainModule
   *
   * 给别的领域用的接口：
   *   - [[History]]：记、查工作历史，某天的活动，读会话；
-  *   - [[HistoryLink.attach]]：组装时把 4 个工具接到会话领域（工具名在 [[HistoryTools.toolNames]]），要在 `Sessions.start` 之前；
+  *   - [[HistoryLink.contribution]]：交给会话领域的 4 个工具（静态定义在 [[HistoryTools.specs]]）；
   *   - [[HistoryHttp]]：界面的接口（接口声明在 contract 的 `HistoryApi`）；
   *   - 纯函数：检索相关度 [[Search]]、活动回顾的写法 [[OverviewText]]、读会话的条目与筛选 [[Reading]]、长输出分页 [[Pages]]。
   *

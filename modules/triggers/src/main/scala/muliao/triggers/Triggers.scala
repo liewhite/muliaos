@@ -5,9 +5,10 @@ import muliao.notifications.Notifications
 import muliao.platform.{AppError, GeneralSettings}
 import muliao.platform.db.Database
 import muliao.platform.events.ChangeBus
-import muliao.resources.{AgentHook, AgentHooks, ResourcePaths, ToolInfo}
+import muliao.resources.{AgentHook, ResourcePaths}
 import muliao.resources.agents.Agents
-import muliao.sessions.{SessionHooks, Sessions}
+import muliao.sessions.{Contribution, Sessions}
+import muliao.toolkit.ToolSpec
 import muliao.triggers.store.Repo
 import muliao.workspace.AgentExec
 import zio.*
@@ -39,19 +40,28 @@ trait Triggers:
   /** 立即运行：走同一个触发出口（先跑前置检查、防重叠），不消耗一次性的那次；前置检查失败只报给调用方。 */
   def run(id: TriggerId): IO[AppError, FireResult]
 
+  /** 删除 agent 时删掉它的全部触发器（可重复执行）。 */
+  def forgetAgent(agent: AgentId): IO[AppError, Unit]
+
 object Triggers:
   /** 界面的触发器页（通知点开去这里）。 */
   val PageUrl = "/triggers"
 
-  /** 本领域给 agent 的工具名与类别（组装时汇进全部内置工具目录）。 */
-  val toolInfos: List[ToolInfo] = TriggerTools.catalog
+  /** 本领域工具的静态定义（组装时汇进全部内置工具目录）。 */
+  val specs: List[ToolSpec] = TriggerTools.specs
 
-  type Env = Database & ChangeBus & Sessions & SessionHooks & Agents & AgentHooks & Notifications & AgentExec & ResourcePaths & GeneralSettings &
-    TriggerSettings
+  /** 给会话领域的工具，以及删除 agent 时删掉它的触发器。 */
+  val contribution: URIO[Triggers & Agents, Contribution] =
+    for
+      t      <- ZIO.service[Triggers]
+      agents <- ZIO.service[Agents]
+    yield Contribution(tools = TriggerTools.all(t, agents), agentHook = Some(AgentHook("触发器", cleanup = t.forgetAgent)))
+
+  type Env = Database & ChangeBus & Sessions & Agents & Notifications & AgentExec & ResourcePaths & GeneralSettings & TriggerSettings
 
   val layer: ZLayer[Env, Nothing, Triggers] = layerWith(Tuning())
 
-  /** `tuning`：运行节奏（测试里调小）。工具、agent 删除时的清理在这里登记到上游。 */
+  /** `tuning`：运行节奏（测试里调小）。 */
   def layerWith(tuning: Tuning): ZLayer[Env, Nothing, Triggers] =
     ZLayer.scoped(
       for
@@ -70,16 +80,7 @@ object Triggers:
         core      = Core(db, bus, sessions, agents, notes, exec, paths, general.timezone, settings, tuning, signal, inFlight, health)
         scope    <- ZIO.scope
         started  <- Ref.make(false)
-        live      = Live(core, scope, started)
-        hooks    <- ZIO.service[SessionHooks]
-        _        <- hooks.addTools(TriggerTools.all(live, agents))
-        ah       <- ZIO.service[AgentHooks]
-        _ <- ah.register(new AgentHook:
-               val name                    = "触发器"
-               def busy(agent: AgentId)    = ZIO.none
-               def cleanup(agent: AgentId) = live.cleanup(agent)
-             )
-      yield live
+      yield Live(core, scope, started)
     )
 
   private final case class Revision(next: Trigger, restart: Boolean)
@@ -227,7 +228,7 @@ object Triggers:
       yield r.result
 
     /** 删 agent 时：删掉它的全部触发器（含已结束的），常驻命令随之结束。 */
-    def cleanup(agent: AgentId): IO[AppError, Unit] =
+    def forgetAgent(agent: AgentId): IO[AppError, Unit] =
       db.write(
         Repo.ofAgent(agent).flatMap(rows => ZIO.foreachDiscard(rows)(r => Repo.delete(r.id))) *> changed
       ) *> signal.ping

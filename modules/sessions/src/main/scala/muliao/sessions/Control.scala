@@ -70,7 +70,7 @@ private[sessions] final case class Control(
       _ <- live.done(id)
       // 放弃等待中的工作：后台任务结束；委派的 thread 由下面逐层停下
       _ <- ZIO.foreachDiscard(h.waits.map(_.ref)) {
-             case WaitRef.Job(job)                       => hooks.jobs.flatMap(_.cancel(job))
+             case WaitRef.Job(job)                       => ports.jobs.flatMap(_.cancel(job))
              case WaitRef.Wake(_) | WaitRef.Delegation(_) => ZIO.unit
            }
       threads <- db.read(Repo.threadsOf(id))
@@ -170,7 +170,7 @@ private[sessions] final case class Control(
       _ <- db.write(Repo.orphanThreads(id) *> touched(id, t) *> Repo.deleteSession(id))
       _ <- waits.forgetSession(id)
       _ <- live.done(id)
-      _ <- hooks.emit(SessionEvent.Deleted(id, i.agent, i.origin))
+      _ <- ports.emit(SessionEvent.Deleted(id, i.agent, i.origin))
     yield ()
 
   // ---- agent 的忙碌与清理 ----

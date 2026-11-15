@@ -177,7 +177,7 @@ lazy val app = project
 // ---- 一次性迁移工具：读旧数据，写新数据目录 ----
 lazy val migrate = project
   .in(file("modules/migrate"))
-  .dependsOn(domains.map(p => p: ClasspathDep[ProjectReference])*)
+  .dependsOn(app) // 领域列表等与组装入口同一份
   .settings(commonJvm)
 
 // ---- 前端（Scala.js + Laminar），只依赖接口契约 ----

@@ -1,6 +1,5 @@
 package muliao.workspace.tools
 
-import muliao.resources.ToolInfo
 import muliao.contract.FileView
 import muliao.platform.AppError
 import muliao.sessions.{Files, RunContext}
@@ -67,6 +66,44 @@ object FileTools:
 
   private def rejected(e: AppError): ToolFailure = ToolFailure.fromAppError(e)
 
+  val ReadFileDef = ToolDef[RunContext, ReadIn](
+    "read_file",
+    "读文本文件，输出是 `cat -n` 格式：每行是右对齐占 6 格的行号、一个制表符、该行原文。相对路径按工作目录解析。" +
+      "一次读几个文件或一个文件的几段时给 reads（每段前有 `==> 路径 lines 起-止 of 总数 <==` 标题，读不了的段显示原因，其余照常）。" +
+      "输出有上限：停在整行处，最后单独一行在方括号里说明从哪个 offset 续读。图片文件（PNG、JPEG、GIF、WebP）用 path 读时直接作为图片返回，可以看截图、图表。",
+    Access.Read,
+    Scheduling.Ordered,
+    Display.Code
+  )
+
+  val WriteFileDef = ToolDef[RunContext, WriteIn](
+    "write_file",
+    "新建文件或整体覆盖（父目录自动建）。只改一部分用 edit_file。资源目录里已有的文件（记忆、skill 等），要本次运行先 read_file 读过、且之后没被别人改，才能整体覆盖。",
+    Access.Write,
+    Scheduling.Ordered
+  )
+
+  val EditFileDef = ToolDef[RunContext, EditIn](
+    "edit_file",
+    "改文件的一部分：用 old_text 定位（逐字一致、恰好出现一次，除非 replace_all），或用 start_line + end_line + anchor 定位整行（anchor 是第 start_line 行的全文，防止按过时的行号改错）。" +
+      "一次改多处、多个文件时给 edits：按顺序执行，old_text 在前面的修改之后的内容里找，行号和 anchor 总是指这次调用之前的文件，与前面改动重叠的行号范围被拒绝；任何一处失败，所有文件都不写。" +
+      "成功后回显每个文件改动处及上下文（`cat -n` 格式，不相连的块用 -- 隔开），可以据此接着按行号改，不必重读。",
+    Access.Write,
+    Scheduling.Ordered,
+    Display.Diff
+  )
+
+  val ShareFileDef = ToolDef[RunContext, ShareIn](
+    "share_file",
+    "把工作目录里的文件（如做好的图表、写好的文档）发给用户：随你的回复显示给他（图片内联，其他文件可下载），你不用再贴链接或嵌入，提到文件名即可。用户拿到的是现在的快照，之后改文件不会反映过去。",
+    Access.Write,
+    Scheduling.Ordered,
+    Display.SharedFile
+  )
+
+  /** 本领域工具的静态定义（进全部内置工具目录）。 */
+  val specs: List[ToolSpec] = List(ReadFileDef, WriteFileDef, EditFileDef, ShareFileDef).map(_.spec)
+
   def all(access: FileAccess, files: Files): List[Tool[RunContext]] =
     List(readFile(access), writeFile(access), editFile(access), shareFile(access, files))
 
@@ -79,15 +116,7 @@ object FileTools:
     case Problem(message: String)
 
   def readFile(access: FileAccess): Tool[RunContext] =
-    Tool[RunContext, ReadIn](
-      "read_file",
-      "读文本文件，输出是 `cat -n` 格式：每行是右对齐占 6 格的行号、一个制表符、该行原文。相对路径按工作目录解析。" +
-        "一次读几个文件或一个文件的几段时给 reads（每段前有 `==> 路径 lines 起-止 of 总数 <==` 标题，读不了的段显示原因，其余照常）。" +
-        "输出有上限：停在整行处，最后单独一行在方括号里说明从哪个 offset 续读。图片文件（PNG、JPEG、GIF、WebP）用 path 读时直接作为图片返回，可以看截图、图表。",
-      Access.Read,
-      Scheduling.Ordered,
-      Display.Code
-    ) { (in, ctx) =>
+    ReadFileDef { (in, ctx) =>
       (in.path, in.reads) match
         case (Some(p), Nil) =>
           readOne(access, ctx, p, in.offset, in.limit, ReadBudget).flatMap {
@@ -142,12 +171,7 @@ object FileTools:
   // ---- write_file ----
 
   def writeFile(access: FileAccess): Tool[RunContext] =
-    Tool[RunContext, WriteIn](
-      "write_file",
-      "新建文件或整体覆盖（父目录自动建）。只改一部分用 edit_file。资源目录里已有的文件（记忆、skill 等），要本次运行先 read_file 读过、且之后没被别人改，才能整体覆盖。",
-      Access.Write,
-      Scheduling.Ordered
-    ) { (in, ctx) =>
+    WriteFileDef { (in, ctx) =>
       val path = FileAccess.resolve(ctx.workspace, in.path)
       access
         .store(ctx.agent, ctx.run, List(FileWrite(path, in.content)), WriteMode.Overwrite)
@@ -192,15 +216,7 @@ object FileTools:
   private final case class Planned(raw: String, path: java.nio.file.Path, edited: Edited)
 
   def editFile(access: FileAccess): Tool[RunContext] =
-    Tool[RunContext, EditIn](
-      "edit_file",
-      "改文件的一部分：用 old_text 定位（逐字一致、恰好出现一次，除非 replace_all），或用 start_line + end_line + anchor 定位整行（anchor 是第 start_line 行的全文，防止按过时的行号改错）。" +
-        "一次改多处、多个文件时给 edits：按顺序执行，old_text 在前面的修改之后的内容里找，行号和 anchor 总是指这次调用之前的文件，与前面改动重叠的行号范围被拒绝；任何一处失败，所有文件都不写。" +
-        "成功后回显每个文件改动处及上下文（`cat -n` 格式，不相连的块用 -- 隔开），可以据此接着按行号改，不必重读。",
-      Access.Write,
-      Scheduling.Ordered,
-      Display.Diff
-    ) { (in, ctx) =>
+    EditFileDef { (in, ctx) =>
       for
         groups <- ZIO.fromEither(plan(in)).mapError(m => ToolFailure.Rejected(m))
         edited <- ZIO.foreach(groups) { case FileEdits(raw, edits) =>
@@ -223,13 +239,7 @@ object FileTools:
   // ---- share_file ----
 
   def shareFile(access: FileAccess, files: Files): Tool[RunContext] =
-    Tool[RunContext, ShareIn](
-      "share_file",
-      "把工作目录里的文件（如做好的图表、写好的文档）发给用户：随你的回复显示给他（图片内联，其他文件可下载），你不用再贴链接或嵌入，提到文件名即可。用户拿到的是现在的快照，之后改文件不会反映过去。",
-      Access.Write,
-      Scheduling.Ordered,
-      Display.SharedFile
-    ) { (in, ctx) =>
+    ShareFileDef { (in, ctx) =>
       val path = FileAccess.resolve(ctx.workspace, in.path)
       (for
         bytes <- access.bytes(ctx.agent, path)
@@ -237,7 +247,3 @@ object FileTools:
         row   <- files.upload(name, FileContent.mediaTypeOf(name, bytes), Chunk.fromArray(bytes))
       yield ToolOutcome.text(FileView(row.id, row.name, row.mediaType, row.size).toJson)).mapError(rejected)
     }
-
-  /** 本组工具的名字与类别（组装时汇进全部内置工具目录）。 */
-  val catalog: List[ToolInfo] =
-    List(ToolInfo("read_file", Access.Read), ToolInfo("write_file", Access.Write), ToolInfo("edit_file", Access.Write), ToolInfo("share_file", Access.Write))

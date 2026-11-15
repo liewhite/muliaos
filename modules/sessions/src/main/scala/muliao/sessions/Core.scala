@@ -34,7 +34,7 @@ private[sessions] object SessionInfo:
     SessionRow(id, agent, origin.kind, origin.ref, origin.parentId, title, "[]", now, now)
 
 /** 本领域各部分共用的底子：库、「数据变了」广播、实时事件、接进来的东西、配置，以及读会话基本信息。 */
-private[sessions] final case class Kernel(db: Database, bus: ChangeBus, live: LiveHub, hooks: SessionHooks, settings: SessionSettings, general: GeneralSettings):
+private[sessions] final case class Kernel(db: Database, bus: ChangeBus, live: LiveHub, ports: Ports, settings: SessionSettings, general: GeneralSettings):
   def zone: ZoneId = general.timezone
 
   def now: UIO[Long] = Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
@@ -67,7 +67,7 @@ private[sessions] final case class Kernel(db: Database, bus: ChangeBus, live: Li
   def setPendingTx(id: SessionId, all: List[ReplyTo]): Tx[Unit] = Repo.setPendingReply(id, all.toJson)
 
 private[sessions] object Kernel:
-  val layer: URLayer[Database & ChangeBus & LiveHub & SessionHooks & SessionSettings & GeneralSettings, Kernel] = ZLayer.derive[Kernel]
+  val layer: URLayer[Database & ChangeBus & LiveHub & Ports & SessionSettings & GeneralSettings, Kernel] = ZLayer.derive[Kernel]
 
 /** 正在生成的一条回复。 */
 private[sessions] final case class Partial(run: RunId, model: String, startedAt: Long, builder: ReplyBuilder)

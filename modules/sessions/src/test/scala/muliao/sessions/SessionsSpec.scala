@@ -23,6 +23,7 @@ object SessionsSpec extends ZIOSpecDefault:
     yield a
 
   private def sessions = ZIO.service[Sessions]
+  private def console  = ZIO.service[SessionConsole]
 
   def spec = suite("会话与运行")(
     test("普通对话：回答、交回用户、记用量，固定说明跨运行不变") {
@@ -38,7 +39,7 @@ object SessionsSpec extends ZIOSpecDefault:
           tl     <- timeline(id)
           reqs   <- m.requests
           evs    <- eventually("两次交回")(events.get)(_.count(_.isInstanceOf[SessionEvent.Settled]) == 2)
-          detail <- sessions.flatMap(_.detail(id))
+          detail <- console.flatMap(_.detail(id))
         yield assertTrue(
           tl.map(_.kind) == List("context", "letter", "reply", "context", "letter", "reply"),
           tl(2).parts.head.text.contains("你好呀"),
@@ -128,12 +129,12 @@ object SessionsSpec extends ZIOSpecDefault:
           alice  <- agent("alice")
           id     <- userSession(alice, "帮我选")
           _      <- eventually("等提问")(stateOf(id))(_ == WorkState.Waiting)
-          d1     <- sessions.flatMap(_.detail(id))
+          d1     <- console.flatMap(_.detail(id))
           q       = d1.pending.head
-          _      <- sessions.flatMap(_.answer(id, CallKey(q.entry, q.call), Answer.Answers(List("A"))))
-          d2     <- eventually("等批准")(sessions.flatMap(_.detail(id)))(_.pending.exists(_.pending.isInstanceOf[PendingView.Approval]))
+          _      <- console.flatMap(_.answer(id, CallKey(q.entry, q.call), Answer.Answers(List("A"))))
+          d2     <- eventually("等批准")(console.flatMap(_.detail(id)))(_.pending.exists(_.pending.isInstanceOf[PendingView.Approval]))
           a       = d2.pending.head
-          _      <- sessions.flatMap(_.answer(id, CallKey(a.entry, a.call), Answer.Decision(approved = true, always = true)))
+          _      <- console.flatMap(_.answer(id, CallKey(a.entry, a.call), Answer.Decision(approved = true, always = true)))
           _      <- eventually("回答完")(timeline(id))(_.exists(_.parts.exists(_.text.contains("都好了"))))
           _      <- idle(id)
           tl     <- timeline(id)
@@ -181,7 +182,7 @@ object SessionsSpec extends ZIOSpecDefault:
           _      <- agent("bob")
           // 1. 不回报：回答推给用户
           id1 <- userSession(alice, "通知")
-          t1  <- eventually("thread t1")(sessions.flatMap(_.list(None, None, None, 50)))(_.items.exists(_.originRef.contains("t1"))).map(_.items.find(_.originRef.contains("t1")).get.id)
+          t1  <- eventually("thread t1")(console.flatMap(_.list(None, None, None, 50)))(_.items.exists(_.originRef.contains("t1"))).map(_.items.find(_.originRef.contains("t1")).get.id)
           _   <- idle(t1) *> idle(id1)
           e1  <- eventually("t1 交回用户")(events.get)(_.exists {
                    case SessionEvent.Settled(`t1`, _, _, Outcome.Answered(a), true) => a == "bob 答：任务一"
@@ -197,9 +198,9 @@ object SessionsSpec extends ZIOSpecDefault:
           _   <- eventually("alice 转述")(timeline(id3))(_.exists(_.parts.exists(_.text.exists(_.startsWith("alice 转述")))))
           _   <- idle(id3)
           tl3 <- timeline(id3)
-          threads <- sessions.flatMap(_.list(None, None, None, 50)).map(_.items.filter(_.origin == OriginKind.Thread))
-          byOrigin <- sessions.flatMap(_.list(None, None, None, 50, List(OriginKind.Thread))).map(_.items)
-          d1      <- sessions.flatMap(_.detail(id1))
+          threads <- console.flatMap(_.list(None, None, None, 50)).map(_.items.filter(_.origin == OriginKind.Thread))
+          byOrigin <- console.flatMap(_.list(None, None, None, 50, List(OriginKind.Thread))).map(_.items)
+          d1      <- console.flatMap(_.detail(id1))
         yield assertTrue(
           byOrigin.map(_.id).toSet == threads.map(_.id).toSet,
           d1.threads.map(_.originRef.get) == List("t1"),
@@ -222,15 +223,15 @@ object SessionsSpec extends ZIOSpecDefault:
           _     <- agent("bob")
           // 生成到一半停
           id1 <- userSession(alice, "写")
-          _   <- eventually("开始生成")(sessions.flatMap(s => ZIO.scoped(s.subscribe(id1).map(_._1))))(_.exists(_.nonEmpty))
+          _   <- eventually("开始生成")(console.flatMap(s => ZIO.scoped(s.subscribe(id1).map(_._1))))(_.exists(_.nonEmpty))
           _   <- say(id1, "排队的")
           _   <- sessions.flatMap(_.stop(id1))
           s1  <- stateOf(id1)
           tl1 <- timeline(id1)
-          d1  <- sessions.flatMap(_.detail(id1))
+          d1  <- console.flatMap(_.detail(id1))
           // 等别人回答时停：thread 一并停下
           id2 <- userSession(alice, "等 bob")
-          th  <- eventually("bob 的 thread 在跑")(sessions.flatMap(_.list(None, None, None, 50)))(_.items.exists(i => i.originRef.contains("slow") && i.state == WorkState.Running))
+          th  <- eventually("bob 的 thread 在跑")(console.flatMap(_.list(None, None, None, 50)))(_.items.exists(i => i.originRef.contains("slow") && i.state == WorkState.Running))
                    .map(_.items.find(_.originRef.contains("slow")).get.id)
           _   <- eventually("alice 在等")(stateOf(id2))(_ == WorkState.Waiting)
           _   <- sessions.flatMap(_.stop(id2))
@@ -258,7 +259,7 @@ object SessionsSpec extends ZIOSpecDefault:
           id    <- userSession(alice, "开工")
           _     <- eventually("block 在执行")(timeline(id))(_.exists(_.parts.exists(_.call.exists(_.state == CallState.Running))))
           _     <- say(id, "插话")
-          evs <- sessions.flatMap(s =>
+          evs <- console.flatMap(s =>
                    ZIO.scoped(s.subscribe(id).flatMap { (_, stream) =>
                      for
                        f   <- stream.takeUntil(_ == LiveEvent.Begin).runCollect.fork
@@ -292,7 +293,7 @@ object SessionsSpec extends ZIOSpecDefault:
           tl    <- timeline(id)
           last   = reqs.last
           // 再手动压缩一次
-          done  <- sessions.flatMap(_.compact(id))
+          done  <- console.flatMap(_.compact(id))
           tl2   <- timeline(id)
         yield assertTrue(
           reqs.size == 4, // 一、二、压缩、三
@@ -356,20 +357,20 @@ object SessionsSpec extends ZIOSpecDefault:
           _     <- agent("bob")
           id    <- userSession(alice, "卡住")
           _     <- eventually("在跑")(stateOf(id))(_ == WorkState.Running)
-          busy  <- sessions.flatMap(_.delete(id)).either
+          busy  <- console.flatMap(_.delete(id)).either
           agentBusy <- ZIO.serviceWithZIO[Agents](_.delete(alice)).either
           _     <- sessions.flatMap(_.stop(id))
-          _     <- sessions.flatMap(_.delete(id))
+          _     <- console.flatMap(_.delete(id))
           gone  <- sessions.flatMap(_.info(id)).either
           // 发起会话删了，thread 留下
           id2   <- userSession(alice, "派活")
-          th    <- eventually("thread")(sessions.flatMap(_.list(None, None, None, 50)))(_.items.exists(_.originRef.contains("keep"))).map(_.items.find(_.originRef.contains("keep")).get.id)
+          th    <- eventually("thread")(console.flatMap(_.list(None, None, None, 50)))(_.items.exists(_.originRef.contains("keep"))).map(_.items.find(_.originRef.contains("keep")).get.id)
           _     <- idle(th) *> idle(id2)
-          _     <- sessions.flatMap(_.delete(id2))
+          _     <- console.flatMap(_.delete(id2))
           kept  <- sessions.flatMap(_.info(th))
           // 删 agent：会话一并删掉
           _     <- ZIO.serviceWithZIO[Agents](_.delete(alice))
-          left  <- sessions.flatMap(_.list(Some(alice), None, None, 50))
+          left  <- console.flatMap(_.list(Some(alice), None, None, 50))
         yield assertTrue(
           busy.left.exists(_.isInstanceOf[AppError.Domain]),
           agentBusy.isLeft,
@@ -393,12 +394,12 @@ object SessionsSpec extends ZIOSpecDefault:
           id    <- userSession(alice, "派")
           tl    <- eventually("收到检查")(timeline(id))(_.exists(i => i.checkIn && i.text.exists(_.contains("thread 现在运行中"))))
           _     <- eventually("回到等待")(stateOf(id))(_ == WorkState.Waiting)
-          th    <- sessions.flatMap(_.list(None, None, None, 50)).map(_.items.find(_.originRef.contains("long")).get.id)
-          d     <- sessions.flatMap(_.detail(id))
+          th    <- console.flatMap(_.list(None, None, None, 50)).map(_.items.find(_.originRef.contains("long")).get.id)
+          d     <- console.flatMap(_.detail(id))
           _     <- sessions.flatMap(_.stop(id))
           s1    <- stateOf(id)
           s2    <- idle(th)
-          d2    <- sessions.flatMap(_.detail(id))
+          d2    <- console.flatMap(_.detail(id))
         yield assertTrue(
           d.waits.map(_.target).collect { case _: WaitTarget.Delegation => true } == List(true),
           d.waits.head.heartbeatSeconds.contains(1),
@@ -433,16 +434,16 @@ object SessionsSpec extends ZIOSpecDefault:
                  events <- recordEvents
                  alice  <- agent("alice")
                  id     <- userSession(alice, "试试")
-                 _      <- eventually("失败")(sessions.flatMap(_.detail(id)))(_.run.exists(_.state == RunState.Failed))
+                 _      <- eventually("失败")(console.flatMap(_.detail(id)))(_.run.exists(_.state == RunState.Failed))
                  failed <- eventually("失败通知")(events.get)(_.exists {
                              case SessionEvent.Settled(`id`, _, _, Outcome.Failed(_), true) => true
                              case _                                                     => false
                            })
                  _      <- m.setHandler(_ => Script.Say(List(text("这次好了"))))
-                 _      <- sessions.flatMap(_.retry(id))
+                 _      <- console.flatMap(_.retry(id))
                  _      <- eventually("重试成功")(timeline(id))(_.exists(_.parts.exists(_.text.contains("这次好了"))))
                  _      <- idle(id)
-                 d      <- sessions.flatMap(_.detail(id))
+                 d      <- console.flatMap(_.detail(id))
                  _      <- n.set(1)
                yield d
              }

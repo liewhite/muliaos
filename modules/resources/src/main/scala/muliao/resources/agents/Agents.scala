@@ -67,12 +67,12 @@ trait Agents:
   /** 删除：忙时拒绝；先标为「正在删」，再清理各领域数据和资源，最后标为已删除。 */
   def delete(id: AgentId): IO[AppError, Unit]
 
-  /** 起动时接着做没做完的改名与删除。 */
-  def resumePending: IO[AppError, Unit]
+  /** 启动：定下各领域对 agent 生命周期的参与（忙碌判断、删除清理），再接着做没做完的改名与删除。只调一次；归档、删除在它之前会等它。 */
+  def start(hooks: List[AgentHook]): IO[AppError, Unit]
 
 object Agents:
   val layer: ZLayer[
-    Database & AssetStore & AccessEditor & AgentHooks & ModelCheck & ToolCatalog & ChangeBus & ResourcePaths,
+    Database & AssetStore & AccessEditor & ModelCheck & ToolCatalog & ChangeBus & ResourcePaths,
     Nothing,
     Agents
   ] =
@@ -81,7 +81,7 @@ object Agents:
         db     <- ZIO.service[Database]
         store  <- ZIO.service[AssetStore]
         editor <- ZIO.service[AccessEditor]
-        hooks  <- ZIO.service[AgentHooks]
+        hooks  <- Promise.make[Nothing, List[AgentHook]]
         models <- ZIO.service[ModelCheck]
         tools  <- ZIO.service[ToolCatalog]
         bus    <- ZIO.service[ChangeBus]
@@ -106,7 +106,8 @@ object Agents:
       db: Database,
       store: AssetStore,
       editor: AccessEditor,
-      hooks: AgentHooks,
+      /** 各领域的参与，[[start]] 时定下 */
+      hooks: Promise[Nothing, List[AgentHook]],
       models: ModelCheck,
       tools: ToolCatalog,
       bus: ChangeBus,
@@ -267,7 +268,7 @@ object Agents:
         yield ()
       }.unit
 
-    /** 改名：先在库里记下新名和旧名，再挪资源目录，最后清掉旧名。挪到一半重启由 [[resumePending]] 接着挪。 */
+    /** 改名：先在库里记下新名和旧名，再挪资源目录，最后清掉旧名。挪到一半重启由 [[start]] 接着挪。 */
     private def rename(a: AgentRecord, raw: String): IO[AppError, AgentRecord] =
       for
         name <- ZIO.fromEither(validateName(raw)).mapError(AppError.invalid)
@@ -307,7 +308,7 @@ object Agents:
           yield done
 
     private def busyReasons(id: AgentId): IO[AppError, List[String]] =
-      hooks.all.flatMap(hs => ZIO.foreach(hs)(h => h.busy(id))).map(_.flatten)
+      hooks.await.flatMap(hs => ZIO.foreach(hs)(h => h.busy(id))).map(_.flatten)
 
     private def setArchived(a: AgentRecord, archived: Boolean): IO[AppError, AgentRecord] =
       (a.state, archived) match
@@ -358,7 +359,7 @@ object Agents:
     private def finishDelete(a: AgentRecord): IO[AppError, Unit] =
       for
         a  <- finishRename(a)
-        hs <- hooks.all
+        hs <- hooks.await
         _ <- ZIO.foreachDiscard(hs)(h =>
                h.cleanup(a.id).mapError(e => AppError.Internal(s"删除 agent ${a.name.value} 时 ${h.name} 清理失败：${e.message}", Some(e)))
              )
@@ -408,9 +409,11 @@ object Agents:
           s.sorted(java.util.Comparator.reverseOrder()).forEach(x => Files.delete(x))
         }
 
-    def resumePending: IO[AppError, Unit] =
+    def start(hs: List[AgentHook]): IO[AppError, Unit] =
       lock.withPermit {
         for
+          first <- hooks.succeed(hs)
+          _     <- ZIO.unless(first)(ZIO.fail(AppError.Internal("Agents.start 调了两次：组装顺序错了")))
           all <- db.read(AgentRepo.all)
           _   <- ZIO.foreachDiscard(all.filter(a => a.renamedFrom.isDefined && a.live))(finishRename)
           _ <- ZIO.foreachDiscard(all.filter(_.state == AgentState.Deleting)) { a =>

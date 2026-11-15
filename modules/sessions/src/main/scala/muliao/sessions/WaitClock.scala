@@ -48,7 +48,7 @@ private[sessions] final class WaitClock(kernel: Kernel, waits: Waits, delegation
     yield ()
 
   private def statusOf(ref: WaitRef): UIO[String] = ref match
-    case WaitRef.Job(job)       => hooks.jobs.flatMap(_.status(job))
+    case WaitRef.Job(job)       => ports.jobs.flatMap(_.status(job))
     case WaitRef.Delegation(d)  => delegations.status(d).catchAll(e => ZIO.succeed(s"（查不到：${e.message}）"))
     case WaitRef.Wake(_)        => ZIO.succeed("等到点唤醒")
 

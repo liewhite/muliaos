@@ -27,13 +27,18 @@ object BoardSpec extends ZIOSpecDefault:
     for
       d   <- dirs
       m   <- fakeModels(script)
-      env <- layer(d, m, more = List(muliao.notifications.Module.migrations, muliao.board.Module.migrations), moreTools = SessionLink.toolNames ++ BoardTools.toolNames).build
+      env <- layer(d, m, more = List(muliao.notifications.Module.migrations, muliao.board.Module.migrations), moreTools = SessionLink.specs ++ BoardTools.specs).build
       n   <- Notifications.make(env.get[Database], env.get[ChangeBus], noPush, "PUBLIC", Retry.Policy(10.millis, 40.millis, 400.millis))
       gen  = GeneralSettings(d.data, d.assets)
       b   <- Board.layer.build.provideSomeEnvironment[Scope](_ ++ env.add(n).add(gen)).map(_.get[Board])
       all  = env.add(n).add(b).add(gen)
       p   <- probe
-      a   <- (SessionLink.attach *> BoardLink.attach *> start(p) *> body).provideSomeEnvironment[Scope](_ ++ all)
+      a <- (for
+             cs <- ZIO.collectAll(List(SessionLink.contribution, BoardLink.contribution))
+             u  <- SessionLink.unread
+             _  <- start(p, cs, unread = u)
+             r  <- body
+           yield r).provideSomeEnvironment[Scope](_ ++ all)
     yield a
 
   private def board = ZIO.service[Board]
@@ -346,7 +351,7 @@ object BoardSpec extends ZIOSpecDefault:
           bus  <- ZIO.service[ChangeBus]
           set   = ServerSettings(port = 0, password = "pw", cookieSecret = "s" * 32)
           auth <- Auth.layer.build.map(_.get[Auth]).provideSomeLayer[Scope](ZLayer.succeed(set))
-          port <- HttpServer.serve(set, auth, bus, BoardHttp(b).endpoints(auth), "test").orDie
+          port <- HttpServer.serve(set, auth, bus, BoardHttp(b).routes, "test").orDie
           c     = muliao.sessions.SessionsHttpSpec.Client(s"http://127.0.0.1:$port")
           call  = (m: String, p: String, body: Option[String]) => c.call(m, p, body).orDie
           _    <- call("POST", "/api/auth/login", Some("""{"password":"pw"}"""))

@@ -1,6 +1,5 @@
 package muliao.workspace.scripts
 
-import muliao.resources.ToolInfo
 import muliao.exec.{Program, RealPath}
 import muliao.resources.SkillEntry
 import muliao.resources.vault.SecretUse
@@ -89,16 +88,21 @@ object SkillRun:
       .map(ToolOutcome.text)
       .mapError(ToolFailure.fromAppError)
 
+  val SkillRunDef = ToolDef[RunContext, SkillRunIn](
+    "skill_run",
+    "运行你的某个 skill 目录里的脚本：直接执行（不经 shell 解析，要有 shebang 行和可执行位），工作目录、写沙箱、超时、后台运行与 run_shell 相同。" +
+      "secrets 可以用只允许脚本使用（allow_shell = false）的 secret：这种 key 只能经包好检查的脚本用，不能注入自己写的命令。" +
+      "SKILL.md 的 frontmatter 里 `approval:` 列出的脚本，每次执行前等用户批准（这轮回答就此结束，结果或拒绝作为这个调用的结果回来）；用户选了「始终允许」的，同样的脚本、参数、secret 再调用且 skill 文件没改时直接执行。",
+    Access.Write,
+    Scheduling.Ordered,
+    Display.Terminal
+  )
+
+  /** 本领域工具的静态定义（进全部内置工具目录）。 */
+  val specs: List[ToolSpec] = List(SkillRunDef).map(_.spec)
+
   def tool(runner: CommandRunner, grants: ScriptGrants): Tool[RunContext] =
-    Tool[RunContext, SkillRunIn](
-      "skill_run",
-      "运行你的某个 skill 目录里的脚本：直接执行（不经 shell 解析，要有 shebang 行和可执行位），工作目录、写沙箱、超时、后台运行与 run_shell 相同。" +
-        "secrets 可以用只允许脚本使用（allow_shell = false）的 secret：这种 key 只能经包好检查的脚本用，不能注入自己写的命令。" +
-        "SKILL.md 的 frontmatter 里 `approval:` 列出的脚本，每次执行前等用户批准（这轮回答就此结束，结果或拒绝作为这个调用的结果回来）；用户选了「始终允许」的，同样的脚本、参数、secret 再调用且 skill 文件没改时直接执行。",
-      Access.Write,
-      Scheduling.Ordered,
-      Display.Terminal
-    ) { (in, ctx) =>
+    SkillRunDef { (in, ctx) =>
       check(in, ctx).flatMap { c =>
         if !c.needsApproval then execute(runner, ctx, in, c)
         else
@@ -127,4 +131,3 @@ object SkillRun:
         out <- execute(runner, ctx, a.call, c)
       yield out
 
-  val catalog: List[ToolInfo] = List(ToolInfo("skill_run", Access.Write))

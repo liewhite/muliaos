@@ -1,6 +1,5 @@
 package muliao.workspace.tools
 
-import muliao.resources.ToolInfo
 import muliao.contract.JobId
 import muliao.exec.{Exec, Program}
 import muliao.platform.AppError
@@ -76,18 +75,38 @@ object ShellTools:
 
   private def rejected(e: AppError): ToolFailure = ToolFailure.fromAppError(e)
 
+  val RunShellDef = ToolDef[RunContext, ShellIn](
+    "run_shell",
+    "在你的工作目录里用 bash 执行命令，返回退出码和标准输出与标准错误合在一起的文字。命令只能写你的可写范围（工作目录、常用临时与缓存目录、获授权的目录），被拦下时输出里会说明被什么拦、找谁授权；读和网络不受限。" +
+      "前台运行必须给 timeout（秒，自己估），到时结束整组进程并返回已有的输出。要跑很久或想边跑边做别的，用 background=true：立即返回任务号，输出写进 jobs/<任务号>.log，结束时退出码和最后几行作为事件回到这个会话，期间会话处于等待中；用 job_status 看进度、job_kill 结束。" +
+      "secrets 里的 key 作为同名环境变量注入，输出中出现的值会被打码。",
+    Access.Write,
+    Scheduling.Concurrent,
+    Display.Terminal
+  )
+
+  val JobStatusDef = ToolDef[RunContext, JobIn](
+    "job_status",
+    s"看一个后台任务（只能看自己起的）：状态（运行中/已结束及退出码/被结束/被中断）、运行时长、日志最后 $StatusLines 行。全部输出在工作目录的 jobs/<任务号>.log。",
+    Access.Read,
+    Scheduling.Concurrent,
+    Display.Terminal
+  )
+
+  val JobKillDef = ToolDef[RunContext, JobIn](
+    "job_kill",
+    "结束一个在跑的后台任务（整组进程：先 TERM，等几秒再 KILL）。它的结局（被结束）随后作为事件回到发起它的会话。",
+    Access.Write,
+    Scheduling.Ordered
+  )
+
+  /** 本领域工具的静态定义（进全部内置工具目录）。 */
+  val specs: List[ToolSpec] = List(RunShellDef, JobStatusDef, JobKillDef).map(_.spec)
+
   def all(runner: CommandRunner, jobs: Jobs): List[Tool[RunContext]] = List(runShell(runner), jobStatus(jobs), jobKill(jobs))
 
   def runShell(runner: CommandRunner): Tool[RunContext] =
-    Tool[RunContext, ShellIn](
-      "run_shell",
-      "在你的工作目录里用 bash 执行命令，返回退出码和标准输出与标准错误合在一起的文字。命令只能写你的可写范围（工作目录、常用临时与缓存目录、获授权的目录），被拦下时输出里会说明被什么拦、找谁授权；读和网络不受限。" +
-        "前台运行必须给 timeout（秒，自己估），到时结束整组进程并返回已有的输出。要跑很久或想边跑边做别的，用 background=true：立即返回任务号，输出写进 jobs/<任务号>.log，结束时退出码和最后几行作为事件回到这个会话，期间会话处于等待中；用 job_status 看进度、job_kill 结束。" +
-        "secrets 里的 key 作为同名环境变量注入，输出中出现的值会被打码。",
-      Access.Write,
-      Scheduling.Concurrent,
-      Display.Terminal
-    ) { (in, ctx) =>
+    RunShellDef { (in, ctx) =>
       for
         _    <- ZIO.when(in.command.isBlank)(ZIO.fail(ToolFailure.Rejected("command 不能为空")))
         mode <- ZIO.fromEither(RunMode.of(in.background, in.timeout, in.heartbeatSeconds)).mapError(ToolFailure.Rejected(_))
@@ -96,23 +115,12 @@ object ShellTools:
     }
 
   def jobStatus(jobs: Jobs): Tool[RunContext] =
-    Tool[RunContext, JobIn](
-      "job_status",
-      s"看一个后台任务（只能看自己起的）：状态（运行中/已结束及退出码/被结束/被中断）、运行时长、日志最后 $StatusLines 行。全部输出在工作目录的 jobs/<任务号>.log。",
-      Access.Read,
-      Scheduling.Concurrent,
-      Display.Terminal
-    ) { (in, ctx) =>
+    JobStatusDef { (in, ctx) =>
       jobs.get(ctx.agent, JobId.wrap(in.jobId)).flatMap(jobs.describe(_, StatusLines)).map(ToolOutcome.text).mapError(rejected)
     }
 
   def jobKill(jobs: Jobs): Tool[RunContext] =
-    Tool[RunContext, JobIn](
-      "job_kill",
-      "结束一个在跑的后台任务（整组进程：先 TERM，等几秒再 KILL）。它的结局（被结束）随后作为事件回到发起它的会话。",
-      Access.Write,
-      Scheduling.Ordered
-    ) { (in, ctx) =>
+    JobKillDef { (in, ctx) =>
       val id = JobId.wrap(in.jobId)
       (for
         _      <- jobs.get(ctx.agent, id)
@@ -122,4 +130,3 @@ object ShellTools:
       )).mapError(rejected)
     }
 
-  val catalog: List[ToolInfo] = List(ToolInfo("run_shell", Access.Write), ToolInfo("job_status", Access.Read), ToolInfo("job_kill", Access.Write))

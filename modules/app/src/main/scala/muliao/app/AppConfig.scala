@@ -12,6 +12,7 @@ import muliao.platform.server.ServerSettings
 import muliao.resources.{ResourcePaths, ResourcesSettings, VaultSettings}
 import muliao.sessions.{SessionPaths, SessionSettings}
 import muliao.triggers.TriggerSettings
+import muliao.workspace.pages.PageSigner
 import zio.*
 
 import java.nio.file.Path
@@ -46,25 +47,31 @@ final case class AppConfig(
 
   def sessionPaths: SessionPaths = SessionPaths(general.dataDir.resolve("files"))
 
+  /** 各领域要的配置值与位置。 */
+  def layer: ULayer[
+    GeneralSettings & ServerSettings & HttpSettings & ResourcesSettings & VaultSettings & ModelSettings & SessionSettings & PushSettings &
+      TriggerSettings & ResourcePaths & SessionPaths & PageSigner
+  ] =
+    ZLayer.succeedEnvironment(
+      ZEnvironment(general, server, http, resources, vault)
+        .add(models)
+        .add(sessions)
+        .add(push)
+        .add(triggers)
+        .add(resourcePaths)
+        .add(sessionPaths)
+        .add(PageSigner.fromSecret(server.cookieSecret))
+    )
+
 object AppConfig:
 
-  private val required: List[ConfigSection[?]] = List(
-    GeneralSettings.section,
-    LogSettings.section,
-    ServerSettings.section,
-    HttpSettings.section,
-    ResourcesSettings.section,
-    VaultSettings.section,
-    ModelSettings.section,
-    SessionSettings.section,
-    PushSettings.section,
-    TriggerSettings.section
-  )
-
-  private val optional: List[ConfigSection[?]] = List(WebSettings.section, TranscriptionSettings.section)
+  /** 平台自己的段（领域的段由各领域的 `Module` 声明）。 */
+  private val platformSections: List[ConfigSection[?]] =
+    List(GeneralSettings.section, LogSettings.section, ServerSettings.section, HttpSettings.section)
 
   /** 配置文件里允许出现的顶层段。 */
-  val sectionNames: Set[String] = (required ++ optional).map(_.key).toSet
+  val sectionNames: Set[String] =
+    (platformSections ++ Assembly.domains.flatMap(m => m.sections ++ m.optionalSections)).map(_.key).toSet
 
   def load(path: Path): IO[AppError, AppConfig] =
     for

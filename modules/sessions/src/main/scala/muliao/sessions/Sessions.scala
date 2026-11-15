@@ -6,7 +6,7 @@ import muliao.models.mcp.McpConnector
 import muliao.platform.{AppError, GeneralSettings}
 import muliao.platform.db.{Database, Tx}
 import muliao.platform.events.ChangeBus
-import muliao.resources.{AgentHook, AgentHooks, ResourcePaths, Resources}
+import muliao.resources.{AgentHook, ResourcePaths, Resources}
 import muliao.resources.agents.Agents
 import muliao.resources.vault.Vault
 import muliao.sessions.store.*
@@ -14,15 +14,19 @@ import zio.*
 
 import java.time.{Instant, LocalDate}
 
-/** 会话与运行领域给别的领域与界面的入口。
+/** 会话与运行领域给别的领域的入口。
   *
-  * 别的领域：投信（[[deliver]]，触发器开会话、看板投 issue 动态）、查工作状态（[[states]]，全系统唯一判断）、停止（[[stop]]）、
+  * 投信（[[deliver]]，触发器开会话、看板投 issue 动态）、查工作状态（[[states]]，全系统唯一判断）、停止（[[stop]]）、
   * 登记与结束会话在等的后台任务（[[openJobWait]] / [[closeJobWait]]）、读时间线（[[timeline]]，`session_read`）。
-  * 往本领域接东西（工具、事件订阅、后台任务的状态与取消、批准后的执行者、未读来源）用 [[SessionHooks]]。
+  * 别的领域往本领域接的东西（工具、事件订阅、批准后的执行者、后台任务、未读）在 [[start]] 时以 [[SessionPorts]] 一次交进来。
+  * 界面用的操作在 [[SessionConsole]]。
   */
 trait Sessions:
-  /** 启动：收尾上次被打断的调用、续跑、起等待调度。要在各领域都往 [[SessionHooks]] 接好工具后调用。 */
-  def start: IO[AppError, Unit]
+  /** 启动：定下各领域接进来的端口，再收尾上次被打断的调用、续跑、起等待调度。只调一次；之前投进来的信等到这时才开始跑。 */
+  def start(ports: SessionPorts): IO[AppError, Unit]
+
+  /** 本领域对 agent 生命周期的参与：有会话在跑或在等时忙，删除时删掉它的全部会话。 */
+  def agentHook: AgentHook
 
   /** 投一封信，投不进时以领域错误说明原因。`dedupe`：同样键的信已在排队就不投（返回 None）。 */
   def deliver(to: Address, letter: Letter, dedupe: Option[String] = None): IO[AppError, Option[Delivered]]
@@ -58,7 +62,8 @@ trait Sessions:
   /** 最后一条回复的正文。 */
   def lastAnswer(id: SessionId): IO[AppError, String]
 
-  // ---- 界面 ----
+/** 界面（会话页、会话列表、用量页）用的操作，只有本领域的 HTTP 接口用。 */
+trait SessionConsole:
   /** @param origins 只要这些来源（空是不限） */
   def list(agent: Option[AgentId], q: Option[String], before: Option[Long], limit: Int, origins: List[OriginKind] = Nil): IO[AppError, SessionPage]
   def detail(id: SessionId): IO[AppError, SessionDetail]
@@ -69,16 +74,19 @@ trait Sessions:
   def markRead(id: SessionId): IO[AppError, Unit]
   def usage(from: Long, to: Long): IO[AppError, List[UsageLine]]
   def subscribe(id: SessionId): URIO[Scope, (Option[zio.Chunk[muliao.models.llm.ReplyPart]], zio.stream.ZStream[Any, Nothing, LiveEvent])]
+  /** 界面怎么展示某个工具的调用与结果。 */
+  def display: UIO[String => Display]
 
 object Sessions:
-  type Env = Database & ChangeBus & SessionHooks & Files & LiveHub & Resources & Agents & Models & McpConnector & Vault & ResourcePaths &
-    SessionSettings & GeneralSettings & AgentHooks
+  type Env = Database & ChangeBus & Files & LiveHub & Resources & Agents & Models & McpConnector & Vault & ResourcePaths & SessionSettings &
+    GeneralSettings
 
   /** 按子领域装起本领域的各部分（各自是一个服务，依赖只朝下：底子 → 信箱 → 等待 → 委派 → 请求模型 → 驱动 / 控制 / 等待调度），
-    * 把本领域的工具与 agent 的忙碌判断、清理接到上游，对外只给 [[Sessions]]。
+    * 对别的领域给 [[Sessions]]，对界面给 [[SessionConsole]]。
     */
-  val layer: ZLayer[Env, AppError, Sessions] =
-    ZLayer.makeSome[Env, Sessions](
+  val layer: ZLayer[Env, AppError, Sessions & SessionConsole] =
+    ZLayer.makeSome[Env, Sessions & SessionConsole](
+      Ports.layer,
       Kernel.layer,
       Slots.layer,
       Doorbell.layer,
@@ -93,26 +101,14 @@ object Sessions:
       Control.layer,
       WaitClock.layer,
       ZLayer.derive[Parts],
-      wired
+      ZLayer.fromZIOEnvironment(ZIO.serviceWith[Parts] { p =>
+        val l = Live(p)
+        ZEnvironment[Sessions, SessionConsole](l, l)
+      })
     )
 
-  private def wired: ZLayer[Parts & AgentHooks, Nothing, Sessions] =
-    ZLayer(
-      for
-        p  <- ZIO.service[Parts]
-        l   = Live(p)
-        ah <- ZIO.service[AgentHooks]
-        _  <- p.kernel.hooks.addTools(SessionTools.all(p.delegations, p.control, p.waits, p.workStates, p.agents, p.kernel.zone))
-        _ <- ah.register(new AgentHook:
-               val name                    = "会话"
-               def busy(agent: AgentId)    = p.control.agentBusy(agent)
-               def cleanup(agent: AgentId) = p.control.agentCleanup(agent)
-             )
-      yield l
-    )
-
-  /** 本领域自己的工具名与类别（组装时汇进全部内置工具目录）。 */
-  val toolNames: List[String] = List("ask_user", "delegate_task", "ask_agent", "list_threads", "stop_thread", "wake_me")
+  /** 本领域自己的工具（组装时汇进全部内置工具目录）。 */
+  val specs: List[muliao.toolkit.ToolSpec] = SessionTools.specs
 
   /** 本领域的各部分。 */
   private final case class Parts(
@@ -128,11 +124,15 @@ object Sessions:
       agents: Agents
   )
 
-  private final class Live(parts: Parts) extends Sessions:
+  private final class Live(parts: Parts) extends Sessions, SessionConsole:
     import parts.*
     import parts.kernel.*
 
-    def start: IO[AppError, Unit] = driver.start *> clock.start
+    def start(p: SessionPorts): IO[AppError, Unit] =
+      val own = Contribution(tools = SessionTools.all(delegations, control, waits, workStates, agents, zone))
+      ports.settle(p.copy(contributions = own :: p.contributions)) *> driver.start *> clock.start
+
+    val agentHook: AgentHook = AgentHook("会话", control.agentCleanup, control.agentBusy)
 
     def deliver(to: Address, letter: Letter, dedupe: Option[String])   = mailbox.deliver(to, letter, dedupe)
     def deliverIn(to: Address, letter: Letter, dedupe: Option[String]) = mailbox.deliverIn(to, letter, dedupe)
@@ -155,13 +155,11 @@ object Sessions:
     def answer(id: SessionId, call: CallKey, a: Answer)         = control.answer(id, call, a)
     def compact(id: SessionId)                                  = control.compactNow(id)
     def delete(id: SessionId)                                   = control.delete(id)
-    def markRead(id: SessionId)                                 = kernel.info(id) *> hooks.unread.flatMap(_.markRead(id))
+    def markRead(id: SessionId)                                 = kernel.info(id) *> ports.unread.flatMap(_.markRead(id))
     def subscribe(id: SessionId)                                = live.subscribe(id)
+    def display: UIO[String => Display]                         = ports.display
 
     private final case class Queued(row: InboxRow, letter: Letter)
-
-    private def display: UIO[String => Display] =
-      hooks.tools.map(ts => ts.map(t => t.spec.name -> t.spec.display).toMap).map(m => n => m.getOrElse(n, Display.Plain))
 
     def timeline(id: SessionId): IO[AppError, List[TimelineItem]] =
       for
@@ -216,7 +214,7 @@ object Sessions:
     private def summaries(rows: List[SessionRow]): IO[AppError, List[SessionSummary]] =
       for
         st     <- workStates.states(rows.map(_.id))
-        unread <- hooks.unread.flatMap(_.unread(rows.map(_.id)))
+        unread <- ports.unread.flatMap(_.unread(rows.map(_.id)))
         ns     <- agents.names(rows.map(_.agentId))
       yield rows.map(r =>
         SessionSummary(r.id, r.agentId, ns(r.agentId), r.title, r.origin, r.originRef, r.parentId,

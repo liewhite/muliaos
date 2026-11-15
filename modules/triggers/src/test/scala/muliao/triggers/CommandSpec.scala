@@ -2,7 +2,6 @@ package muliao.triggers
 
 import muliao.contract.*
 import muliao.platform.AppError
-import muliao.sessions.SessionHooks
 import muliao.triggers.TestEnv.*
 import zio.*
 import zio.test.*
@@ -175,7 +174,7 @@ object CommandSpec extends ZIOSpecDefault:
           a     <- agent("bot")
           b     <- agent("helper")
           ctx   <- muliao.workspace.TestEnv.context(a)
-          tools <- ZIO.serviceWithZIO[SessionHooks](_.tools)
+          tools <- Triggers.contribution.map(_.tools)
           call   = (name: String, args: String) =>
                      ZIO.succeed(tools.find(_.spec.name == name).get).flatMap(t =>
                        t.invoke(zio.json.ast.Json.decoder.decodeJson(args).toOption.get, ctx).either.map(muliao.workspace.TestEnv.text)
@@ -223,7 +222,7 @@ object CommandSpec extends ZIOSpecDefault:
           bus    <- ZIO.service[muliao.platform.events.ChangeBus]
           settings = muliao.platform.server.ServerSettings(port = 0, password = "pw", cookieSecret = "s" * 32)
           auth   <- muliao.platform.server.Auth.layer.build.map(_.get[muliao.platform.server.Auth]).provideSomeLayer[Scope](ZLayer.succeed(settings))
-          port   <- muliao.platform.server.HttpServer.serve(settings, auth, bus, http.endpoints(auth), "test").orDie
+          port   <- muliao.platform.server.HttpServer.serve(settings, auth, bus, http.routes, "test").orDie
           c       = muliao.sessions.SessionsHttpSpec.Client(s"http://127.0.0.1:$port")
           _      <- c.call("POST", "/api/auth/login", Some("""{"password":"pw"}""")).orDie
           made   <- c.call("POST", "/api/triggers", Some(s"""{"name":"web","agent":"${a.value}","kind":"schedule","config":{"cron":"0 9 * * *"},"prompt":"p"}""")).orDie

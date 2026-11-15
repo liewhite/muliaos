@@ -4,7 +4,7 @@ import muliao.contract.AgentId
 import muliao.platform.AppError
 import muliao.platform.config.ConfigCodecs.given
 import muliao.platform.config.ConfigSection
-import muliao.toolkit.Access
+import muliao.toolkit.{Access, ToolSpec}
 import zio.*
 import zio.json.*
 
@@ -67,32 +67,22 @@ trait ModelCheck:
   /** 不能跑时说明原因。 */
   def check(model: String): Option[String]
 
-/** 平台的全部内置工具（由组装入口提供）：名字与类别，用于按规则分发和校验新规则。 */
+/** 平台的全部内置工具的名字与类别，用于按规则分发和校验新规则。 */
 final case class ToolInfo(name: String, access: Access)
 
-trait ToolCatalog:
-  def tools: List[ToolInfo]
+/** 全部内置工具（由组装入口从各领域静态的工具定义给出，MCP 工具按运行连接、不在其中）。 */
+final case class ToolCatalog(tools: List[ToolInfo])
 
 object ToolCatalog:
-  def fixed(ts: List[ToolInfo]): ToolCatalog = new ToolCatalog:
-    val tools = ts
+  def of(specs: List[ToolSpec]): ToolCatalog = ToolCatalog(specs.map(s => ToolInfo(s.name, s.access)))
 
-/** 别的领域对 agent 生命周期的参与：它忙不忙（忙时不能归档、删除），删除时清理自己的数据。
-  * 下游领域实现后在组装时登记到 [[AgentHooks]]。
+/** 别的领域对 agent 生命周期的参与：删除时清理自己的数据，以及它忙不忙（忙时不能归档、删除）。启动时交给 `Agents.start`。
+  * @param name    参与方的名字（日志与报错里用）
+  * @param cleanup 删除 agent 时清理本领域的数据。必须可重复执行：删到一半重启后会再调一次
+  * @param busy    忙时说明在忙什么（在运行、在等后台任务/委派/唤醒……），空闲为 None；没有「忙」这回事的领域不给
   */
-trait AgentHook:
-  /** 登记方的名字（日志与报错里用）。 */
-  def name: String
-
-  /** 忙时说明在忙什么（在运行、在等后台任务/委派/唤醒……），空闲为 None。 */
-  def busy(agent: AgentId): IO[AppError, Option[String]]
-
-  /** 删除 agent 时清理本领域的数据。必须可重复执行：删到一半重启后会再调一次。 */
-  def cleanup(agent: AgentId): IO[AppError, Unit]
-
-final class AgentHooks private (hooks: Ref[List[AgentHook]]):
-  def register(h: AgentHook): UIO[Unit] = hooks.update(_ :+ h)
-  def all: UIO[List[AgentHook]]          = hooks.get
-
-object AgentHooks:
-  val layer: ULayer[AgentHooks] = ZLayer(Ref.make(List.empty[AgentHook]).map(AgentHooks(_)))
+final case class AgentHook(
+    name: String,
+    cleanup: AgentId => IO[AppError, Unit],
+    busy: AgentId => IO[AppError, Option[String]] = _ => ZIO.none
+)

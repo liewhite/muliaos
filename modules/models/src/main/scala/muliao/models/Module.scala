@@ -20,7 +20,7 @@ object Module extends DomainModule:
   val name = "models"
 
   /** 必填的配置段。 */
-  val sections: List[ConfigSection[?]] = List(ModelSettings.section)
+  override val sections: List[ConfigSection[?]] = List(ModelSettings.section)
 
   /** 配了才有对应功能的配置段（用 `ConfigFile.optionalSection` 读）。 */
-  val optionalSections: List[ConfigSection[?]] = List(WebSettings.section, TranscriptionSettings.section)
+  override val optionalSections: List[ConfigSection[?]] = List(WebSettings.section, TranscriptionSettings.section)

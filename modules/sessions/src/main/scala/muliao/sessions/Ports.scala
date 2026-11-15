@@ -1,9 +1,10 @@
 package muliao.sessions
 
 import muliao.contract.{AgentId, AgentName, CallId, FileId, JobId, RunId, SessionId}
+import muliao.platform.AppError
 import muliao.platform.config.ConfigSection
-import muliao.resources.RunResources
-import muliao.toolkit.{Tool, ToolContext, ToolFailure, ToolOutcome}
+import muliao.resources.{AgentHook, RunResources}
+import muliao.toolkit.{Display, Tool, ToolContext, ToolFailure, ToolOutcome}
 import zio.*
 import zio.json.*
 import zio.json.ast.Json
@@ -82,11 +83,6 @@ trait JobControl:
   /** 会话被停止，放弃这个任务。 */
   def cancel(job: JobId): UIO[Unit]
 
-object JobControl:
-  val none: JobControl = new JobControl:
-    def status(job: JobId): UIO[String] = ZIO.succeed("（状态未知）")
-    def cancel(job: JobId): UIO[Unit]   = ZIO.unit
-
 /** 用户批准后接着执行挂起的调用（如 skill 脚本）。 */
 trait ApprovalHandler:
   def name: ApproverName
@@ -98,47 +94,43 @@ trait UnreadSource:
   def unread(ids: List[SessionId]): UIO[Set[SessionId]]
   def markRead(id: SessionId): UIO[Unit]
 
-object UnreadSource:
-  val none: UnreadSource = new UnreadSource:
-    def unread(ids: List[SessionId]): UIO[Set[SessionId]] = ZIO.succeed(Set.empty)
-    def markRead(id: SessionId): UIO[Unit]                = ZIO.unit
+/** 一个领域交给本领域的东西：给 agent 的工具、批准后的执行者、会话事件订阅，以及它对 agent 生命周期的参与
+  * （组装入口转交给 `Agents.start`）。下游领域用纯函数给出它，组装入口在 [[Sessions.start]] 时一并交进来。
+  */
+final case class Contribution(
+    tools: List[Tool[RunContext]] = Nil,
+    approvals: List[ApprovalHandler] = Nil,
+    listener: Option[SessionListener] = None,
+    agentHook: Option[AgentHook] = None
+)
 
-/** 别的领域在组装时接进来的东西：工具、事件订阅、后台任务、批准后的执行者、未读来源。 */
-final class SessionHooks private (
-    toolsRef: Ref[List[Tool[RunContext]]],
-    listenersRef: Ref[List[SessionListener]],
-    jobsRef: Ref[JobControl],
-    approvalsRef: Ref[Map[ApproverName, ApprovalHandler]],
-    unreadRef: Ref[UnreadSource]
-):
-  def addTools(ts: List[Tool[RunContext]]): UIO[Unit] = toolsRef.update(_ ++ ts)
-  def addListener(l: SessionListener): UIO[Unit]       = listenersRef.update(_ :+ l)
-  def setJobs(j: JobControl): UIO[Unit]                = jobsRef.set(j)
-  def addApproval(h: ApprovalHandler): UIO[Unit]       = approvalsRef.update(_.updated(h.name, h))
-  def setUnread(u: UnreadSource): UIO[Unit]            = unreadRef.set(u)
+/** 启动时交给本领域的全部端口：各领域的贡献，加上只有一个实现、必须接上的后台任务与未读。 */
+final case class SessionPorts(contributions: List[Contribution], jobs: JobControl, unread: UnreadSource)
 
-  def tools: UIO[List[Tool[RunContext]]]                      = toolsRef.get
-  def listeners: UIO[List[SessionListener]]                   = listenersRef.get
-  def jobs: UIO[JobControl]                                   = jobsRef.get
-  def approval(n: ApproverName): UIO[Option[ApprovalHandler]] = approvalsRef.get.map(_.get(n))
-  def unread: UIO[UnreadSource]                               = unreadRef.get
+/** 启动时定下的端口（写一次）。定下之前读它的会等到定下：组装入口在接受任何请求前就启动，所以实际不会等。 */
+private[sessions] final class Ports private (wired: Promise[Nothing, Ports.Wired]):
+  def settle(p: SessionPorts): IO[AppError, Unit] =
+    wired.succeed(Ports.Wired(p)).flatMap(first => ZIO.unless(first)(ZIO.fail(AppError.Internal("Sessions.start 调了两次：组装顺序错了"))).unit)
 
+  def tools: UIO[List[Tool[RunContext]]]                      = wired.await.map(_.tools)
+  def jobs: UIO[JobControl]                                   = wired.await.map(_.ports.jobs)
+  def unread: UIO[UnreadSource]                               = wired.await.map(_.ports.unread)
+  def approval(n: ApproverName): UIO[Option[ApprovalHandler]] = wired.await.map(_.approvals.get(n))
+  /** 界面怎么展示某个工具（MCP 工具不在其中，按纯文字）。 */
+  def display: UIO[String => Display] = wired.await.map(w => n => w.display.getOrElse(n, Display.Plain))
+
+  /** 同步地逐个通知订阅方（按贡献的顺序），一个出错不影响别的。 */
   def emit(e: SessionEvent): UIO[Unit] =
-    listeners.flatMap(ZIO.foreachDiscard(_)(l => l.on(e).catchAllCause(c => ZIO.logErrorCause("会话事件订阅方出错", c))))
+    wired.await.flatMap(w => ZIO.foreachDiscard(w.listeners)(l => l.on(e).catchAllCause(c => ZIO.logErrorCause("会话事件订阅方出错", c))))
 
-object SessionHooks:
-  val layer: ULayer[SessionHooks] = ZLayer(
-    for
-      t <- Ref.make(List.empty[Tool[RunContext]])
-      l <- Ref.make(List.empty[SessionListener])
-      k <- Ref.make(JobControl.none)
-      a <- Ref.make(Map.empty[ApproverName, ApprovalHandler])
-      u <- Ref.make(UnreadSource.none)
-    yield SessionHooks(t, l, k, a, u)
-  )
+private[sessions] object Ports:
+  final case class Wired(ports: SessionPorts):
+    val tools: List[Tool[RunContext]]                 = ports.contributions.flatMap(_.tools)
+    val approvals: Map[ApproverName, ApprovalHandler] = ports.contributions.flatMap(_.approvals).map(h => h.name -> h).toMap
+    val listeners: List[SessionListener]              = ports.contributions.flatMap(_.listener)
+    val display: Map[String, Display]                 = tools.map(t => t.spec.name -> t.spec.display).toMap
 
-  /** 一个上下文不限的工具也能当本领域的工具用。 */
-  def widen(t: Tool[ToolContext]): Tool[RunContext] = t
+  val layer: ULayer[Ports] = ZLayer(Promise.make[Nothing, Wired].map(Ports(_)))
 
 /** 新建会话时的标题：取正文第一行的前 40 个字。 */
 object Titles:

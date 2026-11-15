@@ -8,7 +8,7 @@ import muliao.platform.config.ConfigSection
   * 给别的领域用的接口：
   *   - [[Notifications]]：`notifyIn` 在调用方的写事务里发通知（看板交给用户、触发器告警等，与自己的改动同一事务提交），`notify` 自己开事务；
   *   - [[Notice]] / [[Target]]：通知的内容与点开去哪（会话、发送方给的页面、通知页）；
-  *   - [[SessionLink.attach]]：组装时接到会话领域（事件订阅、未读、工具），要在 `Sessions.start` 之前；
+  *   - [[SessionLink]]：交给会话领域的东西（`contribution`：事件订阅、`notify_user`；`unread`：会话未读），组装入口在 `Sessions.start` 时交进去；
   *   - [[NotificationsHttp]]：界面的接口。
   *
   * 本领域自己的表结构迁移放在 `resources/db/notifications/`。
@@ -16,4 +16,4 @@ import muliao.platform.config.ConfigSection
 object Module extends DomainModule:
   val name = "notifications"
 
-  val sections: List[ConfigSection[?]] = List(PushSettings.section)
+  override val sections: List[ConfigSection[?]] = List(PushSettings.section)

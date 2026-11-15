@@ -1,16 +1,13 @@
 package muliao.history
 
 import muliao.resources.agents.Agents
-import muliao.sessions.SessionHooks
+import muliao.sessions.Contribution
 import zio.*
 
-/** 把本领域接到会话领域：给 agent 的工具。组装时在 `Sessions.start` 之前调用 [[attach]]。
-  * 删 agent 时工作历史保留，所以不登记删除清理。
-  */
+/** 本领域接到会话领域的东西：给 agent 的工具。删 agent 时工作历史保留，所以不参与删除清理。 */
 object HistoryLink:
-  def attach: URIO[History & SessionHooks & Agents, Unit] =
+  val contribution: URIO[History & Agents, Contribution] =
     for
       history <- ZIO.service[History]
       agents  <- ZIO.service[Agents]
-      _       <- ZIO.serviceWithZIO[SessionHooks](_.addTools(HistoryTools.all(history, agents)))
-    yield ()
+    yield Contribution(tools = HistoryTools.all(history, agents))
