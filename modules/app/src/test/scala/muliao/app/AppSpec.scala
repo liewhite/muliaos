@@ -7,7 +7,7 @@ import muliao.platform.{AppError, InstanceLock}
 import muliao.platform.http.OutboundHttp
 import muliao.platform.server.HttpServer
 import muliao.sessions.Sessions
-import muliao.sessions.TestEnv.{FakeModels, Script, call, fakeModels, lastUserText, text}
+import muliao.sessions.TestEnv.{FakeModels, Script, call, fakeModels, lastUserText, parts, source, text}
 import muliao.triggers.Triggers
 import zio.*
 import zio.json.*

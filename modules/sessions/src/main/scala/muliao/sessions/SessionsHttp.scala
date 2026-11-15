@@ -1,7 +1,6 @@
 package muliao.sessions
 
 import muliao.contract.*
-import muliao.models.llm.Growth
 import muliao.platform.AppError
 import muliao.platform.server.{ApiEndpoint, Auth, Endpoints, Sse}
 import muliao.resources.agents.Agents
@@ -32,22 +31,17 @@ final case class SessionsHttp(sessions: Sessions, files: Files, agents: Agents, 
     hooks.tools.map(ts => ts.map(t => t.spec.name -> t.spec.display).toMap).map(m => n => m.getOrElse(n, Display.Plain))
 
   private def view(e: LiveEvent, d: String => Display): LiveView = e match
-    case LiveEvent.Begin      => LiveView("begin")
-    case LiveEvent.Part(i, p) => LiveView("part", index = Some(i), part = Some(Timeline.part(p, Map.empty, d)))
-    case LiveEvent.Grew(i, g, t) =>
-      val growth = g match
-        case Growth.Text     => "Text"
-        case Growth.Thinking => "Thinking"
-        case Growth.ToolArgs => "ToolArgs"
-      LiveView("grew", index = Some(i), growth = Some(growth), text = Some(t))
-    case LiveEvent.Changed => LiveView("changed")
+    case LiveEvent.Begin         => LiveView.Begin
+    case LiveEvent.Part(i, p)    => LiveView.Part(i, Timeline.part(p, Map.empty, d))
+    case LiveEvent.Grew(i, g, t) => LiveView.Grew(i, g, t)
+    case LiveEvent.Changed       => LiveView.Changed
 
   private def live(auth: Auth): ApiEndpoint =
     liveEndpoint.zServerSecurityLogic(auth.authenticate).serverLogic[Any] { _ => id =>
       (sessions.info(id) *> display).mapError(AppError.toApi).map { d =>
         Sse.frames(sessions.subscribe(id).map { (snap, stream) =>
-          (ZStream.fromIterable(snap.map(ps => LiveView("snapshot", parts = ps.toList.map(Timeline.part(_, Map.empty, d))))) ++ stream.map(view(_, d)))
-            .map(v => ServerSentEvent(data = Some(v.toJson), eventType = Some("live")))
+          (ZStream.fromIterable(snap.map(ps => LiveView.Snapshot(ps.toList.map(Timeline.part(_, Map.empty, d))))) ++ stream.map(view(_, d)))
+            .map(v => ServerSentEvent(data = Some((v: LiveView).toJson), eventType = Some("live")))
         })
       }
     }

@@ -9,10 +9,10 @@ import Model.*
 object SessionModelSpec extends ZIOSpecDefault:
   private def call(id: String, name: String = "run_shell", state: CallState = CallState.Done, result: Option[ResultView] = Some(ResultView("ok", Nil, false))) =
     CallView(CallId.wrap(id), name, "{}", Display.Plain, state, result, None, Some(1000L), Some(2000L))
-  private def reply(id: Long, parts: PartView*) = TimelineItem(id, "reply", Some(1L), 0, 0, parts = parts.toList)
-  private def tool(c: CallView)                 = PartView("call", None, Some(c))
-  private def text(t: String)                   = PartView("text", Some(t), None)
-  private def checkIn(at: Long)                 = TimelineItem(at, "letter", None, at, at, source = Some("EVENT"), sourceDetail = Some("job"), text = Some(s"c$at"), checkIn = true)
+  private def reply(id: Long, parts: PartView*) = TimelineItem(id, Some(1L), 0, 0, EntryView.Reply(parts.toList, "m", UsageView(0, 0, 0, 0), interrupted = false))
+  private def tool(c: CallView)                 = PartView.Call(c)
+  private def text(t: String)                   = PartView.Text(t)
+  private def checkIn(at: Long)                 = TimelineItem(at, None, at, at, EntryView.Letter(SourceKind.Event, Some("job"), s"c$at", Nil, checkIn = true))
   private val noThreads: CallView => Option[SessionSummary] = _ => None
 
   def spec = suite("会话页的纯逻辑")(
@@ -53,10 +53,10 @@ object SessionModelSpec extends ZIOSpecDefault:
     },
     test("实时回复：开始清空、分段增长；时间线已包含时算存进库了") {
       val r = List(
-        LiveView("begin"),
-        LiveView("part", index = Some(0), part = Some(text(""))),
-        LiveView("grew", index = Some(0), growth = Some("Text"), text = Some("你好")),
-        LiveView("grew", index = Some(0), growth = Some("Text"), text = Some("，世界"))
+        LiveView.Begin,
+        LiveView.Part(0, text("")),
+        LiveView.Grew(0, Growth.Text, "你好"),
+        LiveView.Grew(0, Growth.Text, "，世界")
       ).foldLeft(LiveReply(Vector(text("旧的")), covered = false))(LiveReply.step)
       assertTrue(
         r.parts == Vector(text("你好，世界")),

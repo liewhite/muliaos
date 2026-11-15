@@ -64,37 +64,39 @@ final class FollowBottom:
 
 /** 正在生成的回复（实时事件拼出来的）。`covered`：重新拉取的时间线已经包含它（存进库了），暂不显示，等下一次增长再显示。 */
 final case class LiveReply(parts: Vector[PartView], covered: Boolean):
-  def text: String = parts.map(p => p.text.getOrElse("") + p.call.fold("")(_.args)).mkString
+  def text: String = LiveReply.textOf(parts)
 
 object LiveReply:
   val empty: LiveReply = LiveReply(Vector.empty, covered = false)
 
+  /** 各段的文字（正文、思考、调用参数）连起来，用来判断库里的回复是否已包含正在生成的。 */
+  def textOf(ps: Iterable[PartView]): String =
+    ps.map {
+      case PartView.Text(t)     => t
+      case PartView.Thinking(t) => t
+      case PartView.Call(c)     => c.args
+    }.mkString
+
+  private def grow(p: PartView, g: Growth, t: String): PartView = (p, g) match
+    case (PartView.Call(c), Growth.ToolArgs) => PartView.Call(c.copy(args = c.args + t))
+    case (PartView.Text(x), _)               => PartView.Text(x + t)
+    case (PartView.Thinking(x), _)           => PartView.Thinking(x + t)
+    case (other, _)                          => other
+
   /** 应用一条实时事件（纯函数）。 */
-  def step(r: LiveReply, v: LiveView): LiveReply = v.kind match
-    case "snapshot" => LiveReply(v.parts.toVector, covered = false)
-    case "begin"    => empty
-    case "part" =>
-      (v.index, v.part) match
-        case (Some(i), Some(p)) if i < r.parts.size  => LiveReply(r.parts.updated(i, p), covered = false)
-        case (Some(i), Some(p)) if i == r.parts.size => LiveReply(r.parts :+ p, covered = false)
-        case _                                       => r
-    case "grew" =>
-      (v.index, v.text) match
-        case (Some(i), Some(t)) if i < r.parts.size =>
-          val p = r.parts(i)
-          val grown = v.growth match
-            case Some("ToolArgs") => p.copy(call = p.call.map(c => c.copy(args = c.args + t)))
-            case _                => p.copy(text = Some(p.text.getOrElse("") + t))
-          LiveReply(r.parts.updated(i, grown), covered = false)
-        case _ => r
-    case _ => r
+  def step(r: LiveReply, v: LiveView): LiveReply = v match
+    case LiveView.Snapshot(ps)                         => LiveReply(ps.toVector, covered = false)
+    case LiveView.Begin                                => empty
+    case LiveView.Part(i, p) if i < r.parts.size       => LiveReply(r.parts.updated(i, p), covered = false)
+    case LiveView.Part(i, p) if i == r.parts.size      => LiveReply(r.parts :+ p, covered = false)
+    case LiveView.Grew(i, g, t) if i < r.parts.size    => LiveReply(r.parts.updated(i, grow(r.parts(i), g, t)), covered = false)
+    case LiveView.Part(_, _) | LiveView.Grew(_, _, _) | LiveView.Changed => r
 
   /** 时间线最后一条回复已经包含正在生成的内容：存进库了。 */
   def coveredBy(r: LiveReply, timeline: List[TimelineItem]): Boolean =
-    r.parts.nonEmpty && timeline.reverse.find(_.kind == "reply").exists { last =>
-      val saved = last.parts.map(p => p.text.getOrElse("") + p.call.fold("")(_.args)).mkString
-      saved.startsWith(r.text)
-    }
+    r.parts.nonEmpty && timeline.reverseIterator.collectFirst { case TimelineItem(_, _, _, _, EntryView.Reply(parts, _, _, _)) => parts }.exists(ps =>
+      textOf(ps).startsWith(r.text)
+    )
 
 /** 会话页。 */
 object SessionView:
@@ -170,7 +172,7 @@ object SessionView:
     // 这个会话的实时事件：连上（含重连）与「库里变了」时重新拉取详情与时间线
     val frames  = Live.frames(s"/api/sessions/${Http.enc(idText)}/live", "live")
     val views   = frames.collect { case Frame.Data(j) => j.fromJson[LiveView].toOption }.collect { case Some(v) => v }
-    val reloads = EventStream.merge(frames.collect { case Frame.Ready => () }, views.filter(_.kind == "changed").mapToUnit, Events.refreshNow.events)
+    val reloads = EventStream.merge(frames.collect { case Frame.Ready => () }, views.filter(_ == LiveView.Changed).mapToUnit, Events.refreshNow.events)
     val detail   = Remote.triggered(reloads)(Http.call(SessionsApi.get)(id))
     val timeline = Remote.triggered(reloads)(Http.call(SessionsApi.timeline)(id))
     val live     = Var(LiveReply.empty)
@@ -316,7 +318,7 @@ object SessionView:
               transcript.view(
                 live.signal.combineWith(ctx).map((r, c) =>
                   if r.covered then Nil
-                  else transcript.keyed(List(TimelineItem(-1, "reply", None, 0, 0, parts = r.parts.toList)), c, "live:")
+                  else transcript.keyed(List(TimelineItem(-1, None, 0, 0, EntryView.Reply(r.parts.toList, "", UsageView(0, 0, 0, 0), interrupted = false))), c, "live:")
                 ),
                 live = true,
                 ctx

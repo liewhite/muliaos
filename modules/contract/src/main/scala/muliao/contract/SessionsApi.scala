@@ -160,39 +160,67 @@ final case class CallView(
     finishedAt: Option[Long]
 ) derives JsonCodec, Schema
 
-/** 回复的一段。`kind`：text / thinking / call。 */
-final case class PartView(kind: String, text: Option[String], call: Option[CallView]) derives JsonCodec, Schema
+/** JSON 里 `kind` 是分支名的 ADT 的 tapir 描述（与 zio-json 的 `@jsonDiscriminator("kind")` 一致）。 */
+private object Tagged:
+  given config: sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
+
+/** 回复的一段。 */
+@jsonDiscriminator("kind")
+enum PartView derives JsonCodec:
+  case Text(text: String)
+  case Thinking(text: String)
+  case Call(call: CallView)
+
+object PartView:
+  given Schema[PartView] =
+    import Tagged.config
+    Schema.derived
 
 final case class UsageView(input: Long, output: Long, cacheRead: Long, cacheWrite: Long) derives JsonCodec, Schema
 
-/** 时间线里的一条。`kind`：
-  *   - context：本次运行上下文（`text`）
-  *   - letter：来信（`source` 为 USER / TRIGGER / ISSUE / DELEGATION / EVENT，`sourceDetail` 是触发器名、issue 号、发起方，`text`、`files`、`checkIn`）
-  *   - reply：模型回复（`parts`、`model`、`usage`、`interrupted`）
-  *   - compaction：压缩点（`text` 是摘要；它之前的部分已由摘要代替，原文仍在）
-  *   - notice：失败、停止等提示（`noticeKind`：Failed / Stopped / Info，`text`）
-  */
-final case class TimelineItem(
-    id: Long,
-    kind: String,
-    run: Option[Long],
-    startedAt: Long,
-    finishedAt: Long,
-    source: Option[String] = None,
-    sourceDetail: Option[String] = None,
-    text: Option[String] = None,
-    files: List[FileView] = Nil,
-    checkIn: Boolean = false,
-    parts: List[PartView] = Nil,
-    model: Option[String] = None,
-    usage: Option[UsageView] = None,
-    interrupted: Boolean = false,
-    noticeKind: Option[String] = None
-) derives JsonCodec, Schema
+/** 来信的来源种类（也是 `session_read` 里的标签）。 */
+enum SourceKind(val label: String) extends Labeled:
+  case User       extends SourceKind("USER")
+  case Trigger    extends SourceKind("TRIGGER")
+  case Issue      extends SourceKind("ISSUE")
+  case Delegation extends SourceKind("DELEGATION")
+  case Event      extends SourceKind("EVENT")
+
+object SourceKind extends Labels[SourceKind]("来信来源", SourceKind.values)
+
+/** 时间线里提示的种类。 */
+enum NoticeKind(val label: String) extends Labeled:
+  case Failed  extends NoticeKind("Failed")
+  case Stopped extends NoticeKind("Stopped")
+  case Info    extends NoticeKind("Info")
+
+object NoticeKind extends Labels[NoticeKind]("提示种类", NoticeKind.values)
+
+/** 时间线里一条的内容。 */
+@jsonDiscriminator("kind")
+enum EntryView derives JsonCodec:
+  /** 本次运行上下文 */
+  case Context(text: String)
+  /** 来信。`sourceDetail` 是触发器名、issue 号、发起方或事件种类 */
+  case Letter(source: SourceKind, sourceDetail: Option[String], text: String, files: List[FileView], checkIn: Boolean)
+  /** 模型回复；`interrupted`：生成到一半被停止 */
+  case Reply(parts: List[PartView], model: String, usage: UsageView, interrupted: Boolean)
+  /** 压缩点：它之前的部分已由摘要代替（原文仍在） */
+  case Compaction(summary: String)
+  /** 失败、停止等提示 */
+  case Notice(notice: NoticeKind, text: String)
+
+object EntryView:
+  given Schema[EntryView] =
+    import Tagged.config
+    Schema.derived
+
+/** 时间线里的一条。 */
+final case class TimelineItem(id: Long, run: Option[Long], startedAt: Long, finishedAt: Long, entry: EntryView) derives JsonCodec, Schema
 
 // ---- 会话详情 ----
 
-final case class QueuedView(id: Long, source: String, text: String, files: List[FileView], checkIn: Boolean, at: Long) derives JsonCodec, Schema
+final case class QueuedView(id: Long, source: SourceKind, text: String, files: List[FileView], checkIn: Boolean, at: Long) derives JsonCodec, Schema
 
 /** 进行中的异步工作在等什么。JSON 里 `kind` 是分支名。 */
 @jsonDiscriminator("kind")
@@ -236,21 +264,32 @@ final case class SessionDetail(
 final case class AnswerIn(answers: Option[List[String]] = None, approved: Option[Boolean] = None, always: Boolean = false)
     derives JsonCodec, Schema
 
-/** 会话页的实时事件（SSE 的 data）。`kind`：
-  *   - snapshot：打开时正在生成的回复（`parts`）
-  *   - begin：开始生成新的一条回复
-  *   - part：第 `index` 段开始或整段替换（`part`）
-  *   - grew：第 `index` 段长了 `text`（`growth`：Text / Thinking / ToolArgs）
-  *   - changed：库里变了，重新拉取详情与时间线
-  */
-final case class LiveView(
-    kind: String,
-    index: Option[Int] = None,
-    part: Option[PartView] = None,
-    growth: Option[String] = None,
-    text: Option[String] = None,
-    parts: List[PartView] = Nil
-) derives JsonCodec, Schema
+/** 回复的一段长了哪种内容。 */
+enum Growth(val label: String) extends Labeled:
+  case Text     extends Growth("Text")
+  case Thinking extends Growth("Thinking")
+  case ToolArgs extends Growth("ToolArgs")
+
+object Growth extends Labels[Growth]("增长种类", Growth.values)
+
+/** 会话页的实时事件（SSE 的 data）。 */
+@jsonDiscriminator("kind")
+enum LiveView derives JsonCodec:
+  /** 打开时正在生成的回复 */
+  case Snapshot(parts: List[PartView])
+  /** 开始生成新的一条回复 */
+  case Begin
+  /** 第 `index` 段开始或整段替换 */
+  case Part(index: Int, part: PartView)
+  /** 第 `index` 段长了 `text` */
+  case Grew(index: Int, growth: Growth, text: String)
+  /** 库里变了，重新拉取详情与时间线 */
+  case Changed
+
+object LiveView:
+  given Schema[LiveView] =
+    import Tagged.config
+    Schema.derived
 
 // ---- 用量 ----
 

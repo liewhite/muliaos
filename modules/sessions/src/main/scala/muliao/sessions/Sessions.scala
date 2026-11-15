@@ -254,7 +254,7 @@ object Sessions:
       yield SessionDetail(
         summary = summary,
         run = run.map(r => RunView(r.id.value, r.state, r.error, r.retryNote, r.startedAt, r.finishedAt)),
-        queued = letters.map(q => QueuedView(q.row.id, q.letter.source.label, q.letter.text, q.letter.files.toList.flatMap(uploads.get).map(Timeline.file), q.letter.checkIn, q.row.createdAt)),
+        queued = letters.map(q => QueuedView(q.row.id, q.letter.source.sourceKind, q.letter.text, q.letter.files.toList.flatMap(uploads.get).map(Timeline.file), q.letter.checkIn, q.row.createdAt)),
         waits = ws.map { w =>
           val target = w.ref match
             case WaitRef.Job(job)      => WaitTarget.Job(job)

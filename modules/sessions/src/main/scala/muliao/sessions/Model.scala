@@ -78,13 +78,13 @@ enum Source derives JsonCodec:
   /** 平台事件：后台任务结束、委派回报、唤醒、心跳检查 */
   case Event(kind: EventKind)
 
-  /** 时间线与 session_read 里的标签。 */
-  def label: String = this match
-    case User             => "USER"
-    case Trigger(_)       => "TRIGGER"
-    case Issue(_)         => "ISSUE"
-    case Delegation(_, _) => "DELEGATION"
-    case Event(_)         => "EVENT"
+  /** 来源的种类（时间线与 session_read 里的标签）。 */
+  def sourceKind: SourceKind = this match
+    case User             => SourceKind.User
+    case Trigger(_)       => SourceKind.Trigger
+    case Issue(_)         => SourceKind.Issue
+    case Delegation(_, _) => SourceKind.Delegation
+    case Event(_)         => SourceKind.Event
 
 object Source:
   /** 这个来源能不能往这种会话里写；不能时说明原因。 */

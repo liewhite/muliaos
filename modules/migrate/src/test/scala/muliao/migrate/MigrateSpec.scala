@@ -1,6 +1,6 @@
 package muliao.migrate
 
-import muliao.contract.{AgentId, AgentName, CallId, CallState, FileId, IssueId, OriginKind, RunState, SessionId}
+import muliao.contract.{AgentId, AgentName, CallId, CallState, FileId, IssueId, NoticeKind, OriginKind, RunState, SessionId}
 import muliao.sessions.*
 import muliao.sessions.store.{EntryRow, SessionRow}
 import zio.Chunk

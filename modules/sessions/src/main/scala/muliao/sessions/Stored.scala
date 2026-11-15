@@ -1,6 +1,6 @@
 package muliao.sessions
 
-import muliao.contract.{Labeled, Labels}
+import muliao.contract.{Labeled, Labels, NoticeKind}
 import muliao.models.llm.{ReplyPart, Usage}
 import zio.Chunk
 import zio.json.*
@@ -34,9 +34,6 @@ enum EntryKind(val label: String) extends Labeled:
   case Notice     extends EntryKind("notice")
 
 object EntryKind extends Labels[EntryKind]("时间线种类", EntryKind.values)
-
-enum NoticeKind derives JsonCodec:
-  case Failed, Stopped, Info
 
 /** 工具结果里的一块（图片存附件，只留内容摘要）。 */
 enum StoredPart derives JsonCodec:

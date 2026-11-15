@@ -221,3 +221,51 @@ object TestEnv:
 
   /** 请求来自哪个 agent（看固定说明）。 */
   def isAgent(req: ModelRequest, name: String): Boolean = req.system.contains(s"agent「$name」")
+
+  /** 测试里读时间线条目的简写：种类、正文、来源标签、回复各段等（取不到的是空）。 */
+    extension (t: TimelineItem)
+      def kind: String = t.entry match
+        case _: EntryView.Context    => "context"
+        case _: EntryView.Letter     => "letter"
+        case _: EntryView.Reply      => "reply"
+        case _: EntryView.Compaction => "compaction"
+        case _: EntryView.Notice     => "notice"
+      def text: Option[String] = t.entry match
+        case EntryView.Context(x)            => Some(x)
+        case EntryView.Letter(_, _, x, _, _) => Some(x)
+        case EntryView.Compaction(x)         => Some(x)
+        case EntryView.Notice(_, x)          => Some(x)
+        case _: EntryView.Reply              => None
+      def source: Option[String] = t.entry match
+        case EntryView.Letter(s, _, _, _, _) => Some(s.label)
+        case _                               => None
+      def files: List[FileView] = t.entry match
+        case EntryView.Letter(_, _, _, fs, _) => fs
+        case _                                => Nil
+      def checkIn: Boolean = t.entry match
+        case EntryView.Letter(_, _, _, _, c) => c
+        case _                               => false
+      def parts: List[PartView] = t.entry match
+        case EntryView.Reply(ps, _, _, _) => ps
+        case _                            => Nil
+      def interrupted: Boolean = t.entry match
+        case EntryView.Reply(_, _, _, i) => i
+        case _                           => false
+      def noticeKind: Option[String] = t.entry match
+        case EntryView.Notice(k, _) => Some(k.label)
+        case _                      => None
+
+    extension (p: PartView)
+      def text: Option[String] = p match
+        case PartView.Text(x)     => Some(x)
+        case PartView.Thinking(x) => Some(x)
+        case PartView.Call(_)     => None
+      def call: Option[CallView] = p match
+        case PartView.Call(c) => Some(c)
+        case _                => None
+
+    extension (v: LiveView)
+      def parts: List[PartView] = v match
+        case LiveView.Snapshot(ps) => ps
+        case _                     => Nil
+

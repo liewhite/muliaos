@@ -100,12 +100,12 @@ object Model:
     case Event(kind: Option[String])
 
   object From:
-    def of(source: Option[String], detail: Option[String]): From = source match
-      case Some("TRIGGER")    => Trigger(detail)
-      case Some("ISSUE")      => Issue(detail)
-      case Some("DELEGATION") => Delegation(detail)
-      case Some("EVENT")      => Event(detail)
-      case _                  => User
+    def of(source: SourceKind, detail: Option[String]): From = source match
+      case SourceKind.Trigger    => Trigger(detail)
+      case SourceKind.Issue      => Issue(detail)
+      case SourceKind.Delegation => Delegation(detail)
+      case SourceKind.Event      => Event(detail)
+      case SourceKind.User       => User
 
   enum Block:
     case Context(text: String, at: Long)
@@ -120,7 +120,7 @@ object Model:
     /** 要用户批准的调用 */
     case Approval(call: CallView, entry: Long)
     case Compaction(summary: String, at: Long)
-    case Notice(kind: String, text: String, at: Long)
+    case Notice(kind: NoticeKind, text: String, at: Long)
     case Interrupted
 
   private def isAsk(c: CallView): Boolean = c.name == "ask_user" && c.pending.forall(_.isInstanceOf[PendingView.Question])
@@ -128,26 +128,24 @@ object Model:
     c.pending.exists(_.isInstanceOf[PendingView.Approval]) || c.state == CallState.Approved || c.state == CallState.ApprovedAlways
 
   /** 一条时间线到展示块（工具调用与结果已由后端合在一起）。 */
-  def blocks(item: TimelineItem): List[Block] = item.kind match
-    case "context" => List(Block.Context(item.text.getOrElse(""), item.startedAt))
-    case "letter" =>
-      From.of(item.source, item.sourceDetail) match
-        case From.Event(k) if item.checkIn => List(Block.CheckIns(k, List(item.text.getOrElse("") -> item.startedAt)))
-        case From.Event(k)                 => List(Block.Event(k, item.text.getOrElse(""), item.startedAt))
-        case f                             => List(Block.Letter(f, item.text.getOrElse(""), item.files, item.startedAt))
-    case "reply"      => replyBlocks(item.parts, item.id) ++ Option.when(item.interrupted)(Block.Interrupted)
-    case "compaction" => List(Block.Compaction(item.text.getOrElse(""), item.startedAt))
-    case "notice"     => List(Block.Notice(item.noticeKind.getOrElse("Info"), item.text.getOrElse(""), item.startedAt))
-    case _            => Nil
+  def blocks(item: TimelineItem): List[Block] = item.entry match
+    case EntryView.Context(text) => List(Block.Context(text, item.startedAt))
+    case EntryView.Letter(source, detail, text, files, checkIn) =>
+      From.of(source, detail) match
+        case From.Event(k) if checkIn => List(Block.CheckIns(k, List(text -> item.startedAt)))
+        case From.Event(k)            => List(Block.Event(k, text, item.startedAt))
+        case f                        => List(Block.Letter(f, text, files, item.startedAt))
+    case EntryView.Reply(parts, _, _, interrupted) => replyBlocks(parts, item.id) ++ Option.when(interrupted)(Block.Interrupted)
+    case EntryView.Compaction(summary)             => List(Block.Compaction(summary, item.startedAt))
+    case EntryView.Notice(kind, text)              => List(Block.Notice(kind, text, item.startedAt))
 
   def replyBlocks(parts: List[PartView], entry: Long): List[Block] =
-    parts.flatMap { p =>
-      (p.kind, p.call) match
-        case ("call", Some(c)) if isAsk(c)      => Some(Block.Ask(c, entry))
-        case ("call", Some(c)) if isApproval(c) => Some(Block.Approval(c, entry))
-        case ("call", Some(c))                  => Some(Block.Process(List(Step.Tool(c, entry))))
-        case ("thinking", _)                    => p.text.filter(_.trim.nonEmpty).map(t => Block.Process(List(Step.Thinking(t))))
-        case _                                  => p.text.filter(_.trim.nonEmpty).map(Block.Assistant(_))
+    parts.flatMap {
+      case PartView.Call(c) if isAsk(c)      => Some(Block.Ask(c, entry))
+      case PartView.Call(c) if isApproval(c) => Some(Block.Approval(c, entry))
+      case PartView.Call(c)                  => Some(Block.Process(List(Step.Tool(c, entry))))
+      case PartView.Thinking(t)              => Option.when(t.trim.nonEmpty)(Block.Process(List(Step.Thinking(t))))
+      case PartView.Text(t)                  => Option.when(t.trim.nonEmpty)(Block.Assistant(t))
     }
 
   /** 一步有没有不随过程折叠的成果（交给用户的文件、开出的 thread）。 */

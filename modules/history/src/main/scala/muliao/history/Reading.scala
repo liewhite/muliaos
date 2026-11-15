@@ -1,6 +1,6 @@
 package muliao.history
 
-import muliao.contract.TimelineItem
+import muliao.contract.{EntryView, PartView, SourceKind, TimelineItem}
 
 import java.time.{Instant, ZoneId}
 import java.time.format.DateTimeFormatter
@@ -23,29 +23,26 @@ object Reading:
 
   def items(timeline: List[TimelineItem]): List[ReadItem] =
     timeline.flatMap { t =>
-      t.kind match
-        case "context"    => t.text.map(ReadItem("CONTEXT", None, t.startedAt, _, clippable = true)).toList
-        case "compaction" => t.text.map(ReadItem("COMPACTION", None, t.startedAt, _, clippable = true)).toList
-        case "notice"     => List(ReadItem(s"NOTICE ${t.noticeKind.getOrElse("Info")}", None, t.startedAt, t.text.getOrElse(""), clippable = false))
-        case "letter" =>
-          val source = t.source.getOrElse("EVENT")
-          val files  = if t.files.isEmpty then "" else "\n附件：" + t.files.map(f => s"${f.name}（${f.mediaType}，${f.size} 字节）").mkString("，")
-          List(ReadItem(source, t.sourceDetail, t.startedAt, t.text.getOrElse("") + files, clippable = source == "EVENT"))
-        case "reply" =>
-          val cut = if t.interrupted then List(ReadItem("NOTICE Interrupted", None, t.finishedAt, "这条回复生成到一半被打断，上面是已生成的部分", clippable = false)) else Nil
-          t.parts.flatMap { p =>
-            (p.kind, p.text, p.call) match
-              case ("text", Some(text), _) => List(ReadItem("ASSISTANT", None, t.startedAt, text, clippable = false))
-              case ("call", _, Some(c)) =>
+      t.entry match
+        case EntryView.Context(text)     => List(ReadItem("CONTEXT", None, t.startedAt, text, clippable = true))
+        case EntryView.Compaction(text)  => List(ReadItem("COMPACTION", None, t.startedAt, text, clippable = true))
+        case EntryView.Notice(kind, text) => List(ReadItem(s"NOTICE ${kind.label}", None, t.startedAt, text, clippable = false))
+        case EntryView.Letter(source, detail, text, fs, _) =>
+          val files = if fs.isEmpty then "" else "\n附件：" + fs.map(f => s"${f.name}（${f.mediaType}，${f.size} 字节）").mkString("，")
+          List(ReadItem(source.label, detail, t.startedAt, text + files, clippable = source == SourceKind.Event))
+        case EntryView.Reply(parts, _, _, interrupted) =>
+          val cut = if interrupted then List(ReadItem("NOTICE Interrupted", None, t.finishedAt, "这条回复生成到一半被打断，上面是已生成的部分", clippable = false)) else Nil
+          parts.flatMap {
+              case PartView.Text(text) => List(ReadItem("ASSISTANT", None, t.startedAt, text, clippable = false))
+              case PartView.Call(c) =>
                 val call = ReadItem(s"call ${c.name}", None, c.startedAt.getOrElse(t.finishedAt), c.args, clippable = true)
                 val result = c.result.map { r =>
                   val images = if r.images.isEmpty then "" else s"\n[图片 ${r.images.size} 张]"
                   ReadItem(s"${if r.isError then "error" else "result"} ${c.name}", None, c.finishedAt.getOrElse(t.finishedAt), r.text + images, clippable = true)
                 }
                 call :: result.toList
-              case _ => Nil // 思考不读出
+              case PartView.Thinking(_) => Nil // 思考不读出
           } ++ cut
-        case _ => Nil
     }
 
   /** 一条的写法：编号、时间、标签，正文另起一行；可截断的超过 `clip` 字（0 不截）时截断并说明。 */

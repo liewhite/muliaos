@@ -348,9 +348,9 @@ final class TranscriptView:
       )
     case Block.Notice(kind, text, at) =>
       kind match
-        case "Stopped" => note("CircleStop", if text.isEmpty then "已停止" else text)
-        case "Failed"  => div(cls := "flex flex-col gap-1 self-stretch rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground", div(s"运行失败了（${Ui.formatTime(at)}）"), pre(cls := Ui.CodeBlock, text))
-        case _         => note("Info", text)
+        case NoticeKind.Stopped => note("CircleStop", if text.isEmpty then "已停止" else text)
+        case NoticeKind.Failed  => div(cls := "flex flex-col gap-1 self-stretch rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground", div(s"运行失败了（${Ui.formatTime(at)}）"), pre(cls := Ui.CodeBlock, text))
+        case NoticeKind.Info    => note("Info", text)
     case Block.Interrupted => note("CircleStop", "已停止（生成到一半）")
 
   /** 时间线条目 → 带键的展示块（键在数据刷新间稳定，用来复用 DOM 与记住展开状态）。 */
@@ -386,7 +386,11 @@ final class TranscriptView:
 
   /** 没有被任何委派调用对上的 thread（如调用在压缩前、或参数对不上），列在最后。 */
   def unlinkedThreads(items: List[TimelineItem], ctx: TranscriptCtx): Option[HtmlElement] =
-    val linked = items.flatMap(_.parts.flatMap(_.call)).flatMap(ctx.threadOf).map(_.id).toSet
+    val calls  = items.flatMap(_.entry match
+      case EntryView.Reply(parts, _, _, _) => parts.collect { case PartView.Call(c) => c }
+      case _                               => Nil
+    )
+    val linked = calls.flatMap(ctx.threadOf).map(_.id).toSet
     val rest   = ctx.threads.filterNot(t => linked(t.id))
     Option.when(rest.nonEmpty)(
       div(
@@ -398,6 +402,6 @@ final class TranscriptView:
 
   /** 排队中的消息（运行中发来的，下一次请求模型前一起交给它）。 */
   def queued(q: QueuedView): HtmlElement =
-    From.of(Some(q.source), None) match
+    From.of(q.source, None) match
       case From.Event(k) => collapsible(s"q:${q.id}", span(cls := "truncate", q.text.linesIterator.nextOption().getOrElse("")), lead = Seq(Icon("BellDot", "size-3.5 shrink-0"), span(cls := "shrink-0", eventKind(k))))(pre(cls := Ui.CodeBlock, q.text))
       case f             => userBubble(q.text, q.files, fromLabel(f), pending = true)

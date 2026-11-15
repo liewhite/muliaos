@@ -103,7 +103,7 @@ object SessionsHttpSpec extends ZIOSpecDefault:
           page.items.size == 1,
           hit.body.fromJson[SessionPage].toOption.get.items.size == 1,
           miss.body.fromJson[SessionPage].toOption.get.items.isEmpty,
-          ev.fromJson[LiveView].toOption.exists(v => v.kind == "snapshot" && v.parts.head.text.contains("正在写")),
+          ev.fromJson[LiveView].toOption.exists(v => v.isInstanceOf[LiveView.Snapshot] && v.parts.head.text.contains("正在写")),
           busy.status == 409,
           st.status == 204,
           det.body.fromJson[SessionDetail].toOption.exists(_.run.exists(_.state == RunState.Stopped)),

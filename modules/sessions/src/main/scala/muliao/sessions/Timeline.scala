@@ -31,13 +31,13 @@ object Timeline:
       finishedAt = c.finishedAt
     )
 
-  /** 一段回复。工具调用有记录时带上状态与结果。 */
+  /** 一段回复。工具调用有记录时带上状态与结果；还没落库的（正在生成）是待执行。 */
   def part(p: ReplyPart, calls: Map[CallId, Call], display: String => Display): PartView = p match
-    case ReplyPart.Text(t, _)     => PartView("text", Some(t), None)
-    case ReplyPart.Thinking(t, _) => PartView("thinking", Some(t), None)
+    case ReplyPart.Text(t, _)     => PartView.Text(t)
+    case ReplyPart.Thinking(t, _) => PartView.Thinking(t)
     case ReplyPart.ToolCall(id, name, args, _) =>
-      val view = calls.get(CallId.wrap(id)).map(call(_, display)).getOrElse(CallView(CallId.wrap(id), name, args, display(name), CallState.Pending, None, None, None, None))
-      PartView("call", None, Some(view))
+      val cid = CallId.wrap(id)
+      PartView.Call(calls.get(cid).map(call(_, display)).getOrElse(CallView(cid, name, args, display(name), CallState.Pending, None, None, None, None)))
 
   def usage(u: muliao.models.llm.Usage): UsageView = UsageView(u.input, u.output, u.cacheRead, u.cacheWrite)
 
@@ -50,20 +50,14 @@ object Timeline:
 
   def items(entries: List[Entry], calls: Map[Long, List[Call]], uploads: Map[FileId, UploadRow], display: String => Display): List[TimelineItem] =
     entries.map { e =>
-      val base = TimelineItem(e.id, e.body.entryKind.label, e.run.map(_.value), e.startedAt, e.finishedAt)
-      e.body match
-        case EntryBody.Context(t) => base.copy(text = Some(t))
+      val view = e.body match
+        case EntryBody.Context(t) => EntryView.Context(t)
         case EntryBody.Mail(l) =>
-          base.copy(
-            source = Some(l.source.label),
-            sourceDetail = letterSource(l),
-            text = Some(l.text),
-            files = l.files.toList.flatMap(uploads.get).map(file),
-            checkIn = l.checkIn
-          )
+          EntryView.Letter(l.source.sourceKind, letterSource(l), l.text, l.files.toList.flatMap(uploads.get).map(file), l.checkIn)
         case EntryBody.Reply(parts, model, u, _, interrupted) =>
           val byId = calls.getOrElse(e.id, Nil).map(c => c.callId -> c).toMap
-          base.copy(parts = parts.toList.map(part(_, byId, display)), model = Some(model), usage = Some(usage(u)), interrupted = interrupted)
-        case EntryBody.Compaction(s, _) => base.copy(text = Some(s))
-        case EntryBody.Notice(k, t)     => base.copy(noticeKind = Some(k.toString), text = Some(t))
+          EntryView.Reply(parts.toList.map(part(_, byId, display)), model, usage(u), interrupted)
+        case EntryBody.Compaction(s, _) => EntryView.Compaction(s)
+        case EntryBody.Notice(k, t)     => EntryView.Notice(k, t)
+      TimelineItem(e.id, e.run.map(_.value), e.startedAt, e.finishedAt, view)
     }

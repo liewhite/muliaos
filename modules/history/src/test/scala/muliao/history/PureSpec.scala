@@ -69,11 +69,11 @@ object PureSpec extends ZIOSpecDefault:
       val call = CallView(CallId.wrap("c1"), "run_shell", """{"command":"ls"}""", Display.Terminal, CallState.Done, Some(ResultView("a\nb", Nil, isError = false)), None, Some(at(9, 1)), Some(at(9, 2)))
       val bad  = CallView(CallId.wrap("c2"), "read_file", "{}", Display.Code, CallState.Done, Some(ResultView("没有这个文件", List(ImageRef("image/png", "s")), isError = true)), None, Some(at(9, 3)), Some(at(9, 4)))
       val tl = List(
-        TimelineItem(1, "context", Some(1), at(9, 0), at(9, 0), text = Some("当前时间 ...")),
-        TimelineItem(2, "letter", Some(1), at(9, 0), at(9, 0), source = Some("USER"), text = Some("帮我看看目录" * 300)),
-        TimelineItem(3, "reply", Some(1), at(9, 1), at(9, 1), parts = List(PartView("thinking", Some("想一想"), None), PartView("text", Some("好的"), None), PartView("call", None, Some(call)), PartView("call", None, Some(bad)))),
-        TimelineItem(4, "letter", Some(2), at(10, 0), at(10, 0), source = Some("TRIGGER"), sourceDetail = Some("daily"), text = Some("每日检查")),
-        TimelineItem(5, "notice", Some(2), at(10, 1), at(10, 1), noticeKind = Some("Failed"), text = Some("模型不可用"))
+        TimelineItem(1, Some(1), at(9, 0), at(9, 0), EntryView.Context("当前时间 ...")),
+        TimelineItem(2, Some(1), at(9, 0), at(9, 0), EntryView.Letter(SourceKind.User, None, "帮我看看目录" * 300, Nil, checkIn = false)),
+        TimelineItem(3, Some(1), at(9, 1), at(9, 1), EntryView.Reply(List(PartView.Thinking("想一想"), PartView.Text("好的"), PartView.Call(call), PartView.Call(bad)), "m", UsageView(0, 0, 0, 0), interrupted = false)),
+        TimelineItem(4, Some(2), at(10, 0), at(10, 0), EntryView.Letter(SourceKind.Trigger, Some("daily"), "每日检查", Nil, checkIn = false)),
+        TimelineItem(5, Some(2), at(10, 1), at(10, 1), EntryView.Notice(NoticeKind.Failed, "模型不可用"))
       )
       val xs = Reading.items(tl)
       def pick(f: ReadFilter) = xs.filter(f.accepts).map(_.label)

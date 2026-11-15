@@ -2,9 +2,8 @@ package muliao.models.llm
 
 import zio.Chunk
 
-/** 增量长在段的哪一部分。 */
-enum Growth:
-  case Text, Thinking, ToolArgs
+/** 增量长在段的哪一部分（定义在 contract，实时事件里原样给界面）。 */
+export muliao.contract.Growth
 
 /** 一次请求的流式事件。最后一个总是 [[ReplyEvent.Finished]]（流中途出错则以失败结束、没有它）。
   *
