@@ -165,15 +165,18 @@ object Jobs:
         _    <- db.write(Repo.setReported(row.id))
       yield ()
 
-    /** 「，运行了 …」：还没结束的算到 `t`。 */
-    private def ran(row: JobRow, t: Long): String = s"，运行了 ${Durations.human(row.endedAt.getOrElse(t) - row.startedAt)}"
+    /** 「，运行了 …」：从开始算到 `until`。 */
+    private def ran(row: JobRow, until: Long): String = s"，运行了 ${Durations.human(until - row.startedAt)}"
+
+    /** 已结束的算到结束时间，还在跑的算到 `now`。 */
+    private def ranSoFar(row: JobRow, now: Long): String = ran(row, row.endedAt.getOrElse(now))
 
     private def endText(row: JobRow, ended: Ended): IO[AppError, String] =
       val advice = ended match
         case Ended.Interrupted =>
           "：服务正常关停时会结束它，意外退出时进程可能还在（平台没有接管，也没有杀它）。看日志和相关进程确认结果，需要的话重新起"
         case _ => ""
-      val head = s"[后台任务 ${row.id.value} ${ended.verb}] ${ended.detail(row.endedAt.fold("")(_ => ran(row, 0L)))}$advice。"
+      val head = s"[后台任务 ${row.id.value} ${ended.verb}] ${ended.detail(row.endedAt.fold("")(ran(row, _)))}$advice。"
       tail(row.id, 20).map { last =>
         val shown = if last.isBlank then "（没有输出）" else last
         s"$head\n命令：${row.label}\n日志：${logName(row.id)}（在工作目录下），最后几行：\n$shown"
@@ -189,7 +192,7 @@ object Jobs:
         t    <- now
         last <- tail(row.id, tailLines)
       yield
-        val state = Ended.of(row).fold(s"运行中${ran(row, t)}")(e => s"${e.verb}，${e.detail(ran(row, t))}")
+        val state = Ended.of(row).fold(s"运行中${ranSoFar(row, t)}")(e => s"${e.verb}，${e.detail(ranSoFar(row, t))}")
         s"后台任务 ${row.id.value}：$state\n命令：${row.label}\n日志：${logName(row.id)}，最后 $tailLines 行：\n${if last.isBlank then "（没有输出）" else last}"
 
     def brief(id: JobId): IO[AppError, String] =
@@ -197,7 +200,7 @@ object Jobs:
         row  <- db.read(Repo.job(id)).someOrFail(AppError.notFound(s"没有后台任务 ${id.value}"))
         t    <- now
         last <- tail(id, 5)
-      yield s"${ran(row, t).drop(1)}；日志最后几行：\n${if last.isBlank then "（还没有输出）" else last}"
+      yield s"${ranSoFar(row, t).drop(1)}；日志最后几行：\n${if last.isBlank then "（还没有输出）" else last}"
 
     def kill(id: JobId): UIO[Boolean] =
       registry.get.map(_.get(id)).flatMap {

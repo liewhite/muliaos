@@ -184,10 +184,7 @@ object Triggers:
                for
                  cur <- loadTx(id)
                  _   <- ZIO.when(cur.mode.finished)(ZIO.fail(AppError.conflict(s"触发器 ${cur.name.value} 已结束，不能再改")))
-                 m <- ZIO.foreach(patch.config)(c =>
-                        if c.kind == cur.mode.kind then mode(c, t0)
-                        else ZIO.fail(AppError.invalid(s"不能把 ${cur.mode.kind.label} 改成 ${c.kind.label}：种类不变，要换种类就删掉重建"))
-                      )
+                 m   <- ZIO.foreach(patch.config)(mode(_, t0))
                  pre <- if patch.removePrecheck then ZIO.none else ZIO.foreach(patch.precheck)(precheck).map(_.orElse(cur.precheck))
                  prompt <- ZIO.foreach(patch.prompt)(validPrompt).map(_.getOrElse(cur.prompt))
                  rev     = revise(cur, m, pre, prompt, patch.enabled.getOrElse(cur.mode.enabled), t0)

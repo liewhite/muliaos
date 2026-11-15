@@ -164,7 +164,7 @@ private[sessions] final class Driver(
                                 ModelView.searchText(parts), started, t)
                             )
                    _ <- Repo.insertCalls(calls.zipWithIndex.map((c, i) =>
-                          ToolCallRow(entry, CallId.wrap(c.id), id, i, c.name, c.args, CallState.Pending, None, None, None, None)
+                          ToolCallRow(entry, CallId.wrap(c.id), id, i, c.name, c.args, CallStatus.Pending.state, None, None, None, None)
                         ))
                    _ <- requests.recordUsage(kit, reply.usage, t)
                    _ <- Repo.setRunState(run, RunState.Finished, None, Some(t)).when(calls.isEmpty)

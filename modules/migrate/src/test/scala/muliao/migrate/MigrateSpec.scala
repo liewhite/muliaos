@@ -122,7 +122,9 @@ object MigrateSpec extends ZIOSpecDefault:
         Some("""{"skipped":2}"""), true, None, None, Some("""{"command":"cat /Users/u/.muliao/muliao.log","fire_when":"changed"}"""), Some("old"), None, None, 0)
       val r = Convert.trigger(t, java.time.ZoneId.of("Asia/Shanghai"), 9, rw.text)
       val off = Convert.trigger(t.copy(enabled = false), java.time.ZoneId.of("Asia/Shanghai"), 9)
+      val cron = Convert.trigger(t.copy(kind = "schedule", config = """{"cron":"* * * * *"}"""), java.time.ZoneId.of("Asia/Shanghai"), 9)
       assertTrue(
+        cron.map(_._1.nextAt) == Right(Some(60000L)),
         r.map(_._1.enabled) == Right(true),
         off.map(_._1.enabled) == Right(false),
         r.map(_._1.prompt) == Right("看 ~/.muliao-scala/assets/x"),
