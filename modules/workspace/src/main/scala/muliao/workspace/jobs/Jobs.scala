@@ -1,12 +1,12 @@
 package muliao.workspace.jobs
 
-import muliao.contract.{AgentId, JobId, JobStatus, JobView, SessionId, Topic}
+import muliao.contract.{AgentId, EventKind, JobId, JobStatus, JobView, SessionId, Topic}
 import muliao.exec.{Exec, Sandbox, Stderr}
 import muliao.platform.AppError
 import muliao.platform.db.{Database, Tx}
 import muliao.platform.events.ChangeBus
 import muliao.resources.{AgentCommand, AgentExec, ResourcePaths}
-import muliao.sessions.{EventKind, Letter, Sessions, Source}
+import muliao.sessions.{Letter, Sessions, Source}
 import muliao.workspace.Durations
 import muliao.workspace.store.{JobRow, Repo}
 import zio.*

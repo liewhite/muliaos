@@ -15,7 +15,7 @@ final case class BoardHttp(board: Board):
 
   def routes: List[Route] =
     List(
-      BoardApi.list.secured(q => board.list(Filter(q.status.toSet, q.assignee.map(Assignee.decode), q.owner))),
+      BoardApi.list.secured(q => board.list(Filter(q.status.toSet, q.assignee, q.owner))),
       BoardApi.get.secured(board.show),
       BoardApi.create.secured(n =>
         board

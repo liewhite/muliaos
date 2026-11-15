@@ -53,6 +53,7 @@ object Assignee:
 
   given JsonCodec[Assignee] = JsonCodec.string.transform(decode, encode)
   given Schema[Assignee]    = Schema.string[Assignee].description("`user` 或 agent 编号")
+  given Codec[String, Assignee, CodecFormat.TextPlain] = Codec.string.map(decode)(encode)
 
 /** 列表里的一个 issue。
   * @param assigneeState 指派的 agent 处理它的会话在做什么；没指派 agent 或还没有会话时为空
@@ -139,7 +140,7 @@ final case class SendBackIn(reason: String) derives JsonCodec, Schema
 final case class StopIssueIn(status: IssueStatus, message: Option[String] = None) derives JsonCodec, Schema
 
 /** issue 列表的筛选：`status` 不给是全部；`assignee` 是 `user` 或 agent 编号；`owner` 是 agent 编号。 */
-final case class IssueQuery(status: List[IssueStatus] = Nil, assignee: Option[String] = None, owner: Option[AgentId] = None)
+final case class IssueQuery(status: List[IssueStatus] = Nil, assignee: Option[Assignee] = None, owner: Option[AgentId] = None)
 
 object BoardApi:
   private val issues = Api.secure.in("issues")
@@ -147,7 +148,7 @@ object BoardApi:
 
   val list: Endpoint[Option[String], IssueQuery, ApiError, List[IssueSummary], Any] =
     issues.get
-      .in(query[List[IssueStatus]]("status").and(query[Option[String]]("assignee")).and(query[Option[AgentId]]("owner")).mapTo[IssueQuery])
+      .in(query[List[IssueStatus]]("status").and(query[Option[Assignee]]("assignee")).and(query[Option[AgentId]]("owner")).mapTo[IssueQuery])
       .out(jsonBody[List[IssueSummary]])
       .name("listIssues")
       .refreshedBy(Topic.Issues)

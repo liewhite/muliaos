@@ -44,19 +44,12 @@ object Timeline:
 
   def usage(u: muliao.models.llm.Usage): UsageView = UsageView(u.input, u.output, u.cacheRead, u.cacheWrite)
 
-  def letterSource(l: Letter): Option[String] = l.source match
-    case Source.User                => None
-    case Source.Trigger(n)          => Some(n.value)
-    case Source.Issue(i)            => Some(s"#${i.value}")
-    case Source.Delegation(from, a) => Some(s"${a.value}（会话 ${from.value}）")
-    case Source.Event(k)            => Some(k.label)
-
   def items(entries: List[Entry], calls: Map[Long, List[Call]], uploads: Map[FileId, UploadRow], display: Timeline.Shows): List[TimelineItem] =
     entries.map { e =>
       val view = e.body match
         case EntryBody.Context(t) => EntryView.Context(t)
         case EntryBody.Mail(l) =>
-          EntryView.Letter(l.source.sourceKind, letterSource(l), l.text, l.files.toList.flatMap(uploads.get).map(file), l.checkIn)
+          EntryView.Letter(l.source.view, l.text, l.files.toList.flatMap(uploads.get).map(file), l.checkIn)
         case EntryBody.Reply(parts, model, u, _, interrupted) =>
           val byId = calls.getOrElse(e.id, Nil).map(c => c.callId -> c).toMap
           EntryView.Reply(parts.toList.map(part(_, byId, display)), model, usage(u), interrupted)

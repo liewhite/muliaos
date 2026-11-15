@@ -70,9 +70,9 @@ object PureSpec extends ZIOSpecDefault:
       val bad  = CallView(CallId.wrap("c2"), "read_file", "{}", Display.Code(None), CallState.Done, Some(ResultView("没有这个文件", List(ImageRef("image/png", "s")), isError = true)), None, Some(at(9, 3)), Some(at(9, 4)))
       val tl = List(
         TimelineItem(1, Some(1), at(9, 0), at(9, 0), EntryView.Context("当前时间 ...")),
-        TimelineItem(2, Some(1), at(9, 0), at(9, 0), EntryView.Letter(SourceKind.User, None, "帮我看看目录" * 300, Nil, checkIn = false)),
+        TimelineItem(2, Some(1), at(9, 0), at(9, 0), EntryView.Letter(SourceView.User, "帮我看看目录" * 300, Nil, checkIn = false)),
         TimelineItem(3, Some(1), at(9, 1), at(9, 1), EntryView.Reply(List(PartView.Thinking("想一想"), PartView.Text("好的"), PartView.Call(call), PartView.Call(bad)), "m", UsageView(0, 0, 0, 0), interrupted = false)),
-        TimelineItem(4, Some(2), at(10, 0), at(10, 0), EntryView.Letter(SourceKind.Trigger, Some("daily"), "每日检查", Nil, checkIn = false)),
+        TimelineItem(4, Some(2), at(10, 0), at(10, 0), EntryView.Letter(SourceView.Trigger(TriggerName.wrap("daily")), "每日检查", Nil, checkIn = false)),
         TimelineItem(5, Some(2), at(10, 1), at(10, 1), EntryView.Notice(NoticeKind.Failed, "模型不可用"))
       )
       val xs = Reading.items(tl)

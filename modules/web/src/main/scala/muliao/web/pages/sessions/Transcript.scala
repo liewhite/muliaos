@@ -295,19 +295,20 @@ final class TranscriptView:
       Option.when(text.nonEmpty)(div(cls := "max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-accent px-3.5 py-2.5 text-accent-foreground", text))
     )
 
-  private def fromLabel(f: From): Option[Modifier[HtmlElement]] = f match
-    case From.User           => None
-    case From.Trigger(name)  => Some(Seq[Modifier[HtmlElement]](Icon("Zap", "size-3.5"), s"触发器 ${name.getOrElse("")}"))
-    case From.Issue(ref)     => Some(Seq[Modifier[HtmlElement]](Icon("KanbanSquare", "size-3.5"), ref.flatMap(_.stripPrefix("#").toLongOption).flatMap(IssueId.make(_).toOption).fold[Modifier[HtmlElement]]("issue")(n => Ui.appLink(Route.issue(n).url)(cls := "text-accent hover:underline", s"issue #${n.value}"))))
-    case From.Delegation(by) => Some(Seq[Modifier[HtmlElement]](Icon("GitBranch", "size-3.5"), s"来自 ${by.getOrElse("上级会话")} 的委派"))
-    case From.Event(k)       => Some(Seq[Modifier[HtmlElement]](Icon("BellDot", "size-3.5"), k.getOrElse("事件")))
+  private def fromLabel(src: SourceView): Option[Modifier[HtmlElement]] = src match
+    case SourceView.User          => None
+    case SourceView.Trigger(name) => Some(Seq[Modifier[HtmlElement]](Icon("Zap", "size-3.5"), s"触发器 ${name.value}"))
+    case SourceView.Issue(n) =>
+      Some(Seq[Modifier[HtmlElement]](Icon("KanbanSquare", "size-3.5"), Ui.appLink(Route.issue(n).url)(cls := "text-accent hover:underline", s"issue #${n.value}")))
+    case SourceView.Delegation(from, agent) =>
+      Some(Seq[Modifier[HtmlElement]](Icon("GitBranch", "size-3.5"), "来自 ", Ui.appLink(Route.session(from).url)(cls := "text-accent hover:underline", agent.value), " 的委派"))
+    case SourceView.Event(k) => Some(Seq[Modifier[HtmlElement]](Icon("BellDot", "size-3.5"), eventKind(k)))
 
-  private def eventKind(k: Option[String]): String = k match
-    case Some("job")        => "后台任务"
-    case Some("delegation") => "委派"
-    case Some("wake")       => "到点唤醒"
-    case Some(other)        => other
-    case None               => "事件"
+  private def eventKind(k: EventKind): String = k match
+    case EventKind.Job        => "后台任务"
+    case EventKind.Delegation => "委派"
+    case EventKind.Wake       => "到点唤醒"
+    case EventKind.CheckIn    => "进度检查"
 
   // ---- 一块 ----
 
@@ -360,7 +361,7 @@ final class TranscriptView:
         case Block.Approval(c, _)                => s"appr:${c.id}"
         case Block.Letter(_, _, _, at)           => s"l:$at"
         case Block.Event(_, _, at)               => s"e:$at"
-        case Block.CheckIns(k, cs)               => s"c:$k:${cs.head._2}"
+        case Block.CheckIns(k, cs)               => s"c:${k.label}:${cs.head._2}"
         case Block.Compaction(_, at)             => s"cp:$at"
         case Block.Notice(_, _, at)              => s"n:$at"
         case Block.Context(_, at)                => s"ctx:$at"
@@ -397,6 +398,6 @@ final class TranscriptView:
 
   /** 排队中的消息（运行中发来的，下一次请求模型前一起交给它）。 */
   def queued(q: QueuedView): HtmlElement =
-    From.of(q.source, None) match
-      case From.Event(k) => collapsible(s"q:${q.id}", span(cls := "truncate", q.text.linesIterator.nextOption().getOrElse("")), lead = Seq(Icon("BellDot", "size-3.5 shrink-0"), span(cls := "shrink-0", eventKind(k))))(pre(cls := Ui.CodeBlock, q.text))
-      case f             => userBubble(q.text, q.files, fromLabel(f), pending = true)
+    q.source match
+      case SourceView.Event(k) => collapsible(s"q:${q.id}", span(cls := "truncate", q.text.linesIterator.nextOption().getOrElse("")), lead = Seq(Icon("BellDot", "size-3.5 shrink-0"), span(cls := "shrink-0", eventKind(k))))(pre(cls := Ui.CodeBlock, q.text))
+      case src                 => userBubble(q.text, q.files, fromLabel(src), pending = true)

@@ -193,6 +193,42 @@ enum SourceKind(val label: String) extends Labeled:
 
 object SourceKind extends Labels[SourceKind]("来信来源", SourceKind.values)
 
+/** 平台事件的种类（只用于展示）。 */
+enum EventKind(val label: String) extends Labeled:
+  /** 约的唤醒到点 */
+  case Wake       extends EventKind("wake")
+  /** 异步工作的心跳检查 */
+  case CheckIn    extends EventKind("check-in")
+  /** 后台任务结束 */
+  case Job        extends EventKind("job")
+  /** 委派回报 */
+  case Delegation extends EventKind("delegation")
+
+object EventKind extends Labels[EventKind]("事件种类", EventKind.values)
+
+/** 来信的来源。JSON 里 `kind` 是分支名。 */
+@jsonDiscriminator("kind")
+enum SourceView derives JsonCodec:
+  case User
+  case Trigger(name: TriggerName)
+  case Issue(id: IssueId)
+  /** 委派：发起会话与发起方 agent 名 */
+  case Delegation(from: SessionId, agent: AgentName)
+  /** 平台事件：后台任务结束、委派回报、唤醒、心跳检查 */
+  case Event(event: EventKind)
+
+  def kind: SourceKind = this match
+    case User             => SourceKind.User
+    case Trigger(_)       => SourceKind.Trigger
+    case Issue(_)         => SourceKind.Issue
+    case Delegation(_, _) => SourceKind.Delegation
+    case Event(_)         => SourceKind.Event
+
+object SourceView:
+  given Schema[SourceView] =
+    import Tagged.config
+    Schema.derived
+
 /** 时间线里提示的种类。 */
 enum NoticeKind(val label: String) extends Labeled:
   case Failed  extends NoticeKind("Failed")
@@ -206,8 +242,8 @@ object NoticeKind extends Labels[NoticeKind]("提示种类", NoticeKind.values)
 enum EntryView derives JsonCodec:
   /** 本次运行上下文 */
   case Context(text: String)
-  /** 来信。`sourceDetail` 是触发器名、issue 号、发起方或事件种类 */
-  case Letter(source: SourceKind, sourceDetail: Option[String], text: String, files: List[FileView], checkIn: Boolean)
+  /** 来信 */
+  case Letter(source: SourceView, text: String, files: List[FileView], checkIn: Boolean)
   /** 模型回复；`interrupted`：生成到一半被停止 */
   case Reply(parts: List[PartView], model: String, usage: UsageView, interrupted: Boolean)
   /** 压缩点：它之前的部分已由摘要代替（原文仍在） */
@@ -225,7 +261,7 @@ final case class TimelineItem(id: Long, run: Option[Long], startedAt: Long, fini
 
 // ---- 会话详情 ----
 
-final case class QueuedView(id: Long, source: SourceKind, text: String, files: List[FileView], checkIn: Boolean, at: Long) derives JsonCodec, Schema
+final case class QueuedView(id: Long, source: SourceView, text: String, files: List[FileView], checkIn: Boolean, at: Long) derives JsonCodec, Schema
 
 /** 进行中的异步工作在等什么。JSON 里 `kind` 是分支名。 */
 @jsonDiscriminator("kind")

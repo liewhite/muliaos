@@ -84,7 +84,7 @@ enum Route:
         case Page.Issues(f) =>
           "/issues" + Query.render(
             "status"   -> Option.when(f.status.nonEmpty)(f.status.map(_.label).mkString(",")),
-            "assignee" -> f.assignee,
+            "assignee" -> f.assignee.map(Assignee.encode),
             "owner"    -> f.owner.map(_.value)
           )
         case Page.Issue(id, reject) => s"/issues/${id.value}" + Query.render("review" -> Option.when(reject)("reject"))
@@ -139,7 +139,7 @@ object Route:
       case "issues" :: Nil =>
         Some(issues(IssueQuery(
           status = str("status").toList.flatMap(_.split(',').toList).flatMap(IssueStatus.parse(_).toOption).distinct,
-          assignee = str("assignee"),
+          assignee = str("assignee").map(Assignee.decode),
           owner = str("owner").flatMap(o => AgentId.make(o).toOption)
         )))
       case "issues" :: id :: Nil =>

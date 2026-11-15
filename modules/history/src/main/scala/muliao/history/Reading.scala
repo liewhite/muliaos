@@ -1,6 +1,6 @@
 package muliao.history
 
-import muliao.contract.{EntryView, PartView, SourceKind, TimelineItem}
+import muliao.contract.{EntryView, PartView, SourceKind, SourceView, TimelineItem}
 
 import java.time.{Instant, ZoneId}
 import java.time.format.DateTimeFormatter
@@ -30,9 +30,9 @@ object Reading:
         case EntryView.Context(text)     => List(ReadItem("CONTEXT", None, t.startedAt, text, clippable = true))
         case EntryView.Compaction(text)  => List(ReadItem("COMPACTION", None, t.startedAt, text, clippable = true))
         case EntryView.Notice(kind, text) => List(ReadItem(s"NOTICE ${kind.label}", None, t.startedAt, text, clippable = false))
-        case EntryView.Letter(source, detail, text, fs, _) =>
+        case EntryView.Letter(source, text, fs, _) =>
           val files = if fs.isEmpty then "" else "\n附件：" + fs.map(f => s"${f.name}（${f.mediaType}，${f.size} 字节）").mkString("，")
-          List(ReadItem(source.label, detail, t.startedAt, text + files, clippable = source == SourceKind.Event))
+          List(ReadItem(source.kind.label, detail(source), t.startedAt, text + files, clippable = source.kind == SourceKind.Event))
         case EntryView.Reply(parts, _, _, interrupted) =>
           val cut = if interrupted then List(ReadItem("NOTICE Interrupted", None, t.finishedAt, "这条回复生成到一半被打断，上面是已生成的部分", clippable = false)) else Nil
           parts.flatMap {
@@ -47,6 +47,14 @@ object Reading:
               case PartView.Thinking(_) => Nil // 思考不读出
           } ++ cut
     }
+
+  /** 来信来源的补充：触发器名、issue 号、委派方、事件种类。 */
+  private def detail(s: SourceView): Option[String] = s match
+    case SourceView.User                => None
+    case SourceView.Trigger(n)          => Some(n.value)
+    case SourceView.Issue(i)            => Some(s"#${i.value}")
+    case SourceView.Delegation(from, a) => Some(s"${a.value}，会话 ${from.value}")
+    case SourceView.Event(k)            => Some(k.label)
 
   /** 一条的写法：编号、时间、标签，正文另起一行；可截断的超过 `clip` 字（0 不截）时截断并说明。 */
   def render(n: Int, i: ReadItem, clip: Int, zone: ZoneId): String =

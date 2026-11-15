@@ -19,7 +19,7 @@ object RouteSpec extends ZIOSpecDefault:
     Route.agentNew,
     Route.agent(AgentId.wrap("x")),
     Route.issues(),
-    Route.issues(IssueQuery(List(IssueStatus.InProgress, IssueStatus.Done), Some("user"), Some(AgentId.wrap("o")))),
+    Route.issues(IssueQuery(List(IssueStatus.InProgress, IssueStatus.Done), Some(Assignee.User), Some(AgentId.wrap("o")))),
     Route.issue(IssueId.wrap(5)),
     Route.Single(Page.Issue(IssueId.wrap(5), reject = true)),
     Route.assets(),

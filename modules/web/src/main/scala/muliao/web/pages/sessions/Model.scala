@@ -82,28 +82,12 @@ object Model:
     case Thinking(text: String)
     case Tool(call: CallView, entry: Long)
 
-  /** 来信的来源。 */
-  enum From:
-    case User
-    case Trigger(name: Option[String])
-    case Issue(ref: Option[String])
-    case Delegation(from: Option[String])
-    case Event(kind: Option[String])
-
-  object From:
-    def of(source: SourceKind, detail: Option[String]): From = source match
-      case SourceKind.Trigger    => Trigger(detail)
-      case SourceKind.Issue      => Issue(detail)
-      case SourceKind.Delegation => Delegation(detail)
-      case SourceKind.Event      => Event(detail)
-      case SourceKind.User       => User
-
   enum Block:
     case Context(text: String, at: Long)
-    case Letter(from: From, text: String, files: List[FileView], at: Long)
+    case Letter(from: SourceView, text: String, files: List[FileView], at: Long)
     /** 运行中检查（同一来源连续的合成一条） */
-    case CheckIns(kind: Option[String], checks: List[(String, Long)])
-    case Event(kind: Option[String], text: String, at: Long)
+    case CheckIns(kind: EventKind, checks: List[(String, Long)])
+    case Event(kind: EventKind, text: String, at: Long)
     case Assistant(text: String)
     case Process(steps: List[Step])
     /** 在等用户回答的提问，或已回答的 */
@@ -121,11 +105,11 @@ object Model:
   /** 一条时间线到展示块（工具调用与结果已由后端合在一起）。 */
   def blocks(item: TimelineItem): List[Block] = item.entry match
     case EntryView.Context(text) => List(Block.Context(text, item.startedAt))
-    case EntryView.Letter(source, detail, text, files, checkIn) =>
-      From.of(source, detail) match
-        case From.Event(k) if checkIn => List(Block.CheckIns(k, List(text -> item.startedAt)))
-        case From.Event(k)            => List(Block.Event(k, text, item.startedAt))
-        case f                        => List(Block.Letter(f, text, files, item.startedAt))
+    case EntryView.Letter(source, text, files, checkIn) =>
+      source match
+        case SourceView.Event(k) if checkIn => List(Block.CheckIns(k, List(text -> item.startedAt)))
+        case SourceView.Event(k)            => List(Block.Event(k, text, item.startedAt))
+        case s                              => List(Block.Letter(s, text, files, item.startedAt))
     case EntryView.Reply(parts, _, _, interrupted) => replyBlocks(parts, item.id) ++ Option.when(interrupted)(Block.Interrupted)
     case EntryView.Compaction(summary)             => List(Block.Compaction(summary, item.startedAt))
     case EntryView.Notice(kind, text)              => List(Block.Notice(kind, text, item.startedAt))

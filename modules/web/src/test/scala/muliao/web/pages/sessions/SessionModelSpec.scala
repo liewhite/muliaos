@@ -12,7 +12,7 @@ object SessionModelSpec extends ZIOSpecDefault:
   private def reply(id: Long, parts: PartView*) = TimelineItem(id, Some(1L), 0, 0, EntryView.Reply(parts.toList, "m", UsageView(0, 0, 0, 0), interrupted = false))
   private def tool(c: CallView)                 = PartView.Call(c)
   private def text(t: String)                   = PartView.Text(t)
-  private def checkIn(at: Long)                 = TimelineItem(at, None, at, at, EntryView.Letter(SourceKind.Event, Some("job"), s"c$at", Nil, checkIn = true))
+  private def checkIn(at: Long)                 = TimelineItem(at, None, at, at, EntryView.Letter(SourceView.Event(EventKind.Job), s"c$at", Nil, checkIn = true))
   private val noThreads: CallView => Option[SessionSummary] = _ => None
 
   def spec = suite("会话页的纯逻辑")(
@@ -39,7 +39,7 @@ object SessionModelSpec extends ZIOSpecDefault:
       val bs    = foldCheckIns(groupSteps(items.flatMap(blocks), noThreads))
       assertTrue(
         bs.size == 2,
-        bs.head == Block.CheckIns(Some("job"), List("c1" -> 1L, "c3" -> 3L)),
+        bs.head == Block.CheckIns(EventKind.Job, List("c1" -> 1L, "c3" -> 3L)),
         bs(1) == Block.Assistant("做完了")
       )
     },

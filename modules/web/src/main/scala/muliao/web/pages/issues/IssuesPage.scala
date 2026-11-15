@@ -90,11 +90,11 @@ object IssuesPage:
           o => edit.onNext(_.copy(owner = o)),
           agents.map(as => Opt(Option.empty[AgentId], "所有项目") :: ownerOptions(as, None, assignable = false).map(o => o.copy(id = Some(o.id))))
         ),
-        Fields.select[Option[String]](
+        Fields.select[Option[Assignee]](
           "指派给",
           filters.map(f => Some(f.assignee)),
           a => edit.onNext(_.copy(assignee = a)),
-          agents.map(as => Opt(Option.empty[String], "所有人") :: Opt(Some(Assignee.UserKey), "我") :: as.map(a => Opt(Some(a.id.value), a.name.value)))
+          agents.map(as => Opt(Option.empty[Assignee], "所有人") :: Opt(Some(Assignee.User), "我") :: as.map(a => Opt(Some(Assignee.Agent(a.id)), a.name.value)))
         )
       ),
       statusFilter(filters, edit),

@@ -50,19 +50,6 @@ object Origin:
     case (OriginKind.Thread, Some(n))  => ThreadName.make(n).map(Thread(parent, _))
     case (k, None)                     => Left(s"${k.label} 没有引用")
 
-/** 平台事件的种类（只用于展示）。 */
-enum EventKind(val label: String) extends Labeled:
-  /** 约的唤醒到点 */
-  case Wake       extends EventKind("wake")
-  /** 异步工作的心跳检查 */
-  case CheckIn    extends EventKind("check-in")
-  /** 后台任务结束 */
-  case Job        extends EventKind("job")
-  /** 委派回报 */
-  case Delegation extends EventKind("delegation")
-
-object EventKind extends Labels[EventKind]("事件种类", EventKind.values)
-
 /** 来信的来源。用户能给任何会话写信，其他来源只能续写自己开出的会话（见 [[Source.mayWrite]]）。 */
 enum Source derives JsonCodec:
   case User
@@ -73,13 +60,13 @@ enum Source derives JsonCodec:
   /** 平台事件：后台任务结束、委派回报、唤醒、心跳检查 */
   case Event(kind: EventKind)
 
-  /** 来源的种类（时间线与 session_read 里的标签）。 */
-  def sourceKind: SourceKind = this match
-    case User             => SourceKind.User
-    case Trigger(_)       => SourceKind.Trigger
-    case Issue(_)         => SourceKind.Issue
-    case Delegation(_, _) => SourceKind.Delegation
-    case Event(_)         => SourceKind.Event
+  /** 接口里的样子（存库的 JSON 写法与接口不同，所以分两个类型）。 */
+  def view: SourceView = this match
+    case User                => SourceView.User
+    case Trigger(n)          => SourceView.Trigger(n)
+    case Issue(i)            => SourceView.Issue(i)
+    case Delegation(from, a) => SourceView.Delegation(from, a)
+    case Event(k)            => SourceView.Event(k)
 
 object Source:
   /** 这个来源能不能往这种会话里写；不能时说明原因。 */
