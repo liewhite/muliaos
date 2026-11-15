@@ -128,7 +128,12 @@ object ScheduleSpec extends ZIOSpecDefault:
                    v2 <- tg.update(v1.id, TriggerPatch(enabled = Some(true)))
                    _  <- pause(300.millis)
                    s3 <- triggerSessions(a)
+                   // 改配置时可以换种类：按新种类重算下次到期
+                   v3 <- tg.update(v1.id, TriggerPatch(config = Some(TriggerConfig.Once("2026-01-01T00:30:00Z"))))
                  yield assertTrue(
+                   v3.config == TriggerConfig.Once("2026-01-01T08:30+08:00"),
+                   v3.nextAt.contains(minute(30)),
+                   v3.enabled,
                    s2.size == 1,
                    v1.nextAt.contains(minute(11)),
                    v2.nextAt.contains(minute(16)),
