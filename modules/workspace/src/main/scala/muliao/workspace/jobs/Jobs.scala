@@ -86,8 +86,8 @@ object Jobs:
         exec     <- ZIO.service[AgentExec]
         paths    <- ZIO.service[ResourcePaths]
         registry <- Ref.make(Map.empty[JobId, Live])
-        // 关停时打断全部任务，并行收尾（每个都可能要等 TERM 之后的宽限）。不用并行子 scope 做 forkIn：任务自己结束时
-        // 关它的子 scope 会另起 fiber 去打断它自己而互等，留下永远挂着的 root fiber，关停时卡死（#897）
+        // 关停时中断全部任务，并行收尾（每个都可能要等 TERM 之后的宽限）。不用并行子 scope 做 forkIn：任务自己结束时
+        // 关它的子 scope 会另起 fiber 去中断它自己而互等，留下永远挂着的 root fiber，关停时卡死（#897）
         _ <- ZIO.addFinalizer(registry.get.flatMap { all =>
                ZIO.when(all.nonEmpty)(ZIO.logInfo(s"服务关停，结束 ${all.size} 个后台任务")) *> ZIO.foreachParDiscard(all.values)(_.fiber.interrupt)
              })

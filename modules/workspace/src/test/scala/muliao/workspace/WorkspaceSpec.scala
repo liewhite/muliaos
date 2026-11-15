@@ -272,7 +272,7 @@ object WorkspaceSpec extends ZIOSpecDefault:
         )
     },
     test("后台任务正常结束后不留下挂着的 fiber（否则服务关停时等所有 root fiber 会卡死，#897）") {
-      // 别的用例并行起的任务也在 Jobs.scala 里 fork，但都会在几秒内结束；这里等到一个都不剩
+      // 前提：本 spec 顺序执行、测试按模块单独跑一个 JVM，所以 Jobs.scala 里 fork 的 root fiber 只有本用例的；去掉 sequential 可能偶发失败
       val jobFibers: UIO[Chunk[String]] =
         Fiber.roots.flatMap(fs => ZIO.filter(fs.filter(_.location.toString.contains("Jobs.scala")))(_.poll.map(_.isEmpty))).map(_.map(_.location.toString))
       for
