@@ -16,7 +16,7 @@ object RolesPage:
     def of(r: RoleView): RoleForm = RoleForm(r.description, r.allow, r.deny)
 
   def view(): HtmlElement =
-    val roles      = Remote("agents", "assets")(Http.call(ResourcesApi.listRoles)(()))
+    val roles      = Remote(ResourcesApi.listRoles)(())
     val agents     = AgentsData.load().map(_.data.getOrElse(Nil))
     val candidates = Rules.candidates()
     // 建好一个后换一份空表单

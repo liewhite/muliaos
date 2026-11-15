@@ -47,15 +47,14 @@ private[sessions] final case class CallRunner(kernel: Kernel, files: Files, dele
 
   /** 前面的调用出了系统错误：后面的不执行。 */
   private def skipRest(id: SessionId, cs: List[Call]): IO[AppError, Unit] =
-    now.flatMap(t => db.write(ZIO.foreachDiscard(cs)(c => CallTx.finish(c, CallResult.error("[没有执行：同一回复里前面的调用出了系统错误。]"), t)) *> changed)).unit
+    now.flatMap(t => db.write(ZIO.foreachDiscard(cs)(c => CallTx.finish(c, CallResult.error("[没有执行：同一回复里前面的调用出了系统错误。]"), t)) *> touched(id, t))).unit
 
   /** 执行一个调用；系统性失败时返回原因。 */
   private def one(kit: Kit, run: RunId, c: Call, rejects: Ref[Map[String, Int]], slot: Slot): IO[AppError, Option[String]] =
     val id = kit.info.id
     for
       t0 <- now
-      _  <- db.write(Repo.setCall(c.entryId, c.callId, CallState.Running, c.pause.map(_.toJson), None, Some(t0), None) *> changed)
-      _  <- live.publish(id, LiveEvent.Changed)
+      _  <- db.write(Repo.setCall(c.entryId, c.callId, CallState.Running, c.pause.map(_.toJson), None, Some(t0), None) *> touched(id, t0))
       waiting <- info(id).map(_.userWaiting) // 运行中用户可能插话，按调用时的算
       ctx = RunContext(kit.info.agent, kit.res.agent.name, id, run, c.callId, kit.info.origin, kit.workspace, kit.res, waiting)
       args    <- slot.secrets.get.map(_.getOrElse(CallKey(c.entryId, c.callId), c.args))
@@ -63,7 +62,6 @@ private[sessions] final case class CallRunner(kernel: Kernel, files: Files, dele
       fate    <- toFate(kit, c, outcome, rejects)
       t1 <- now
       _  <- save(kit, c, fate, t0, t1)
-      _  <- live.publish(id, LiveEvent.Changed)
     yield fate match
       case Fate.Abort(_, why) => Some(why)
       case _                  => None
@@ -135,8 +133,8 @@ private[sessions] final case class CallRunner(kernel: Kernel, files: Files, dele
   private def save(kit: Kit, c: Call, fate: Fate, t0: Long, t1: Long): IO[AppError, Unit] =
     val i = kit.info
     fate match
-      case Fate.Result(r)   => db.write(CallTx.finish(c.copy(startedAt = Some(t0)), r, t1) *> changed)
-      case Fate.Abort(r, _) => db.write(CallTx.finish(c.copy(startedAt = Some(t0)), r, t1) *> changed)
+      case Fate.Result(r)   => db.write(CallTx.finish(c.copy(startedAt = Some(t0)), r, t1) *> touched(i.id, t1))
+      case Fate.Abort(r, _) => db.write(CallTx.finish(c.copy(startedAt = Some(t0)), r, t1) *> touched(i.id, t1))
       case Fate.Wait(p) =>
         db.write(
           for
@@ -144,7 +142,7 @@ private[sessions] final case class CallRunner(kernel: Kernel, files: Files, dele
             _ <- p match
                    case Pause.AwaitThread(d, _, _) => delegations.linkTx(d, CallKey(c.entryId, c.callId), t1)
                    case _                          => ZIO.unit
-            _ <- changed
+            _ <- touched(i.id, t1)
           yield ()
         ) *> info(i.id).map(_.userWaiting).flatMap { waiting =>
           p match

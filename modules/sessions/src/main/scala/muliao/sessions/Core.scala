@@ -35,14 +35,15 @@ private[sessions] object SessionInfo:
 
 /** 本领域各部分共用的底子：库、「数据变了」广播、实时事件、接进来的东西、配置，以及读会话基本信息。 */
 private[sessions] final case class Kernel(db: Database, bus: ChangeBus, live: LiveHub, hooks: SessionHooks, settings: SessionSettings, general: GeneralSettings):
-  val Topic: muliao.contract.Topic = muliao.contract.Topic.wrap("sessions")
-
   def zone: ZoneId = general.timezone
 
   def now: UIO[Long] = Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
 
-  /** 提交后广播「会话变了」。 */
-  def changed: URIO[TxHooks, Unit] = bus.publishAfterCommit(Topic)
+  /** 会话的库里数据变了（时间线、运行、调用、等待、排队的信、回答去向）就在同一个写事务里调它，是通知「该刷新了」的唯一入口：
+    * 更新会话的活动时间，提交后广播主题 sessions（列表）并给这个会话推实时事件 `Changed`（会话页）。
+    */
+  def touched(id: SessionId, t: Long): Tx[Unit] =
+    Repo.touch(id, t) *> bus.publishAfterCommit(Topic.Sessions) *> afterCommit(live.publish(id, LiveEvent.Changed))
 
   def afterCommit(effect: UIO[Unit]): URIO[TxHooks, Unit] = TxHooks.afterCommit(effect)
 

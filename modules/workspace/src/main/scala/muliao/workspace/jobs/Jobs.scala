@@ -1,9 +1,10 @@
 package muliao.workspace.jobs
 
-import muliao.contract.{AgentId, JobId, JobStatus, JobView, SessionId}
+import muliao.contract.{AgentId, JobId, JobStatus, JobView, SessionId, Topic}
 import muliao.exec.{Exec, RunningCommand}
 import muliao.platform.AppError
-import muliao.platform.db.Database
+import muliao.platform.db.{Database, Tx}
+import muliao.platform.events.ChangeBus
 import muliao.resources.{ResourcePaths, WritableScope}
 import muliao.sessions.{EventKind, Letter, Sessions, Source}
 import muliao.workspace.{AgentCommand, AgentExec, Durations}
@@ -78,16 +79,17 @@ trait Jobs:
   def cleanup(agent: AgentId): IO[AppError, Unit]
 
 object Jobs:
-  val layer: ZLayer[Database & Sessions & AgentExec & ResourcePaths, Nothing, Jobs] =
+  val layer: ZLayer[Database & ChangeBus & Sessions & AgentExec & ResourcePaths, Nothing, Jobs] =
     ZLayer.scoped(
       for
         db       <- ZIO.service[Database]
+        bus      <- ZIO.service[ChangeBus]
         sessions <- ZIO.service[Sessions]
         exec     <- ZIO.service[AgentExec]
         paths    <- ZIO.service[ResourcePaths]
         registry <- Ref.make(Map.empty[JobId, Live])
         down     <- Ref.make(false)
-        jobs      = Impl(db, sessions, exec, paths, registry, down)
+        jobs      = Impl(db, bus, sessions, exec, paths, registry, down)
         _        <- ZIO.addFinalizer(jobs.shutdown)
       yield jobs
     )
@@ -100,6 +102,7 @@ object Jobs:
 
   private final case class Impl(
       db: Database,
+      bus: ChangeBus,
       sessions: Sessions,
       exec: AgentExec,
       paths: ResourcePaths,
@@ -109,12 +112,15 @@ object Jobs:
 
     private val now = Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
 
+    /** 任务表的写都经它提交：提交后广播主题 jobs。 */
+    private def write[A](tx: Tx[A]): IO[AppError, A] = db.write(tx <* bus.publishAfterCommit(Topic.Jobs))
+
     private def logFile(agent: AgentId, id: JobId): Path = paths.workspace(agent).resolve(logName(id))
 
     def start(owner: JobOwner, cmd: AgentCommand, label: String, heartbeat: Option[Duration]): IO[AppError, JobId] =
       for
         t  <- now
-        id <- db.write(Repo.insertJob(JobRow(JobId.wrap(0L), owner.agent, owner.session, label, JobStatus.Running, None, true, t, None)))
+        id <- write(Repo.insertJob(JobRow(JobId.wrap(0L), owner.agent, owner.session, label, JobStatus.Running, None, true, t, None)))
         _ <- sessions
                .openJobWait(owner.session, id, s"后台任务 ${id.value}：$label", heartbeat)
                .tapError(_ => end(id, JobState.Exited(-1), reported = true))
@@ -150,10 +156,10 @@ object Jobs:
       yield ()
 
     private def end(id: JobId, state: JobState, reported: Boolean): UIO[Unit] =
-      now.flatMap(t => db.write(Repo.setOutcome(id, state.status, state.exitCode, t) *> ZIO.when(reported)(Repo.setReported(id)))).unit.catchAll(e => ZIO.logError(s"记后台任务 ${id.value} 的结局失败：${e.message}"))
+      now.flatMap(t => write(Repo.setOutcome(id, state.status, state.exitCode, t) *> ZIO.when(reported)(Repo.setReported(id)))).unit.catchAll(e => ZIO.logError(s"记后台任务 ${id.value} 的结局失败：${e.message}"))
 
     private def settle(id: JobId, state: JobState): IO[AppError, Unit] =
-      now.flatMap(t => db.write(Repo.setOutcome(id, state.status, state.exitCode, t))) *> db.read(Repo.job(id)).flatMap(ZIO.foreachDiscard(_)(report))
+      now.flatMap(t => write(Repo.setOutcome(id, state.status, state.exitCode, t))) *> db.read(Repo.job(id)).flatMap(ZIO.foreachDiscard(_)(report))
 
     /** 把结局作为事件交回发起会话（会话已经不等了就不投），记为已交回。 */
     private def report(row: JobRow): IO[AppError, Unit] =
@@ -228,7 +234,7 @@ object Jobs:
         live <- registry.get
         todo  = rows.filterNot(r => live.contains(r.id))
         t    <- now
-        _ <- db.write(ZIO.foreachDiscard(todo.filter(_.state == JobStatus.Running))(r => Repo.setOutcome(r.id, JobStatus.Interrupted, None, t)))
+        _ <- write(ZIO.foreachDiscard(todo.filter(_.state == JobStatus.Running))(r => Repo.setOutcome(r.id, JobStatus.Interrupted, None, t)))
         fresh <- ZIO.foreach(todo)(r => db.read(Repo.job(r.id))).map(_.flatten)
         _     <- ZIO.foreachDiscard(fresh)(report)
         _     <- ZIO.when(todo.nonEmpty)(ZIO.logInfo(s"收尾了 ${todo.size} 个上次没收尾的后台任务"))
@@ -240,7 +246,7 @@ object Jobs:
       for
         mine <- registry.get.map(_.filter(_._2.agent == agent).keys.toList)
         _    <- ZIO.foreachDiscard(mine)(kill)
-        _    <- db.write(Repo.deleteJobsOf(agent))
+        _    <- write(Repo.deleteJobsOf(agent))
       yield ()
 
     /** 服务关停：结束全部在跑的任务，标为被中断，结局留到下次启动时交回（那时会话领域已经起来了）。 */

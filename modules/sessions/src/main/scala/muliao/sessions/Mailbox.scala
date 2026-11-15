@@ -54,8 +54,7 @@ private[sessions] final case class Mailbox(kernel: Kernel, files: Files, agents:
     ZIO.foreach(dedupe)(k => Repo.hasQueuedKey(row.id, k)).map(_.contains(true)).flatMap {
       case true => ZIO.succeed(false)
       case false =>
-        Repo.enqueue(row.id, letter.toJson, dedupe, t) *> Repo.touch(row.id, t) *> changed *>
-          afterCommit(live.publish(row.id, LiveEvent.Changed)).as(true)
+        (Repo.enqueue(row.id, letter.toJson, dedupe, t) *> touched(row.id, t)).as(true)
     }
 
   /** 找到或新开目标会话，并检查这个来源能不能往里写。 */
@@ -89,7 +88,7 @@ private[sessions] final case class Mailbox(kernel: Kernel, files: Files, agents:
       _ <- ZIO.foreachDiscard(letters) { (r, l) =>
              Repo.insertEntry(EntryRow(0L, id, Some(run), EntryKind.Letter, EntryBody.Mail(l).encode, l.text, r.createdAt, t))
            }
-      _ <- ZIO.when(rows.nonEmpty)(Repo.dequeue(rows.map(_.id)))
+      _ <- ZIO.when(rows.nonEmpty)(Repo.dequeue(rows.map(_.id)) *> touched(id, t))
       _ <- addPendingReply(id, letters.flatMap(_._2.replyTo))
     yield letters.map(_._2)
 

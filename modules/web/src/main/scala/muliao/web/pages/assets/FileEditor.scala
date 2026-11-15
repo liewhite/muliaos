@@ -26,7 +26,7 @@ object FileEditor:
       saveLabel: String = "保存",
       extra: Modifier[HtmlElement] = emptyMod
   ): HtmlElement =
-    val file = Remote("assets")(Http.call(ResourcesApi.readAssetFile)(path))
+    val file = Remote(ResourcesApi.readAssetFile)(path)
     div(
       cls := "flex flex-col gap-3",
       Ui.loading(file)(data => Draft.form(data, identity[AssetFile])(draft => editor(draft, labelText, rows, hint, saveLabel, extra)))

@@ -40,8 +40,6 @@ trait Triggers:
   def run(id: TriggerId): IO[AppError, FireResult]
 
 object Triggers:
-  val Topic: muliao.contract.Topic = muliao.contract.Topic.wrap("triggers")
-
   /** 界面的触发器页（通知点开去这里）。 */
   val PageUrl = "/triggers"
 

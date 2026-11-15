@@ -1,7 +1,7 @@
 package muliao.history
 
 import muliao.board.Board
-import muliao.contract.{AgentId, SessionId}
+import muliao.contract.{AgentId, SessionId, Topic}
 import muliao.history.store.Repo
 import muliao.platform.{AppError, GeneralSettings}
 import muliao.platform.db.Database
@@ -39,8 +39,6 @@ trait History:
   def zone: ZoneId
 
 object History:
-  val Topic: muliao.contract.Topic = muliao.contract.Topic.wrap("history")
-
   val layer: URLayer[Database & ChangeBus & Sessions & Board & Agents & GeneralSettings, History] =
     ZLayer {
       for
@@ -63,7 +61,7 @@ object History:
       for
         _   <- ZIO.fail(AppError.invalid("至少要有一条")).when(entries.isEmpty)
         t   <- now
-        ids <- db.write(Repo.append(agent, session, entries, t) <* bus.publishAfterCommit(Topic))
+        ids <- db.write(Repo.append(agent, session, entries, t) <* bus.publishAfterCommit(Topic.History))
       yield ids
 
     def search(q: HistoryQuery): IO[AppError, List[HistoryEntry]] =

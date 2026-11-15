@@ -1,7 +1,7 @@
 package muliao.resources.agents
 
 import muliao.contract.{AgentState, Thinking, AssetKind}
-import muliao.contract.{AgentId, AgentName, RoleName}
+import muliao.contract.{AgentId, AgentName, RoleName, Topic}
 import muliao.platform.AppError
 import muliao.platform.db.Database
 import muliao.platform.events.ChangeBus
@@ -68,8 +68,6 @@ trait Agents:
   def resumePending: IO[AppError, Unit]
 
 object Agents:
-  val Topic: muliao.contract.Topic = muliao.contract.Topic.wrap("agents")
-
   val layer: ZLayer[
     Database & AssetStore & AccessEditor & AgentHooks & ModelCheck & ToolCatalog & ChangeBus & ResourcePaths,
     Nothing,
@@ -116,7 +114,7 @@ object Agents:
 
     private def now = Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
     private def dir(name: AgentName) = paths.assets.resolve(name.value)
-    private def publish = bus.publishAfterCommit(Topic)
+    private def publish = bus.publishAfterCommit(Topic.Agents)
 
     def list: IO[AppError, List[AgentRecord]] = db.read(AgentRepo.all).map(_.filter(_.live))
 

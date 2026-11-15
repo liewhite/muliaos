@@ -166,7 +166,7 @@ object Shell:
 
   /** 登录后的界面。手机：页面 + 底部导航，页面头部左上角打开管理抽屉。桌面（md 起）：左侧窄栏 + 页面；管理类页面在 lg 起多一列常驻的管理菜单。 */
   def view(): HtmlElement =
-    val unreadLoad = Remote("notifications")(Http.call(NotificationsApi.list)(Some(1)).map(_.unread))
+    val unreadLoad = Remote(NotificationsApi.list)(Some(1)).map(_.map(_.unread))
     val unread     = unreadLoad.map(_.data.getOrElse(0L))
     val route      = Router.location.map(_.route)
     div(

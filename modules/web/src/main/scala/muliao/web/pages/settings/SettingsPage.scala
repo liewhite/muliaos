@@ -88,7 +88,7 @@ object SettingsPage:
 /** skill 脚本的「始终允许」：在审批处点「始终允许」记下的，逐条可撤销（撤销后同一调用重新要批准）。 */
 object ScriptGrants:
   def view(): HtmlElement =
-    val grants = Remote.once(Http.call(WorkspaceApi.listGrants)(()))
+    val grants = Remote(WorkspaceApi.listGrants)(())
     val act    = new Action
     div(
       cls := "card card--default",

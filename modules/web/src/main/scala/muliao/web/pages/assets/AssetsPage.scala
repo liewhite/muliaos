@@ -28,7 +28,7 @@ object AssetsPage:
     index.items.filter(i => tab.kinds(i.kind) && ownerMatches(owner, i))
 
   def view(): HtmlElement =
-    val index  = Remote("assets", "agents")(Http.call(ResourcesApi.listAssets)(()))
+    val index  = Remote(ResourcesApi.listAssets)(())
     val agents = AgentsData.load().map(_.data.getOrElse(Nil))
     val tab    = Router.query.map(q => KindTab.of(q.get("kind"))).distinct
     val owner  = Router.query.map(_.get("owner").filter(_ != "all")).distinct

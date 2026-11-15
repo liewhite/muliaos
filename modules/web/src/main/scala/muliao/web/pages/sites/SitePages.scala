@@ -16,7 +16,7 @@ object SitePages:
   def groupByAgent(pages: List[PageView]): List[(AgentId, List[PageView])] =
     pages.groupBy(_.agent).toList.map((a, ps) => a -> ps.sortBy(-_.modifiedAt)).sortBy((_, ps) => -ps.head.modifiedAt)
 
-  private def load() = Remote.once(Http.call(WorkspaceApi.listPages)(()))
+  private def load() = Remote(WorkspaceApi.listPages)(())
 
   def view(): HtmlElement =
     Ui.page("页面", wide = true)(

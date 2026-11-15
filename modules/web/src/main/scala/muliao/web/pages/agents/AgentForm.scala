@@ -90,11 +90,11 @@ object ModelInput:
     case _           => ("", "")
 
   def view(model: Signal[String], onModel: String => Unit, thinking: Signal[Thinking], onThinking: Thinking => Unit, thinkings: List[Thinking]): HtmlElement =
-    val overview = Remote.once(Http.call(ModelsApi.overview)(()))
+    val overview = Remote(ModelsApi.overview)(())
     val provider = model.map(split(_)._1).distinct
     val listed: Signal[Load[List[String]]] = provider.flatMapSwitch {
       case "" => Val(Load.Ready(Nil))
-      case p  => Remote.once(Http.call(ModelsApi.listModels)(p))
+      case p  => Remote(ModelsApi.listModels)(p)
     }
     val names = listed.map(_.data.getOrElse(Nil))
     // 选模型名时要拼上当前的服务商

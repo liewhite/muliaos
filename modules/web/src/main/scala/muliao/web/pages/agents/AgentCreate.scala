@@ -10,7 +10,7 @@ import Http.ec
 /** /agents/new：新建 agent，提交前预览它最终能用的工具与资源。 */
 object AgentCreate:
   def view(): HtmlElement =
-    val defaults = Remote.once(Http.call(ResourcesApi.agentDefaults)(()))
+    val defaults = Remote(ResourcesApi.agentDefaults)(())
     Ui.page("新建 agent", back = Some(Route.Agents))(
       Ui.card(
         div(

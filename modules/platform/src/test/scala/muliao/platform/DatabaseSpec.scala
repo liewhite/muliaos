@@ -77,10 +77,10 @@ object DatabaseSpec extends ZIOSpecDefault:
         bus  <- ZIO.service[muliao.platform.events.ChangeBus]
         sub  <- ZIO.scoped(bus.subscribe.flatMap(_.take(1).runCollect)).fork
         _    <- ZIO.sleep(100.millis)
-        _    <- Database.write(insert("a", "x") *> bus.publishAfterCommit(muliao.contract.Topic.wrap("rolled")) *> ZIO.fail(AppError.conflict("x"))).ignore
-        _    <- Database.write(insert("b", "x") *> bus.publishAfterCommit(muliao.contract.Topic.wrap("items")))
+        _    <- Database.write(insert("a", "x") *> bus.publishAfterCommit(muliao.contract.Topic.Triggers) *> ZIO.fail(AppError.conflict("x"))).ignore
+        _    <- Database.write(insert("b", "x") *> bus.publishAfterCommit(muliao.contract.Topic.Issues))
         got  <- sub.join
-      yield assertTrue(got.map(_.topic.value) == Chunk("items"))
+      yield assertTrue(got.map(_.topic) == Chunk(muliao.contract.Topic.Issues))
     }.provideLayer(ZLayer.fromZIO(tempDb).flatMap(f => dbLayer(f.get)) ++ muliao.platform.events.ChangeBus.layer) @@ withLiveClock,
     test("并发写串行执行，不丢、不报忙") {
       for

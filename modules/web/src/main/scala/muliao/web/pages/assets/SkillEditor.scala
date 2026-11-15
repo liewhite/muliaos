@@ -75,7 +75,7 @@ object SkillEditor:
 
   private def existing(name: String, ownerParam: Option[String]): HtmlElement =
     // 没给归属时按资源列表找（同名 skill 只有一份生效）
-    val index = Remote("assets")(Http.call(ResourcesApi.listAssets)(()))
+    val index = Remote(ResourcesApi.listAssets)(())
     val owner: Signal[Load[Option[String]]] = ownerParam match
       case Some(o) => Val(Load.Ready(Some(o)))
       case None =>

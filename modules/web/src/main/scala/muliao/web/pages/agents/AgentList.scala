@@ -28,7 +28,7 @@ object AgentList:
 
   def view(): HtmlElement =
     // agent 的配置是 agent.toml 文件：改配置时服务端发的是 assets 主题
-    val agents = Remote("agents", "assets")(Http.call(ResourcesApi.listAgents)(()))
+    val agents = Remote(ResourcesApi.listAgents)(())
     val query  = Var("")
     Ui.page(
       "Agents",

@@ -46,7 +46,7 @@ object Waits:
           div(
             cls := "flex flex-col gap-2 pt-1",
             {
-              val log = Remote("sessions")(Http.call(WorkspaceApi.jobLog)((id, Some(40))))
+              val log = Remote(WorkspaceApi.jobLog)((id, Some(40)))
               Seq[Modifier[HtmlElement]](
                 div(cls := "text-xs text-muted", "日志最后几行："),
                 Ui.loading(log)(l => pre(cls := Ui.CodeBlock, child.text <-- l.map(t => if t.isEmpty then "（还没有输出）" else t))),

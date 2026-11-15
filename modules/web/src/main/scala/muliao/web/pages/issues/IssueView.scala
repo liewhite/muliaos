@@ -14,7 +14,7 @@ import IssueParts.*
 object IssueView:
   def view(id: Long): HtmlElement =
     val issueId = IssueId.wrap(id)
-    val load    = Remote("issues")(Http.call(BoardApi.get)(issueId))
+    val load    = Remote(BoardApi.get)(issueId)
     val agents  = AgentsData.load().map(_.data.getOrElse(Nil))
     val editing = Var(false)
     val remove  = new Action

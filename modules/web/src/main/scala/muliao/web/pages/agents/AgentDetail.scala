@@ -22,7 +22,7 @@ object AgentDetail:
 
   def view(id: String): HtmlElement =
     val agentId = AgentId.wrap(id)
-    val detail  = Remote("agents", "assets")(Http.call(ResourcesApi.getAgent)(agentId))
+    val detail  = Remote(ResourcesApi.getAgent)(agentId)
     val tab     = Var(Tab.Config)
     // 打开过的标签页一直挂着（切走再回来，正在改的表单还在）
     val visited = Var(Set[Tab](Tab.Config))
@@ -153,7 +153,7 @@ object AgentDetail:
     )
 
   private def editForm(id: AgentId, d: Signal[AgentDetail]): HtmlElement =
-    val thinkings = Remote.once(Http.call(ResourcesApi.agentDefaults)(()).map(_.thinking))
+    val thinkings = Remote(ResourcesApi.agentDefaults)(()).map(_.map(_.thinking))
     Draft.form(d, AgentForm.of) { draft =>
       val act = new Action
       def save(): Unit =

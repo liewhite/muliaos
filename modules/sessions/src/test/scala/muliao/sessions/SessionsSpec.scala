@@ -251,6 +251,30 @@ object SessionsSpec extends ZIOSpecDefault:
         )
       }
     },
+    test("运行中插话：信被取走时会话页收到 Changed（#886）") {
+      fresh(req => if lastUserText(req) == "开工" then Script.Say(List(call("b1", "block", "{}"))) else Script.Hang()) { (_, p, _) =>
+        for
+          alice <- agent("alice")
+          id    <- userSession(alice, "开工")
+          _     <- eventually("block 在执行")(timeline(id))(_.exists(_.parts.exists(_.call.exists(_.state == CallState.Running))))
+          _     <- say(id, "插话")
+          evs <- sessions.flatMap(s =>
+                   ZIO.scoped(s.subscribe(id).flatMap { (_, stream) =>
+                     for
+                       f   <- stream.takeUntil(_ == LiveEvent.Begin).runCollect.fork
+                       _   <- p.gate.succeed(())
+                       evs <- f.join
+                     yield evs
+                   })
+                 )
+          tl <- timeline(id)
+        yield assertTrue(
+          // 调用结束一次、下一步请求模型前取走插话一次
+          evs.count(_ == LiveEvent.Changed) == 2,
+          tl.exists(i => i.kind == "letter" && i.toString.contains("插话"))
+        )
+      }
+    },
     test("压缩：超过阈值总结较早的部分，之后带摘要和最近几步；原文保留") {
       fresh(
         req =>

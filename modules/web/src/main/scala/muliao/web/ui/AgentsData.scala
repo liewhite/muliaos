@@ -7,7 +7,7 @@ import muliao.web.core.*
 /** 多个页面共用的 agent 列表：显示名、分组、可选来派活的。 */
 object AgentsData:
   /** 全部 agent（含归档的），随 agents 主题刷新。每次调用得到一份新的数据源，页面各自持有。 */
-  def load(): Signal[Load[List[AgentSummary]]] = Remote("agents", "assets")(Http.call(ResourcesApi.listAgents)(()))  // 改 agent.toml（模型、分组）只发 assets
+  def load(): Signal[Load[List[AgentSummary]]] = Remote(ResourcesApi.listAgents)(())
 
   def archived(a: AgentSummary): Boolean = a.state == AgentState.Archived
 

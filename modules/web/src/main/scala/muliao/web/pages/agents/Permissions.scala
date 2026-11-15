@@ -5,7 +5,6 @@ import muliao.contract.*
 import muliao.web.core.*
 import muliao.web.ui.*
 
-import Http.ec
 
 /** 资源种类在界面上的名字。 */
 extension (k: AssetKind)
@@ -20,8 +19,8 @@ extension (k: AssetKind)
 object Rules:
   /** 补全候选：每种的 `use:<种类>:*`、每个工具与资源的 `use:<种类>:<名字>`。工具名取自规则 `use:tool:*` 匹配到的。 */
   def candidates(): Signal[List[String]] =
-    val tools  = Remote.once(Http.call(ResourcesApi.checkRules)(RulesRequest(List("use:tool:*"))).map(_.flatMap(_.matches)))
-    val assets = Remote("assets")(Http.call(ResourcesApi.listAssets)(()).map(_.items))
+    val tools  = Remote(ResourcesApi.checkRules)(RulesRequest(List("use:tool:*"))).map(_.map(_.flatMap(_.matches)))
+    val assets = Remote(ResourcesApi.listAssets)(()).map(_.map(_.items))
     tools.combineWith(assets).map { (t, a) =>
       val wild  = AssetKind.values.toList.map(k => s"use:${k.label}:*")
       val named = t.data.getOrElse(Nil).map(n => s"use:tool:$n") ++
@@ -193,7 +192,7 @@ object PermissionsInput:
   final case class Value(roles: List[String], allow: List[String], deny: List[String])
 
   def view(agent: Option[AgentId], value: Signal[Value], onChange: (Value => Value) => Unit): HtmlElement =
-    val roles      = Remote("agents", "assets")(Http.call(ResourcesApi.listRoles)(()))
+    val roles      = Remote(ResourcesApi.listRoles)(())
     val lastOk     = Var(Option.empty[PreviewResult])
     val error      = Var(Option.empty[String])
     val candidates = Rules.candidates()

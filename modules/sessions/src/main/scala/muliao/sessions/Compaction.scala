@@ -66,9 +66,8 @@ private[sessions] final case class Compaction(kernel: Kernel, requests: Requests
             t     <- now
             _ <- db.write(
                    Repo.insertEntry(EntryRow(0L, id, run, EntryKind.Compaction, EntryBody.Compaction(text, cut).encode, "", t, t)) *>
-                     requests.recordUsage(kit, reply.usage, t) *> Repo.touch(id, t) *> changed
+                     requests.recordUsage(kit, reply.usage, t) *> touched(id, t)
                  )
-            _ <- live.publish(id, LiveEvent.Changed)
           yield Some(more)
     }
 

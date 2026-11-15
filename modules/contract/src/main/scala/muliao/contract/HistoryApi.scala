@@ -37,6 +37,7 @@ object HistoryApi:
       )
       .out(jsonBody[List[HistoryEntryView]])
       .name("listHistory")
+      .refreshedBy(Topic.History)
       .description(
         "工作历史（agent 详情页）：`agent` 不给是全部；`q` 空白分开的关键字，每个都要出现，按相关度排，不给按日期倒序；`since` / `until` 是含两端的日期（YYYY-MM-DD）；" +
           "`minImportance` 1–3；`limit` 默认 50，最多 200。"

@@ -37,7 +37,7 @@ object AgentHistory:
         button(tpe := "submit", cls := Ui.buttonCls(Variant.Secondary), Icon("Search"), "搜索")
       ),
       child <-- query.signal.distinct.map { q =>
-        val list = Remote("history")(Http.call(HistoryApi.list)((Some(id), Option(q).filter(_.nonEmpty), None, None, None, Some(200))))
+        val list = Remote(HistoryApi.list)((Some(id), Option(q).filter(_.nonEmpty), None, None, None, Some(200)))
         div(
           cls := "flex flex-col gap-3",
           Ui.loading(list)(entries =>
@@ -87,7 +87,7 @@ object AgentJobs:
       case JobStatus.Interrupted => Interrupted
 
   def view(id: AgentId): HtmlElement =
-    val jobs = Remote("sessions")(Http.call(WorkspaceApi.listJobs)(id))
+    val jobs = Remote(WorkspaceApi.listJobs)(id)
     div(
       cls := "flex flex-col gap-3",
       p(cls := "text-sm text-muted", "agent 用 run_shell 后台运行的命令（最近 200 个）；日志在它工作目录里，结束后结局作为事件回到发起它的会话。"),
@@ -133,10 +133,10 @@ object AgentJobs:
       )
     )
 
-  /** 日志的最后 200 行：在跑的随 sessions 主题刷新，也可以手动刷新。 */
+  /** 日志的最后 200 行：随接口声明的主题刷新，也可以手动刷新。 */
   private def log(id: JobId, state: Signal[State]): HtmlElement =
     val reload = new EventBus[Unit]
-    val text   = Remote.triggered(EventStream.merge(reload.events, Events.changes.filter(_ == "sessions").mapToUnit))(fetch(id))
+    val text   = Remote.following(WorkspaceApi.jobLog, reload.events)(fetch(id))
     div(
       cls := "flex flex-col gap-1",
       div(

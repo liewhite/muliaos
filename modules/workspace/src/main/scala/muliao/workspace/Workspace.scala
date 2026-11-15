@@ -3,6 +3,7 @@ package muliao.workspace
 import muliao.contract.AgentId
 import muliao.platform.AppError
 import muliao.platform.db.Database
+import muliao.platform.events.ChangeBus
 import muliao.resources.{AgentHook, AgentHooks, ResourcePaths, Resources, ToolInfo}
 import muliao.resources.agents.Agents
 import muliao.resources.guard.AssetGuard
@@ -23,7 +24,7 @@ final case class WorkspaceTools(tools: List[Tool[RunContext]])
 
 /** 工作区领域的组装：起各服务，把工具、skill 脚本的批准执行者、后台任务这种异步工作、agent 生命周期的参与登记到上游。 */
 object Workspace:
-  type Env = Database & Sessions & SessionHooks & Files & Resources & AssetGuard & AssetStore & Vault & Agents & AgentHooks & ResourcePaths &
+  type Env = Database & ChangeBus & Sessions & SessionHooks & Files & Resources & AssetGuard & AssetStore & Vault & Agents & AgentHooks & ResourcePaths &
     PageSigner
 
   type Services = AgentExec & FileAccess & Jobs & ScriptGrants & Pages & Browse & WorkspaceHttp & WorkspaceTools

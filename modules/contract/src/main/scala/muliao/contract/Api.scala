@@ -34,9 +34,27 @@ object ErrorKind:
 final case class ApiError(kind: ErrorKind, message: String, retryAfterSeconds: Option[Long] = None)
     derives JsonCodec, Schema
 
-/** 实时刷新的一条「数据变了」：前端收到后重新拉取该主题的数据。 */
-object Topic extends StringId
-type Topic = Topic.Type
+/** 「数据变了」的主题：写库的领域提交后广播，前端据此重新拉取跟着这个主题的接口（见 [[refreshedBy]]）。 */
+enum Topic(val label: String) extends Labeled:
+  case Agents        extends Topic("agents")
+  case Assets        extends Topic("assets")
+  case Sessions      extends Topic("sessions")
+  case Issues        extends Topic("issues")
+  case Triggers      extends Topic("triggers")
+  case Notifications extends Topic("notifications")
+  case History       extends Topic("history")
+  case Jobs          extends Topic("jobs")
+
+object Topic extends Labels[Topic]("主题", Topic.values):
+  /** 接口属性：这个读接口的数据跟着哪些主题变。 */
+  val refresh: AttributeKey[Set[Topic]] = AttributeKey[Set[Topic]]
+
+extension [S, I, E, O, R](e: Endpoint[S, I, E, O, R])
+  /** 声明读接口的数据跟着哪些主题变：前端拉它时据此订阅，这些主题变了就重拉。 */
+  def refreshedBy(topics: Topic*): Endpoint[S, I, E, O, R] = e.attribute(Topic.refresh, topics.toSet)
+
+  /** 声明过的主题（没声明是空：只在挂上、重连、用户操作后拉）。 */
+  def refreshTopics: Set[Topic] = e.attribute(Topic.refresh).getOrElse(Set.empty)
 
 final case class Change(topic: Topic) derives JsonCodec, Schema
 

@@ -3,7 +3,8 @@ package muliao.web.core
 import com.raquo.airstream.core.{EventStream, Signal}
 import com.raquo.airstream.eventbus.EventBus
 import com.raquo.airstream.state.Var
-import muliao.contract.{AuthApi, Change, ErrorKind}
+import muliao.contract.{ApiError, AuthApi, Change, ErrorKind, Topic, refreshTopics}
+import sttp.tapir.Endpoint
 import zio.json.*
 
 import scala.concurrent.Future
@@ -48,8 +49,8 @@ object Events:
   /** 连上了（含重连）：断线期间可能错过变化，正在显示的数据都要重新拉取。 */
   val ready: EventStream[Unit] = frames.collect { case Frame.Ready => () }
 
-  /** 变了的主题（agents、assets、sessions、issues、triggers、notifications、history）。 */
-  val changes: EventStream[String] = frames.collect { case Frame.Data(json) => json.fromJson[Change].toOption.map(_.topic.value) }.collect {
+  /** 变了的主题（看不懂的丢掉：服务端比页面新时，重连后整页会重拉）。 */
+  val changes: EventStream[Topic] = frames.collect { case Frame.Data(json) => json.fromJson[Change].toOption.map(_.topic) }.collect {
     case Some(t) => t
   }
 
@@ -70,22 +71,28 @@ enum Load[+A]:
     case Stale(d, _) => Some(d)
     case _           => None
 
+  def map[B](f: A => B): Load[B] = this match
+    case Pending       => Pending
+    case Ready(d)      => Ready(f(d))
+    case Failed(m)     => Failed(m)
+    case Stale(d, err) => Stale(f(d), err)
+
 object Remote:
   import Http.ec
 
-  /** 一份随主题变化自动重新拉取的数据：挂上页面时拉，连上（含重连）、列出的主题变了、用户刚做完操作时再拉。
+  type Read[I, O] = Endpoint[Option[String], I, ApiError, O, Any]
+
+  /** 从接口拉来、自动重拉的数据：挂上页面时拉，连上（含重连）、接口声明的主题（`refreshedBy`）变了、用户刚做完操作时再拉。
     * 只在被页面用着时活动（Airstream 的 Signal 无人订阅即停）；数据库是唯一事实来源，这里只是显示。
     */
-  def apply[A](topics: String*)(fetch: => Future[A]): Signal[Load[A]] =
-    triggered(EventStream.merge(Events.changes.filter(topics.contains).mapToUnit, Events.ready, Events.refreshNow.events))(fetch)
+  def apply[I, O](e: Read[I, O])(in: I): Signal[Load[O]] = following(e)(Http.call(e)(in))
 
-  /** 同上，另外在 `more` 发出时也重拉（如「显示更多」）。 */
-  def withMore[A](more: EventStream[Unit], topics: String*)(fetch: => Future[A]): Signal[Load[A]] =
+  /** 同一个接口、请求自己组织（如连续翻页）：随 `e` 声明的主题重拉，`more` 发出时也重拉（如「显示更多」、手动刷新）。 */
+  def following[A](e: Read[?, ?], more: EventStream[Unit] = EventStream.empty)(fetch: => Future[A]): Signal[Load[A]] =
+    val topics = e.refreshTopics
     triggered(EventStream.merge(Events.changes.filter(topics.contains).mapToUnit, Events.ready, Events.refreshNow.events, more))(fetch)
 
-  /** 只在页面挂上与用户操作后拉取（不随主题刷新）。 */
-  def once[A](fetch: => Future[A]): Signal[Load[A]] = triggered(Events.refreshNow.events)(fetch)
-
+  /** 只在挂上与 `more` 发出时拉（会话页按自己的实时事件重拉用它）。 */
   def triggered[A](more: EventStream[Unit])(fetch: => Future[A]): Signal[Load[A]] =
     EventStream
       .merge(EventStream.unit(emitOnce = true), more.throttle(300))

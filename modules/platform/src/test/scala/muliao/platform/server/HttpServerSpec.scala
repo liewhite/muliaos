@@ -138,18 +138,18 @@ object HttpServerSpec extends ZIOSpecDefault:
                          String(buf, 0, n, "UTF-8")
                      (all, text)
                    }
-                   .takeUntil(_.contains("issues/7"))
+                   .takeUntil(_.contains("issues"))
                    .runLast
                    .map(_.getOrElse(""))
                    .fork
-          _ <- (bus.publish(Topic.wrap("issues/7")) *> ZIO.sleep(200.millis)).repeatN(5).fork
+          _ <- (bus.publish(Topic.Issues) *> ZIO.sleep(200.millis)).repeatN(5).fork
           text <- got.join.timeoutFail(new RuntimeException("SSE 没收到"))(5.seconds)
           frames = text.linesIterator.filter(_.startsWith("data:")).map(_.stripPrefix("data:").trim).toList
           change = frames.find(_.contains("topic"))
         yield assertTrue(
           // 订阅建好后先给 ready（带心跳间隔），前端据此重新拉取
           frames.headOption.contains(s"""{"intervalSeconds":${Sse.PingSeconds}}"""),
-          change.flatMap(_.fromJson[Json].toOption).contains(Json.Obj("topic" -> Json.Str("issues/7")))
+          change.flatMap(_.fromJson[Json].toOption).contains(Json.Obj("topic" -> Json.Str("issues")))
         )
       }
     },

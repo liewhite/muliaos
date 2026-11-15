@@ -70,7 +70,8 @@
 
 ## 平台基础的用法约定
 - **配置**：一个 TOML 文件，每个领域声明自己的段 `ConfigSection[A]("段名")`（`A` 是带 `JsonCodec` 的 case class，键名蛇形 `@jsonMemberNames(SnakeCase)`），加进 `app/Main.sections`。未知的段、段里（含嵌套）未知的键、缺必填项都在启动时报错。程序不读环境变量。
-- **数据库**：`Database.read(q)` 走只读连接池，`Database.write(tx)` 在唯一的写连接上串行执行一个事务；`tx` 以 `AppError` 失败整体回滚。查询写法：`import io.getquill.*`、`import muliao.platform.db.Sql.*`，`Sql.run(...).orInternal`。所有 `Newtype` 编号自动按底层类型存取。提交后才做的事用 `TxHooks.afterCommit`（如 `bus.publishAfterCommit(topic)`）。
+- **数据库**：`Database.read(q)` 走只读连接池，`Database.write(tx)` 在唯一的写连接上串行执行一个事务；`tx` 以 `AppError` 失败整体回滚。查询写法：`import io.getquill.*`、`import muliao.platform.db.Sql.*`，`Sql.run(...).orInternal`。所有 `Newtype` 编号自动按底层类型存取。提交后才做的事用 `TxHooks.afterCommit`（如 `bus.publishAfterCommit(Topic.Issues)`）。
+- **「数据变了」**：主题是 contract 的 `enum Topic`，前后端共用；读接口在 contract 里用 `.refreshedBy(主题...)` 声明跟着哪些主题刷新，前端 `Remote` 据此订阅。每个领域只在一处发：会话领域的写都经 `Kernel.touched(会话, 时间)`（更新活动时间、广播 sessions、推该会话的实时事件 `Changed`），看板经记动态（`record`），后台任务经 `Jobs` 的 `write`。
 - **迁移**：脚本放 `modules/<领域>/src/main/resources/db/<领域>/V<n>__<说明>.sql`，每个领域自己的版本记录表 `schema_history_<领域>`，版本号互不干扰；一个领域待执行的迁移在一个事务里，失败整体回滚；库里有程序不认识的迁移（库比程序新）拒绝启动。领域之间不建外键。
 - **错误**：领域失败归入 `AppError` 四类（`Domain`/`Unavailable`/`External`/`Internal`）；接口层 `AppError.toApi` 转统一错误体；工具层 `ToolFailure.fromAppError` 转「请重试 / 暂时不可用 / 中止」，挂起用 `ToolOutcome.Suspended`。
 - **重试**：外部调用 `.retryTransient()`（2 秒起翻倍、单次最长 5 分钟、累计 30 分钟放弃，遵守 Retry-After），只重试 `Unavailable`。

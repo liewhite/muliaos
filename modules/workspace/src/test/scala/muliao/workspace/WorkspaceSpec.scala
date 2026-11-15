@@ -3,6 +3,7 @@ package muliao.workspace
 import muliao.contract.*
 import muliao.platform.AppError
 import muliao.platform.db.Database
+import muliao.platform.events.ChangeBus
 import muliao.resources.ResourcePaths
 import muliao.resources.tree.Owner
 import muliao.resources.vault.{Actor, Vault}
@@ -234,7 +235,12 @@ object WorkspaceSpec extends ZIOSpecDefault:
              }
         out <- withEnv(d, m) {
                  for
-                   _     <- start
+                   _      <- start
+                   topics <- Ref.make(Chunk.empty[Topic])
+                   ready  <- Promise.make[Nothing, Unit]
+                   bus    <- ZIO.service[ChangeBus]
+                   sub    <- ZIO.scoped(bus.subscribe.flatMap(s => ready.succeed(()) *> s.runForeach(c => topics.update(_ :+ c.topic)))).fork
+                   _      <- ready.await
                    alice <- S.agent("alice")
                    id    <- S.userSession(alice, "跑后台")
                    _     <- S.eventually("等后台任务")(S.stateOf(id))(_ == WorkState.Waiting)
@@ -245,9 +251,11 @@ object WorkspaceSpec extends ZIOSpecDefault:
                    ws    <- workspaceOf(alice)
                    log   <- read(ws.resolve("jobs/1.log"))
                    views <- ZIO.serviceWithZIO[Jobs](_.list(alice))
-                 yield (row, log, views)
+                   _     <- sub.interrupt
+                   seen  <- topics.get
+                 yield (row, log, views, seen)
                }
-        (row, log, views) = out
+        (row, log, views, seen) = out
         reqs <- m.requests
       yield
         val first = S.userTexts(reqs(1)).last
@@ -259,7 +267,8 @@ object WorkspaceSpec extends ZIOSpecDefault:
           row.reported,
           log == "start\nend\n",
           end.contains("end"),
-          views.map(_.log) == List("jobs/1.log")
+          views.map(_.log) == List("jobs/1.log"),
+          seen.count(_ == Topic.Jobs) == 2 // 开始、结束各广播一次
         )
     },
     test("后台任务：job_kill 与停止会话都结束整组进程") {

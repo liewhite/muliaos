@@ -12,7 +12,7 @@ import Http.ec
 /** 自动发起会话的入口：定时、一次性、流式，方式的差异只在各自的配置。按 agent 分组的卡片网格，点卡片看详情。 */
 object TriggersPage:
   def view(): HtmlElement =
-    val triggers = Remote("triggers")(Http.call(TriggersApi.list)(None))
+    val triggers = Remote(TriggersApi.list)(None)
     val agents   = AgentsData.load()
     val agentList = agents.map(_.data.getOrElse(Nil))
     val openId   = Var(Option.empty[TriggerId])
@@ -356,7 +356,7 @@ object Finished:
   def section(): HtmlElement =
     Ui.card(
       Ui.disclosure(Var(false), "flex w-full items-center gap-2 px-1 font-medium", "flex flex-col gap-3 pt-4")(Icon("Archive"), "已结束") {
-        val finished = Remote("triggers")(Http.call(TriggersApi.list)(Some(true)))
+        val finished = Remote(TriggersApi.list)(Some(true))
         val openId   = Var(Option.empty[TriggerId])
         Ui.loading(finished) { list =>
           Seq(

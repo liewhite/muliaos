@@ -53,8 +53,6 @@ trait Board:
   def forgetAgent(agent: AgentId): IO[AppError, Unit]
 
 object Board:
-  val Topic: muliao.contract.Topic = muliao.contract.Topic.wrap("issues")
-
   /** issue 页的前端路由（交给用户的通知点开去这里）。 */
   def pageOf(id: IssueId): String = s"/issues/${id.value}"
 
@@ -74,8 +72,6 @@ object Board:
       extends Board:
 
     private val now: UIO[Long] = Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
-
-    private val changed: URIO[muliao.platform.db.TxHooks, Unit] = bus.publishAfterCommit(Topic)
 
     // ---- 名字与文字 ----
 
@@ -124,8 +120,19 @@ object Board:
 
     // ---- 记动态、投递、通知 ----
 
+    /** 记动态。看板上一切可见的改动都伴随动态，所以「看板变了」的广播就在这里登记（删除 issue 除外，见 [[delete]]）。 */
     private def record(issue: IssueId, actor: Actor, activities: List[Activity]): Tx[List[IssueEvent]] =
-      now.flatMap(t => ZIO.foreach(activities)(Repo.addEvent(issue, t, actor, _)))
+      now.flatMap(t => ZIO.foreach(activities)(Repo.addEvent(issue, t, actor, _))) <* bus.publishAfterCommit(Topic.Issues)
+
+    /** 上游变了（结束与否变了、被删了）：下游记一条动态并按同一规则投递。 */
+    private def upstreamChanged(by: By, downstream: IssueId, activity: Activity): Tx[Unit] =
+      for
+        down <- Repo.require(downstream)
+        t    <- now
+        _    <- Repo.save(down.copy(updatedAt = t))
+        evs  <- record(downstream, by.actor, List(activity))
+        _    <- dispatch(by, down, evs)
+      yield ()
 
     /** 把这批动态投给该收的 agent（`also`：另外一定要投的，如叫停留言）。 */
     private def dispatch(by: By, issue: Issue, events: List[IssueEvent], also: Option[AgentId] = None): Tx[Unit] =
@@ -147,15 +154,7 @@ object Board:
     /** 状态的「结束与否」变了：在每个下游记一条动态并投递（最后一个上游结束时下游收到第一封信）。 */
     private def cascade(by: By, before: IssueStatus, after: Issue): Tx[Unit] =
       ZIO.when(before.finished != after.status.finished) {
-        Repo.downstream(after.id).flatMap(ZIO.foreachDiscard(_) { d =>
-          for
-            down <- Repo.require(d)
-            t    <- now
-            _    <- Repo.save(down.copy(updatedAt = t))
-            evs  <- record(d, by.actor, List(Activity.UpstreamChanged(after.id, before, after.status)))
-            _    <- dispatch(by, down, evs)
-          yield ()
-        })
+        Repo.downstream(after.id).flatMap(ZIO.foreachDiscard(_)(d => upstreamChanged(by, d, Activity.UpstreamChanged(after.id, before, after.status))))
       }.unit
 
     /** 交给用户时发通知，点开去 issue 页（可直接通过、打回）。正文取它刚写的评论。 */
@@ -181,7 +180,6 @@ object Board:
           _    <- cascade(by, before.status, after)
           _    <- handover(by, Some(before), after)
           _    <- dispatch(by, after, evs, also)
-          _    <- changed
         yield ()
       }.unit
 
@@ -302,7 +300,6 @@ object Board:
                    _ <- ZIO.foreachDiscard(issues) { i =>
                           record(i.id, by.actor, List(Activity.Created)).flatMap(evs => handover(by, None, i) *> dispatch(by, i, evs))
                         }
-                   _ <- changed
                  yield ids
                )
       yield ids
@@ -323,16 +320,7 @@ object Board:
     def comment(by: By, id: IssueId, text: String): IO[AppError, Unit] =
       for
         _ <- ZIO.fail(AppError.invalid("评论不能为空")).when(text.trim.isEmpty)
-        _ <- db.write(
-               for
-                 i   <- Repo.require(id)
-                 t   <- now
-                 _   <- Repo.save(i.copy(updatedAt = t))
-                 evs <- record(id, by.actor, List(Activity.Commented(text)))
-                 _   <- dispatch(by, i, evs)
-                 _   <- changed
-               yield ()
-             )
+        _ <- db.write(Repo.require(id).flatMap(i => apply(by, i, i, List(Activity.Commented(text)))))
       yield ()
 
     private def reviewed(i: Issue): IO[AppError, Unit] = ZIO.fromEither(Rules.reviewable(i)).mapError(AppError.conflict)
@@ -399,22 +387,15 @@ object Board:
         yield ()
       )
 
+    /** 删掉的 issue 连同动态一起没了，不经 [[record]]，自己广播。 */
     def delete(id: IssueId): IO[AppError, Unit] =
       db.write(
         for
           _     <- Repo.require(id)
           downs <- Repo.downstream(id)
           _     <- Repo.delete(id)
-          _ <- ZIO.foreachDiscard(downs) { d =>
-                 for
-                   down <- Repo.require(d)
-                   t    <- now
-                   _    <- Repo.save(down.copy(updatedAt = t))
-                   evs  <- record(d, Actor.User, List(Activity.UpstreamDeleted(id)))
-                   _    <- dispatch(By.user, down, evs)
-                 yield ()
-               }
-          _ <- changed
+          _     <- ZIO.foreachDiscard(downs)(d => upstreamChanged(By.user, d, Activity.UpstreamDeleted(id)))
+          _     <- bus.publishAfterCommit(Topic.Issues)
         yield ()
       )
 
@@ -426,7 +407,7 @@ object Board:
         case SessionEvent.Settled(s, _, Origin.Issue(i), Outcome.Failed(err), _) =>
           db.write(
             Repo.get(i).flatMap(ZIO.foreachDiscard(_) { _ =>
-              record(i, Actor.System(Some(s)), List(Activity.SessionFailed(err))) *> changed
+              record(i, Actor.System(Some(s)), List(Activity.SessionFailed(err)))
             })
           )
         case _ => ZIO.unit
@@ -466,6 +447,5 @@ object Board:
                  yield ()
                }
           _ <- Repo.clearNudgesOf(agent)
-          _ <- changed
         yield ()
       )

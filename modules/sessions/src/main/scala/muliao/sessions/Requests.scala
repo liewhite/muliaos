@@ -165,11 +165,11 @@ private[sessions] final case class Requests(
                  .tapError(e =>
                    ZIO.when(e.isTransient)(
                      retried.set(true) *> ZIO.logWarning(s"会话 ${id.value} 请求模型暂时失败，稍后重试：${e.message}") *>
-                       ZIO.foreachDiscard(run)(r => db.write(Repo.setRetry(r, None, Some(e.message)) *> changed)).ignore *> live.publish(id, LiveEvent.Changed)
+                       ZIO.foreachDiscard(run)(r => now.flatMap(t => db.write(Repo.setRetry(r, None, Some(e.message)) *> touched(id, t)))).ignore
                    )
                  )
                  .retry(Retry.schedule(Retry.transient))
-      _ <- ZIO.foreachDiscard(run)(r => db.write(Repo.setRetry(r, None, None) *> changed)).whenZIO(retried.get)
+      _ <- ZIO.foreachDiscard(run)(r => now.flatMap(t => db.write(Repo.setRetry(r, None, None) *> touched(id, t)))).whenZIO(retried.get)
     yield reply
 
   private final case class Folded(builder: ReplyBuilder, reply: Option[Reply])

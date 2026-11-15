@@ -104,7 +104,7 @@ object SessionList:
     val sessions: Signal[Load[List[SessionSummary]]] =
       query.flatMapSwitch { (f, k) =>
         count.set(PageSize)
-        Remote.withMore(count.signal.updates.mapToUnit, "sessions", "notifications")(fetch(f, k, count.now()))
+        Remote.following(SessionsApi.list, count.signal.updates.mapToUnit)(fetch(f, k, count.now()))
       }
     def isCollapsed(id: AgentId): Signal[Boolean] = collapsed.signal.map(_.split(',').contains(id.value))
     def toggle(id: AgentId): Unit = collapsed.update { c =>

@@ -25,8 +25,8 @@ final class LiveHub private (hub: Hub[(SessionId, LiveEvent)], current: Ref[Map[
   /** 记下正在生成的回复到目前为止的各段（供中途打开页面的订阅者先拿到）。 */
   def track(session: SessionId, parts: Chunk[ReplyPart]): UIO[Unit] = current.update(_.updated(session, parts))
 
-  /** 生成结束（存进库了，或放弃了）：不再有正在生成的。 */
-  def done(session: SessionId): UIO[Unit] = current.update(_ - session) *> publish(session, LiveEvent.Changed)
+  /** 生成结束（存进库了，或放弃了）：不再有正在生成的。存库的一方经 `Kernel.touched` 通知页面重拉，这里不再发。 */
+  def done(session: SessionId): UIO[Unit] = current.update(_ - session)
 
   /** 订阅一个会话：先给正在生成的部分（没有为 None），再给之后的事件。 */
   def subscribe(session: SessionId): URIO[Scope, (Option[Chunk[ReplyPart]], ZStream[Any, Nothing, LiveEvent])] =

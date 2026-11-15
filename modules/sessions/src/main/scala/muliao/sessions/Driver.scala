@@ -113,20 +113,19 @@ private[sessions] final class Driver(
                                 kit => Prompt.runContext(Instant.ofEpochMilli(t), zone, Prompt.replyNote(pending, names), ResourcePrompt.notices(kit.res, admins), kit.mcpProblems)
                               )
                    _ <- Repo.updateEntryBody(ctxId, EntryBody.Context(text).encode, "", t)
-                   _ <- Repo.touch(id, t) *> changed
+                   _ <- touched(id, t)
                  yield run
                )
-        _ <- live.publish(id, LiveEvent.Changed)
         _ <- k.fold(e => failRun(id, run, e.message), _ => ZIO.unit)
       yield ()
     }
 
   /** 挂起后接着跑：运行状态改回运行中。 */
   private def resume(id: SessionId, run: ActiveRun): IO[AppError, Unit] =
-    (db.write(Repo.setRunState(run.id, RunState.Running, None, None) *> changed) *> live.publish(id, LiveEvent.Changed)).when(run.suspended).unit
+    now.flatMap(t => db.write(Repo.setRunState(run.id, RunState.Running, None, None) *> touched(id, t))).when(run.suspended).unit
 
   private def suspend(id: SessionId, run: ActiveRun): IO[AppError, Unit] =
-    (db.write(Repo.setRunState(run.id, RunState.Suspended, None, None) *> changed) *> live.publish(id, LiveEvent.Changed)).unless(run.suspended).unit
+    now.flatMap(t => db.write(Repo.setRunState(run.id, RunState.Suspended, None, None) *> touched(id, t))).unless(run.suspended).unit
 
   // ---- 请求模型 ----
 
@@ -169,7 +168,7 @@ private[sessions] final class Driver(
                         ))
                    _ <- requests.recordUsage(kit, reply.usage, t)
                    _ <- Repo.setRunState(run, RunState.Finished, None, Some(t)).when(calls.isEmpty)
-                   _ <- Repo.touch(id, t) *> changed
+                   _ <- touched(id, t)
                  yield entry
                )
       _ <- slot.secrets.set(calls.collect { case c if raw.get(c.id).exists(_ != c.args) => CallKey(entry, CallId.wrap(c.id)) -> raw(c.id) }.toMap)
@@ -191,7 +190,8 @@ private[sessions] final class Driver(
 
   private def settle(i: SessionInfo): IO[AppError, Unit] =
     for
-      pending <- db.write(mailbox.takePendingReply(i.id) <* changed)
+      t       <- now
+      pending <- db.write(mailbox.takePendingReply(i.id) <* touched(i.id, t))
       answer  <- lastAnswer(i.id)
       _       <- delegations.handBack(i, pending, Outcome.Answered(answer))
     yield ()
@@ -208,7 +208,7 @@ private[sessions] final class Driver(
                      _    <- Repo.setRunState(run, RunState.Failed, Some(message), Some(t))
                      _    <- noticeTx(id, Some(run), NoticeKind.Failed, message, t)
                      p    <- mailbox.takePendingReply(id)
-                     _    <- Repo.touch(id, t) *> changed
+                     _    <- touched(id, t)
                    yield p
                  )
       _ <- live.done(id)
@@ -236,8 +236,7 @@ private[sessions] final class Driver(
                case Some(_: Pause.Approval) => "[用户没有批准（改发了新消息，见下），没有执行。]"
                case _                       => "[用户没有回答这个问题，而是发来了新消息（见下）。]"
              CallTx.finish(c, CallResult.error(note), t)
-           } *> changed)
-      _ <- live.publish(id, LiveEvent.Changed)
+           } *> touched(id, t))
     yield ()
 
 private[sessions] object Driver:

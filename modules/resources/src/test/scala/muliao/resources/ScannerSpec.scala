@@ -158,6 +158,6 @@ object ScannerSpec extends ZIOSpecDefault:
                   ZIO.succeed(write(dirs.assets.resolve("platform/memory/new-one.md"), "x")) *> s.take(1).runCollect
                 })
         snap <- ZIO.serviceWithZIO[AssetStore](_.snapshot)
-      yield assertTrue(got.map(_.topic) == Chunk(AssetStore.Topic), snap.sharedMemory("new-one").isDefined)
+      yield assertTrue(got.map(_.topic) == Chunk(muliao.contract.Topic.Assets), snap.sharedMemory("new-one").isDefined)
     }.provideLayer(TestEnv.layer) @@ TestAspect.withLiveClock @@ TestAspect.timeout(20.seconds)
   )

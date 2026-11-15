@@ -37,8 +37,6 @@ trait AssetStore:
   def move(from: Path, to: Path): IO[AppError, Unit]
 
 object AssetStore:
-  val Topic: muliao.contract.Topic = muliao.contract.Topic.wrap("assets")
-
   /** @param lastGoodAccess 上一份有效 access.toml 的副本存放处（在数据目录里，重启后仍沿用） */
   final case class Settings(root: Path, lastGoodAccess: Path, pollInterval: Duration = 2.seconds)
 
@@ -84,7 +82,7 @@ object AssetStore:
                         s <- blocking("解析资源目录失败")(Scanner.scan(root))
                         _ <- cache.set(Some(s))
                         _ <- rememberAccess(s)
-                        _ <- ZIO.when(old.isDefined)(bus.publish(Topic))
+                        _ <- ZIO.when(old.isDefined)(bus.publish(Topic.Assets))
                       yield s
         yield snap
       }

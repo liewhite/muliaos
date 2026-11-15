@@ -78,8 +78,8 @@ private[sessions] final class Waits(kernel: Kernel, mailbox: Mailbox, doorbell: 
       _  <- Repo.session(session).someOrFail(AppError.notFound(s"会话 ${session.value} 不存在"))
       id <- Repo.insertWait(row)
       w   = Wait(id, session, ref, label, row.heartbeatSeconds, t)
-      _  <- afterCommit(cache.update(_.updated(id, w)) *> live.publish(session, LiveEvent.Changed))
-      _  <- changed
+      _  <- afterCommit(cache.update(_.updated(id, w)))
+      _  <- touched(session, t)
     yield id
 
   /** 结束一项等待；`letter` 给出时作为事件投回发起会话。已结束的返回 false。 */
@@ -97,8 +97,8 @@ private[sessions] final class Waits(kernel: Kernel, mailbox: Mailbox, doorbell: 
         for
           _ <- Repo.deleteWait(w.id)
           _ <- ZIO.foreachDiscard(letter)(l => mailbox.deliverTx(Address.To(w.sessionId), l, None, t))
-          _ <- afterCommit(forget(List(w.id)) *> live.publish(w.sessionId, LiveEvent.Changed))
-          _ <- Repo.touch(w.sessionId, t) *> changed
+          _ <- afterCommit(forget(List(w.id)))
+          _ <- touched(w.sessionId, t)
         yield Some(w.sessionId)
     }
 
@@ -139,10 +139,9 @@ private[sessions] final class Waits(kernel: Kernel, mailbox: Mailbox, doorbell: 
              for
                _ <- ZIO.foreachDiscard(old)(w => Repo.deleteWait(w.id) *> afterCommit(forget(List(w.id))))
                _ <- ZIO.foreachDiscard(at)(due => openTx(session, WaitRef.Wake(due), note, None, t))
-               _ <- changed
+               _ <- touched(session, t)
              yield ()
            )
-      _ <- live.publish(session, LiveEvent.Changed)
     yield at match
       case Some(due) =>
         val when = timeFormat.format(Instant.ofEpochMilli(due).atZone(zone))

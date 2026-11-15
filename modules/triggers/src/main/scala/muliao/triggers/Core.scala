@@ -72,7 +72,7 @@ private[triggers] final case class Core(
 ):
   val now: UIO[Long] = Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
 
-  def changed: URIO[muliao.platform.db.TxHooks, Unit] = bus.publishAfterCommit(Triggers.Topic)
+  def changed: URIO[muliao.platform.db.TxHooks, Unit] = bus.publishAfterCommit(Topic.Triggers)
 
   // ---- 行与类型 ----
 

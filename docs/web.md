@@ -19,7 +19,7 @@ Scala.js + Laminar，外观沿用现有 muliao 界面（HeroUI v3 的样式类 +
 | `pages/<领域>` | 各页面；外壳只调用每页的入口（`XxxPage.view()` 等，见 `shell/Shell.scala`） |
 
 ## 写页面的约定
-- **数据**：`Remote("主题"...)(Http.call(接口)(参数))` 得到 `Signal[Load[A]]`：挂上时拉、全局 SSE 连上/重连、列出的主题变了、用户刚做完操作时再拉。主题：agents、assets、sessions、issues、triggers、notifications、history。用 `Ui.loading(signal)(data => ...)` 显示：`render` 只调用一次、拿到数据的 Signal，刷新不重建 DOM。
+- **数据**：`Remote(接口)(参数)` 得到 `Signal[Load[A]]`：挂上时拉、全局 SSE 连上/重连、接口声明的主题变了、用户刚做完操作时再拉。主题是 contract 的 `enum Topic`，跟着哪些主题刷新写在 contract 的接口声明上（`.refreshedBy(Topic.Issues, ...)`），调用点不写；要自己组织请求（连续翻页）或加别的重拉时机（「显示更多」、手动刷新）用 `Remote.following(接口, more)(fetch)`。要变换数据用 `.map(_.map(f))`。用 `Ui.loading(signal)(data => ...)` 显示：`render` 只调用一次、拿到数据的 Signal，刷新不重建 DOM。
 - **列表**用 `children <-- signal.splitSeq(_.key)(strict => ...)`（Airstream 18 写法）按键复用元素；单个随路由变化的子页面用 `.distinct.map(...)`。
 - **编辑表单不被刷新冲掉**：表单的草稿放在自己的 `Var` 里，只在打开（或切到另一条记录）时从数据初始化一次；提交时只发改过的字段（接口的 Patch 类型字段都是 Option）。
 - **操作**：`val act = new Action`；`act.run(Http.call(...)(...))` 成功后自动让正在显示的数据重拉；`act.errorView()` 显示错误；按钮 `Ui.btn(pending = act.busy.signal)`。危险操作先 `Confirm.ask(..., danger = true)`。

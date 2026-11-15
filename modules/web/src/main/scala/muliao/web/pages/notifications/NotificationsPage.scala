@@ -10,7 +10,7 @@ import Http.ec
 
 object NotificationsPage:
   def view(): HtmlElement =
-    val inbox = Remote("notifications")(Http.call(NotificationsApi.list)(None))
+    val inbox = Remote(NotificationsApi.list)(None)
     // 这次进页面时见过的未读：自己标了已读、列表重拉后它们仍显示未读点，让用户看出哪些是新的（下次进页面才消失）
     val seenUnread = Var(Set.empty[NotificationId])
     Ui.page("通知")(

@@ -50,6 +50,7 @@ object NotificationsApi:
       .in(query[Option[Int]]("limit"))
       .out(jsonBody[Inbox])
       .name("listNotifications")
+      .refreshedBy(Topic.Notifications)
       .description("通知页：最新的 `limit` 条（默认 100），新的在前，附全部未读数。")
 
   val readThrough: Endpoint[Option[String], ReadThrough, ApiError, Unit, Any] =

@@ -35,7 +35,7 @@ object IssuesPage:
     val scope   = Var(scopeStore.load())
     val agents  = AgentsData.load().map(_.data.getOrElse(Nil))
     val filters = Router.query.map(Filters.parse).distinct
-    val loaded  = filters.flatMapSwitch(f => Remote("issues")(Http.call(BoardApi.list)(f.query)))
+    val loaded  = filters.flatMapSwitch(f => Remote(BoardApi.list)(f.query))
     // 拖拽后先在本地挪动，接口成功、重新拉到的数据落下后以服务端为准；连着拖几张时每张各占一项
     val moves   = Var(Map.empty[IssueId, Move])
     val shown   = loaded.combineWith(moves.signal).map((l, m) => mapLoad(l)(applyMoves(_, m)))

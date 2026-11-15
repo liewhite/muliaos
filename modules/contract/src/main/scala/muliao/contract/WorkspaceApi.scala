@@ -86,14 +86,16 @@ object WorkspaceApi:
       .description("取 skill 目录里的一个文件原样内容（附件里的图片、二进制文件；文本用 readAssetFile）。")
 
   val listJobs: Endpoint[Option[String], AgentId, ApiError, List[JobView], Any] =
-    agentOne.get.in("jobs").out(jsonBody[List[JobView]]).name("listJobs").description("agent 的后台任务（最近 200 个）。")
+    agentOne.get.in("jobs").out(jsonBody[List[JobView]]).name("listJobs").refreshedBy(Topic.Jobs).description("agent 的后台任务（最近 200 个）。")
 
+  // 日志变长没有通知：会话有动静（多半是同一个 agent 在干活）时顺带重拉。
   val jobLog: Endpoint[Option[String], (JobId, Option[Int]), ApiError, String, Any] =
     Api.secure.get
       .in("jobs" / path[JobId]("job") / "log")
       .in(query[Option[Int]]("lines"))
       .out(stringBody)
       .name("jobLog")
+      .refreshedBy(Topic.Jobs, Topic.Sessions)
       .description("后台任务日志的最后几行（默认 200）。")
 
   val killJob: Endpoint[Option[String], JobId, ApiError, Unit, Any] =

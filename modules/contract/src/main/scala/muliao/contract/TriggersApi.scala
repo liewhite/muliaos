@@ -115,6 +115,7 @@ object TriggersApi:
       .in(query[Option[Boolean]]("finished"))
       .out(jsonBody[List[TriggerView]])
       .name("listTriggers")
+      .refreshedBy(Topic.Triggers)
       .description("触发器列表；`finished=true` 列已结束的一次性触发器。")
 
   val kinds: Endpoint[Option[String], Unit, ApiError, List[TriggerKindView], Any] =

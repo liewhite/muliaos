@@ -62,7 +62,7 @@ private[sessions] final case class Control(
                asked <- delegations.abandonTx(id)
                _     <- noticeTx(id, run.map(_.id), NoticeKind.Stopped, "已停止", t)
                p     <- mailbox.takePendingReply(id)
-               _     <- Repo.touch(id, t) *> changed
+               _     <- touched(id, t)
              yield Halted(ws, p, asked.size)
            )
       _ <- waits.forget(h.waits.map(_.id))
@@ -110,7 +110,7 @@ private[sessions] final case class Control(
       t <- now
       _ <- db.write(
              Repo.setRunState(run.id, RunState.Running, None, None) *> noticeTx(id, Some(run.id), NoticeKind.Info, "重试", t) *>
-               mailbox.addPendingReply(id, List(ReplyTo.User)) *> Repo.touch(id, t) *> changed
+               mailbox.addPendingReply(id, List(ReplyTo.User)) *> touched(id, t)
            )
       _ <- doorbell.ring(id)
     yield ()
@@ -136,7 +136,7 @@ private[sessions] final case class Control(
                       case (Some(_: Pause.Approval), Answer.Decision(false, _)) =>
                         CallTx.finish(c, CallResult.error("[用户没有批准，没有执行。]"), t)
                       case _ => ZIO.fail(AppError.invalid("答复的种类和这个调用在等的不一致"))
-               _ <- Repo.touch(id, t) *> changed
+               _ <- touched(id, t)
              yield ()
            )
       _ <- doorbell.ring(id)
@@ -165,7 +165,9 @@ private[sessions] final case class Control(
     for
       i <- info(id)
       _ <- delegations.threadGone(i)
-      _ <- db.write(Repo.orphanThreads(id) *> Repo.deleteSession(id) *> changed)
+      // 先 touched 再删：删掉之后行没了，但广播与实时事件照发（列表去掉它，开着的会话页重拉得到「不存在」）
+      t <- now
+      _ <- db.write(Repo.orphanThreads(id) *> touched(id, t) *> Repo.deleteSession(id))
       _ <- waits.forgetSession(id)
       _ <- live.done(id)
       _ <- hooks.emit(SessionEvent.Deleted(id, i.agent, i.origin))

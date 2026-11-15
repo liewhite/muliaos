@@ -49,8 +49,6 @@ trait Notifications:
   def sendTest: IO[AppError, NotificationId]
 
 object Notifications:
-  val Topic: muliao.contract.Topic = muliao.contract.Topic.wrap("notifications")
-
   /** 通知页不给条数时取多少条。 */
   val DefaultLimit = 100
 
@@ -133,7 +131,7 @@ object Notifications:
       for
         now <- Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
         id  <- Repo.insert(n.title, n.body, n.target.session, n.target.url, now)
-        _   <- bus.publishAfterCommit(Topic)
+        _   <- bus.publishAfterCommit(Topic.Notifications)
         _   <- muliao.platform.db.TxHooks.afterCommit(pusher.deliver(id))
       yield id
 
@@ -143,7 +141,7 @@ object Notifications:
       db.read(Repo.latest(limit.max(1)).zip(Repo.unreadCount)).map((rows, unread) => Inbox(rows.map(view), unread))
 
     private def mark(tx: Tx[Long]): IO[AppError, Unit] =
-      db.write(tx.tap(n => ZIO.when(n > 0)(bus.publishAfterCommit(Topic)))).unit
+      db.write(tx.tap(n => ZIO.when(n > 0)(bus.publishAfterCommit(Topic.Notifications)))).unit
 
     def readThrough(id: NotificationId): IO[AppError, Unit] = mark(Repo.readThrough(id))
     def readPage(url: String): IO[AppError, Unit]           = mark(Repo.readUrl(url))

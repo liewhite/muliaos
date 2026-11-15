@@ -313,6 +313,7 @@ object SessionsApi:
       )
       .out(jsonBody[SessionPage])
       .name("listSessions")
+      .refreshedBy(Topic.Sessions, Topic.Notifications)
       .description("会话列表：按最近活动倒序，运行中/等待中的置顶（第一页）。`agent` 筛选；`origin` 只要这些来源（可重复：user / trigger / issue / thread）；`q` 搜来信、回复与工具调用参数（不搜工具结果）。")
 
   val create: Endpoint[Option[String], NewSession, ApiError, Created, Any] =

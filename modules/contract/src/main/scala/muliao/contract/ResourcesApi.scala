@@ -181,12 +181,13 @@ object ResourcesApi:
   private val roles  = Api.secure.in("roles")
   private val assets = Api.secure.in("assets")
 
-  val listAgents = agents.get.out(jsonBody[List[AgentSummary]]).name("listAgents").description("现存的 agent（含归档的）。")
+  // agent.toml（模型、分组）改了只广播 assets，所以 agent 与角色的读接口也跟着 assets。
+  val listAgents = agents.get.out(jsonBody[List[AgentSummary]]).name("listAgents").refreshedBy(Topic.Agents, Topic.Assets).description("现存的 agent（含归档的）。")
 
   val createAgent =
     agents.post.in(jsonBody[AgentCreate]).out(statusCode(StatusCode.Created)).out(jsonBody[AgentDetail]).name("createAgent")
 
-  val getAgent = agents.get.in(path[AgentId]("id")).out(jsonBody[AgentDetail]).name("getAgent")
+  val getAgent = agents.get.in(path[AgentId]("id")).out(jsonBody[AgentDetail]).name("getAgent").refreshedBy(Topic.Agents, Topic.Assets)
 
   val updateAgent =
     agents.patch.in(path[AgentId]("id")).in(jsonBody[AgentUpdate]).out(jsonBody[AgentDetail]).name("updateAgent")
@@ -201,7 +202,7 @@ object ResourcesApi:
 
   val agentDefaults = Api.secure.get.in("agent-defaults").out(jsonBody[AgentDefaults]).name("agentDefaults")
 
-  val listRoles = roles.get.out(jsonBody[List[RoleView]]).name("listRoles")
+  val listRoles = roles.get.out(jsonBody[List[RoleView]]).name("listRoles").refreshedBy(Topic.Agents, Topic.Assets)
 
   val putRole =
     roles.put.in(path[RoleName]("name")).in(jsonBody[RoleWrite]).out(jsonBody[RoleView]).name("putRole")
@@ -215,10 +216,10 @@ object ResourcesApi:
     Api.secure.post.in("rules-check").in(jsonBody[RulesRequest]).out(jsonBody[List[RuleCheck]]).name("checkRules")
       .description("逐条解析规则并列出它匹配到的工具与资源。")
 
-  val listAssets = assets.get.out(jsonBody[AssetIndex]).name("listAssets")
+  val listAssets = assets.get.out(jsonBody[AssetIndex]).name("listAssets").refreshedBy(Topic.Assets, Topic.Agents)
 
   val readAssetFile =
-    assets.get.in("file").in(query[String]("path")).out(jsonBody[AssetFile]).name("readAssetFile")
+    assets.get.in("file").in(query[String]("path")).out(jsonBody[AssetFile]).name("readAssetFile").refreshedBy(Topic.Assets)
 
   val writeAssetFile =
     assets.put.in("file").in(jsonBody[AssetFileWrite]).out(jsonBody[AssetFile]).name("writeAssetFile")

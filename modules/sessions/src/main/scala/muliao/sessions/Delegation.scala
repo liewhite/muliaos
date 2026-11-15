@@ -112,7 +112,7 @@ private[sessions] final case class Delegations(kernel: Kernel, mailbox: Mailbox,
       case (Some(e), Some(c)) =>
         Repo.call(e, c).flatMap {
           case Some(row) if row.state == CallState.Suspended =>
-            Repo.setCall(e, c, CallState.Done, row.pause, Some(result.toJson), row.startedAt, Some(t)) *> Repo.touch(r.requesterId, t) *> changed.as(Some(r.requesterId))
+            Repo.setCall(e, c, CallState.Done, row.pause, Some(result.toJson), row.startedAt, Some(t)) *> touched(r.requesterId, t).as(Some(r.requesterId))
           case _ => ZIO.none
         }
       case _ => ZIO.none

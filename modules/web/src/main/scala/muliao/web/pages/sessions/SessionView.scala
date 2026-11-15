@@ -110,7 +110,7 @@ object SessionView:
 
   /** issue 会话的页头标题：指回它的 issue，显示编号、标题、当前状态。 */
   private def issueTitle(n: Long, fallback: String): HtmlElement =
-    val issue = Remote("issues")(Http.call(BoardApi.get)(IssueId.wrap(n)))
+    val issue = Remote(BoardApi.get)(IssueId.wrap(n))
     Ui.appLink(Route.Issue(n).url)(
       cls := "flex min-w-0 items-center gap-1.5 hover:text-accent",
       child <-- issue.map {
@@ -287,7 +287,7 @@ object SessionView:
       // 打开即已读；重连（隐藏期间断开）与看着它时又来了通知，都再标一次
       onMountCallback(_ => markRead()),
       frames.collect { case Frame.Ready => () } --> (_ => markRead()),
-      Events.changes.filter(_ == "notifications") --> (_ => markRead()),
+      Events.changes.filter(_ == Topic.Notifications) --> (_ => markRead()),
       sendable --> sendableNow,
       backTo --> backNow,
       views --> (v => live.update(LiveReply.step(_, v))),
