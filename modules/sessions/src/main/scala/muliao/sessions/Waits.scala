@@ -80,16 +80,16 @@ private[sessions] final class Waits(kernel: Kernel, mailbox: Mailbox, doorbell: 
       _  <- touched(session, t)
     yield id
 
-  /** 结束一项等待；`letter` 给出时作为事件投回发起会话。已结束的返回 false。 */
-  def close(key: WaitKey, letter: Option[Letter]): IO[AppError, Boolean] =
-    now.flatMap(t => db.write(closeTx(key, letter, t))).flatMap {
+  /** 结束一项等待；`letter` 给出时作为事件投回发起会话。已结束的（或给了 `only` 而库里那条已换成别的）返回 false。 */
+  def close(key: WaitKey, letter: Option[Letter], only: Option[WaitId] = None): IO[AppError, Boolean] =
+    now.flatMap(t => db.write(closeTx(key, letter, t, only))).flatMap {
       case Some(session) => doorbell.ring(session).as(true)
       case None          => ZIO.succeed(false)
     }
 
-  /** 在写事务里结束一项等待；返回发起会话（提交后由调用方按门铃）。 */
-  def closeTx(key: WaitKey, letter: Option[Letter], t: Long): Tx[Option[SessionId]] =
-    Repo.waitByKey(key.kind, key.ref).flatMap {
+  /** 在写事务里结束一项等待；返回发起会话（提交后由调用方按门铃）。`only`：只结束这一条（唤醒到点时，期间被换掉的不动）。 */
+  def closeTx(key: WaitKey, letter: Option[Letter], t: Long, only: Option[WaitId] = None): Tx[Option[SessionId]] =
+    Repo.waitByKey(key.kind, key.ref).map(_.filter(w => only.forall(_ == w.id))).flatMap {
       case None => ZIO.none
       case Some(w) =>
         for

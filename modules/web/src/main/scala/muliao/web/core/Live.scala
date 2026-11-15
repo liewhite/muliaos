@@ -8,11 +8,13 @@ import scala.scalajs.js
 import scala.scalajs.js.timers.{SetIntervalHandle, SetTimeoutHandle, clearInterval, clearTimeout, setInterval, setTimeout}
 
 /** 一条实时连接（SSE）给出的东西：`Ready` 是订阅建好了（第一次连上与每次重连都有，页面据此重新拉取），`Data` 是一条业务事件
-  * （看不懂的丢掉：服务端比页面新时，重连后整页会重拉）。
+  * （看不懂的丢掉：服务端比页面新时，重连后整页会重拉），`Closed` 是连接被关了（服务端回了非 200，如对象不存在、没登录；
+  * 看门狗随后重连）：只靠 ready 首拉的页面据此也拉一次，好显示出错原因而不是一直转圈。
   */
 enum Frame[+E]:
   case Ready
   case Data(event: E)
+  case Closed
 
 /** SSE 连接：有人订阅时连上，没人订阅时断开（Airstream 的流本身就是这样起停的）。
   *
@@ -39,6 +41,7 @@ object Live:
         conn = None
     ).collectOpt {
       case Frame.Ready   => Some(Frame.Ready)
+      case Frame.Closed  => Some(Frame.Closed)
       case Frame.Data(j) => feed.codec.decoder.decodeJson(j).toOption.map(Frame.Data(_))
     }
 
@@ -79,7 +82,10 @@ object Live:
       s.addEventListener("ping", beat)
       s.addEventListener(eventName, (e: dom.MessageEvent) => { lastFrameAt = js.Date.now(); fire(Frame.Data(e.data.asInstanceOf[String])) })
       // 关闭的原因可能是登录过期（401）：用一次普通请求走统一的 401 处理
-      s.onerror = _ => if s.readyState == dom.EventSource.CLOSED then Auth.recheck()
+      s.onerror = _ =>
+        if s.readyState == dom.EventSource.CLOSED then
+          Auth.recheck()
+          fire(Frame.Closed)
       source = Some(s)
 
     private def disconnect(): Unit =

@@ -37,7 +37,7 @@ private[sessions] final class WaitClock(
       _ <- ZIO.foreachDiscard(ws) { w =>
              w.ref match
                case WaitRef.Wake(due) if due <= t =>
-                 guarded(w)(waits.close(WaitKey.of(w.session, w.ref), Some(Letter(Source.Event(EventKind.Wake), s"[唤醒] ${w.label}"))).unit)
+                 guarded(w)(waits.close(WaitKey.of(w.session, w.ref), Some(Letter(Source.Event(EventKind.Wake), s"[唤醒] ${w.label}")), only = Some(w.id)).unit)
                case WaitRef.Wake(_) => ZIO.unit
                case _ =>
                  ZIO.foreachDiscard(w.heartbeat.filter(h => t - bs.getOrElse(w.id, t) >= h * 1000L))(_ =>
