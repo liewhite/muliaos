@@ -125,12 +125,14 @@ private[sessions] final case class Requests(
       bytes   <- ZIO.foreach(shas)(s => files.read(s).option.map(s -> _))
     yield ModelView.Attachments(uploads.map(u => u.id -> u).toMap, bytes.collect { case (s, Some(b)) => s -> b }.toMap, files.path)
 
-  /** 当前上下文大小：最近一次请求的输入 token（含缓存）。 */
+  /** 当前上下文大小：最近一次请求的输入 token（含缓存）；最近一次压缩之后还没有回复时不知道（0），压缩前的回复报的是压缩前的大小。 */
   def contextSize(id: SessionId): IO[AppError, Long] =
-    db.read(Repo.lastEntry(id, EntryKind.Reply)).flatMap(ZIO.foreach(_)(Decode.entry)).map {
-      case Some(Entry(_, _, EntryBody.Reply(_, _, u, _, false), _, _)) => u.input
-      case _                                                            => 0L
-    }
+    for
+      reply <- db.read(Repo.lastEntry(id, EntryKind.Reply)).flatMap(ZIO.foreach(_)(Decode.entry))
+      comp  <- db.read(Repo.lastEntry(id, EntryKind.Compaction))
+    yield reply match
+      case Some(Entry(rid, _, EntryBody.Reply(_, _, u, _, false), _, _)) if comp.forall(_.id < rid) => u.input
+      case _                                                                                          => 0L
 
   // ---- 请求 ----
 

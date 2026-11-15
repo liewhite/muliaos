@@ -283,6 +283,43 @@ object SessionsSpec extends ZIOSpecDefault:
         )
       }
     },
+    test("压缩：同一次运行压缩后仍超阈值，不再每步都压") {
+      val steps = new java.util.concurrent.atomic.AtomicInteger(0)
+      fresh(
+        req =>
+          if lastUserText(req).startsWith("[平台请求：压缩上下文]") then Script.Say(List(text("摘要")), Usage(50, 5, 0, 0))
+          else if steps.incrementAndGet() <= 5 then Script.Say(List(call(s"e${steps.get}", "echo", """{"text":"x"}""")), Usage(1000, 10, 0, 0))
+          else Script.Say(List(text("完")), Usage(1000, 10, 0, 0)),
+        SessionSettings(compactionThresholdTokens = 500, keepRecentSteps = 1)
+      ) { (m, _, _) =>
+        for
+          alice <- agent("alice")
+          id    <- userSession(alice, "开始")
+          _     <- eventually("完")(timeline(id))(_.exists(_.parts.exists(_.text.contains("完"))))
+          _     <- idle(id)
+          reqs  <- m.requests
+          tl    <- timeline(id)
+        yield assertTrue(
+          reqs.count(r => lastUserText(r).startsWith("[平台请求：压缩上下文]")) == 1,
+          tl.count(_.kind == "compaction") == 1,
+          tl.count(_.kind == "reply") == 6
+        )
+      }
+    },
+    test("压缩分批：每批不超过字符上限，至少一步；保留最近几步") {
+      val noFiles = ModelView.Attachments(Map.empty, Map.empty, s => java.nio.file.Path.of(s))
+      def reply(id: Long, chars: Int) = Entry(id, None, EntryBody.Reply(Chunk(text("x" * chars)), "m", Usage(0, 0, 0, 0), None, false), 0L, 0L)
+      val entries = List(Entry(1L, None, EntryBody.Context("c" * 10), 0L, 0L), reply(2L, 100), reply(3L, 100), reply(4L, 100), reply(5L, 100), reply(6L, 100))
+      val w       = Window(None, entries, Map.empty, noFiles)
+      assertTrue(
+        Compaction.plan(w, 1, 1000000L).contains(Compaction.Batch(6L, false)), // 全部放得下：一次切到保留窗口
+        Compaction.plan(w, 1, 215L).contains(Compaction.Batch(4L, true)),      // 10+100+100 放得下，再加一步就超
+        Compaction.plan(w, 1, 5L).contains(Compaction.Batch(3L, true)),        // 一步都放不下也至少压一步
+        Compaction.plan(w, 2, 1000000L).contains(Compaction.Batch(5L, false)),
+        Compaction.plan(w.copy(summary = Some("s" * 200)), 1, 215L).contains(Compaction.Batch(3L, true)),
+        Compaction.plan(w.copy(entries = entries.take(2)), 1, 1000L).isEmpty
+      )
+    },
     test("删除：忙时拒绝；thread 保留；删 agent 前会话要空闲") {
       fresh { req =>
         if isAgent(req, "bob") then Script.Say(List(text("bob 好了")))

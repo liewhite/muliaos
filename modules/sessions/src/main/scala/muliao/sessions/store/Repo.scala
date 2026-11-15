@@ -314,6 +314,12 @@ private[sessions] object Repo:
       .map(_.headOption)
       .orInternal
 
+  /** `after` 之后这种的第一条。 */
+  def firstEntryAfter(session: SessionId, kind: EntryKind, after: Long): Read[Option[EntryRow]] =
+    Sql.run(entries.filter(e => e.sessionId == lift(session) && e.kind == lift(kind) && e.id > lift(after)).sortBy(_.id).take(1))
+      .map(_.headOption)
+      .orInternal
+
   // ---- 工具调用 ----
 
   def insertCalls(rs: List[ToolCallRow]): Tx[Unit] =
