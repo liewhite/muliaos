@@ -29,9 +29,12 @@ KEEP_VERSIONS=${KEEP_VERSIONS:-3}
 say() { echo "$(date '+%F %T') $*"; }
 die() { say "ERROR: $*"; exit 1; }
 
-# launchd 起的是启动器；服务的 java 进程是它的子进程
+# launchd 起的是启动器；服务的 java 进程是它的子进程（用 ps 找：pgrep -P 在 agent 的写沙箱里找不到）
 svc_pid() { launchctl print "$SVC" 2>/dev/null | awk '$1=="pid" {print $3; exit}'; }
-java_pid() { p=$(svc_pid); [ -n "$p" ] && pgrep -P "$p" | head -1; }
+java_cmd() { p=$(svc_pid); [ -n "$p" ] && ps -axo ppid=,pid=,command= | awk -v p="$p" '$1==p {$1=""; print; exit}'; }
+java_pid() { java_cmd | awk '{print $1}'; }
+# 服务的 java 正在用的载荷目录名（current 下的 .muliao-<编号>）；服务没在跑时为空
+running_payload() { java_cmd | awk '{print $2}' | sed -n 's#^.*/\(\.[^/]*\)/runtime/bin/java$#\1#p'; }
 
 # 用固定的自签证书签 $1（第一次调用时生成证书）。用 rcodesign 直接拿证书文件签：系统的 codesign 只认钥匙串里
 # 受信任的证书，设为受信任要在图形界面上输密码，服务里做不了。
@@ -51,12 +54,19 @@ sign_program() {
     --pem-file "$SIGNING/key.pem" --pem-file "$SIGNING/cert.pem" "$1" 2>&1) || { echo "$sign_out"; return 1; }
 }
 
-# 把版本目录 $1 复制成 $APP/current（先复制成 current.new 再换上）。正在跑的程序文件被换掉不影响它，重启后生效。
+# 把版本目录 $1 复制成 $APP/current（先复制成 current.new 再换上），重启后生效。
 # 目录里连同启动器解好的载荷（.muliao-<编号>/）一起克隆，换上后第一次启动不用再解。
+# 正在跑的服务还要用它自己的载荷：JVM 按路径 $APP/current/.muliao-<旧编号>/runtime 起子进程（lib/jspawnhelper）、
+# 懒加载库，路径没了 agent 的命令和 precheck 全部起不来（#884）。所以把它在用的那份载荷也带进新目录；
+# 重启后没人用它，下次 activate 就不再带，current 里最多两份。
 activate() {
   [ -x "$1/muliao" ] || die "activate: $1/muliao not found"
   rm -rf "$APP/current.new" "$APP/current.old"
   cp -cR "$1" "$APP/current.new" || return 1 # APFS 克隆，不占空间
+  used=$(running_payload)
+  if [ -n "$used" ] && [ -d "$APP/current/$used" ] && [ ! -e "$APP/current.new/$used" ]; then
+    cp -cR "$APP/current/$used" "$APP/current.new/$used" || return 1
+  fi
   [ -e "$APP/current" ] && { mv "$APP/current" "$APP/current.old" || return 1; }
   mv "$APP/current.new" "$APP/current" || return 1
   rm -rf "$APP/current.old"
