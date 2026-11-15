@@ -192,9 +192,10 @@ object Main extends ZIOAppDefault:
     report.table("script_grants", grants.size, "script_grant", dst.insert("script_grant", grants.map(Convert.grant)))
 
     report.skipped("mail（排队中）", src.queuedMail, "不搬：搬进来新版会立刻开运行")
-    report.skipped("session_holds（进行中）", src.activeHolds, "不搬：后台任务、委派、唤醒由旧版自己收尾")
+    report.skipped("session_holds（进行中的后台任务、委派）", src.activeHolds, "不搬：旧版停了，后台任务随之结束，委派不再交回")
     report.skipped("paused_calls", src.count("paused_calls"), "不搬：挂起中的批准随运行结束")
-    report.skipped("wakeups", src.count("wakeups"), "不搬")
+    val wakes = src.pendingWakes
+    report.table("wakeups（还在等的）", wakes.size, "wait", dst.insert("wait", Convert.wakes(wakes, path)), "到点照样唤醒；同一会话多个只留最后定的")
 
   /** 新版每个 (agent, issue) 只有一个 issue 会话：旧版重复的，保留最近更新的那个，其余记成用户会话。 */
   private def dedupeIssueSessions(origins: List[SessionOrigin], report: Report): List[SessionOrigin] =
@@ -241,7 +242,7 @@ final class Report:
   /** 提交后从新库数一遍，和写入时的条数对照。 */
   def counted(dst: NewDb.Writer): Unit =
     inDb = List("agent", "upload", "trigger_def", "trigger_fault", "session", "run", "entry", "tool_call", "delegation", "issue", "issue_dep",
-      "issue_event", "notification", "push_subscription", "history_entry", "usage", "job", "script_grant").map(t => t -> dst.count(t)).toMap
+      "issue_event", "notification", "push_subscription", "history_entry", "usage", "job", "script_grant", "wait").map(t => t -> dst.count(t)).toMap
 
   def render(
       layout: Layout,

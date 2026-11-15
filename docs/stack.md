@@ -154,7 +154,7 @@
 - **用法**：`java -cp <migrate 类路径> muliao.migrate.Main ~/.muliao ~/.muliao-scala [--no-workspaces] [--port=1080]`（类路径 `sbt "export migrate/Runtime/fullClasspath"`）。新版主目录必须不存在或为空，不覆盖；`--no-workspaces` 只在开发试跑时用。不读工作目录约 15 秒，加工作目录（约 85G，APFS 克隆）另计。
 - **做法**：旧库在线备份成 `migration/source.db` 后只读快照；用各领域自己的迁移建库（与启动时一样），在一个事务里按行类型写入（列名 = 行字段名的蛇形）；附件、资源目录、工作目录 `cp -c -R -p` 克隆，推送私钥原样复制；资源目录里写死的 `~/.muliao/{assets,data,config.toml,muliao.log}` 换成新主目录的（触发器的提示、命令、前置检查也换，#878）；配置由旧配置生成（端口按 `--port`，默认 1081、权限 600、登录签名密钥新生成）；逐表条数（旧条数 / 写入 / 新库里）与没搬的、问题写进 `migration/report.md`。
 - **对应关系**：旧消息按段拆成新时间线（`Transcript`）：助手消息 → 回复（签名、OpenAI 输出项等协议数据放进 `Seal`，续聊时原样回传）+ 工具调用行；用户消息里运行上下文那段 → 上下文条目，信件文字（连同紧跟的附件段）→ 来信（来源按旧版标记），工具结果 → 对应调用的结果；失败、被停止、没结束的运行各记一条提示。迁移后每个调用都有结果（旧版缺的补说明）、运行都已结束、收件箱与等待为空，所以新版启动时不续跑、不执行任何东西。
-- **不搬**：排队中的信、进行中的异步工作、等批准、唤醒；看板的「请 agent 表态」动态（新版只记在 `issue_nudge`）。旧版早期状态 todo / waiting 在历史动态里按 in_progress / blocked 记。同一 agent 同一 issue 有多个会话的，只保留最近的为 issue 会话，其余记成用户会话。
+- **不搬**：排队中的信、进行中的后台任务与委派、等批准（还在等的唤醒搬成新版的等待，到点照样唤醒）；看板的「请 agent 表态」动态（新版只记在 `issue_nudge`）。旧版早期状态 todo / waiting 在历史动态里按 in_progress / blocked 记。同一 agent 同一 issue 有多个会话的，只保留最近的为 issue 会话，其余记成用户会话。
 - **验收**：迁移后起服务（无 ERROR、续跑 0 个会话），逐个读全部会话详情与时间线、全部 issue、各 agent 后台任务与各列表接口，（`modules/migrate/verify.sh <配置> <端口>`），并在 Claude、OpenAI 两种协议的旧会话里各续聊一轮。
 
 ## 打包与部署（#877）

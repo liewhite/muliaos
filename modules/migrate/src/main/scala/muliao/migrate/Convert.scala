@@ -7,8 +7,8 @@ import muliao.history.store.HistoryRow
 import muliao.notifications.store.{NotificationRow, SubscriptionRow}
 import muliao.contract.AgentState
 import muliao.resources.agents.AgentRecord
-import muliao.sessions.{DelegationId, TrackedMode}
-import muliao.sessions.store.{DelegationRow, UploadRow, UsageRow}
+import muliao.sessions.{DelegationId, TrackedMode, WaitId, WaitKind}
+import muliao.sessions.store.{DelegationRow, UploadRow, UsageRow, WaitRow}
 import muliao.triggers.{Mode, Precheck}
 import muliao.triggers.store.{FaultRow, TriggerRow}
 import muliao.workspace.store.{GrantRow, JobRow}
@@ -162,6 +162,12 @@ object Convert:
     val state = JobStatus.parse(j.status).toOption.filter(_ != JobStatus.Running).getOrElse(JobStatus.Interrupted)
     JobRow(JobId.wrap(j.id), AgentId.wrap(j.agentId), SessionId.wrap(j.sessionId), j.command, state, j.exitCode.filter(_ => state != JobStatus.Interrupted),
       reported = true, j.startedAt, j.finishedAt.orElse(Some(j.startedAt)))
+
+  /** 还在等的唤醒 → 新版的等待（唤醒的引用是会话编号，一个会话至多一个：同一会话有多个时只留最后定的，和 wake_me 替换旧的一致；提醒文字里的旧主目录路径经 `path` 换成新版的）。 */
+  def wakes(ws: List[Old.Wake], path: String => String = identity): List[WaitRow] =
+    ws.groupBy(_.sessionId).values.map(_.maxBy(_.createdAt)).toList.sortBy(_.createdAt).zipWithIndex.map { (w, i) =>
+      WaitRow(WaitId.wrap(i + 1L), SessionId.wrap(w.sessionId), WaitKind.Wake, w.sessionId, path(w.note), None, Some(w.dueAt), w.createdAt)
+    }
 
   def grant(g: Old.Grant): GrantRow =
     GrantRow(g.id, AgentId.wrap(g.agentId), SkillName.wrap(g.skill), g.script, g.args, g.secrets, g.fingerprint, g.createdAt)

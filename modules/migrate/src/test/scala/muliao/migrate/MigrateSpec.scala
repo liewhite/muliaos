@@ -140,6 +140,14 @@ object MigrateSpec extends ZIOSpecDefault:
         rw("~/.muliao/app/current ~/.muliao-scala/assets ~/.muliao/assets2 /Users/v/.muliao/assets ~/.muliao/muliao.log.1")._2 == 0
       )
     },
+    test("还在等的唤醒搬成等待：一个会话只留最后定的") {
+      val ws = Convert.wakes(List(Old.Wake("s1", 100, "早的", 1), Old.Wake("s2", 300, "另一个", 2), Old.Wake("s1", 200, "晚定的", 3)))
+      assertTrue(
+        ws.map(w => (w.sessionId.value, w.ref, w.label, w.dueAt)) == List(("s2", "s2", "另一个", Some(300L)), ("s1", "s1", "晚定的", Some(200L))),
+        ws.forall(_.kind == WaitKind.Wake),
+        ws.map(_.id.value) == List(1L, 2L)
+      )
+    },
     test("旧版时间的几种写法") {
       assertTrue(
         Old.millis("2026-10-19 13:58:05.487150+00:00") == 1792418285487L,

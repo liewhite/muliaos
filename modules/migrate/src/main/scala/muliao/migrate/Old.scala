@@ -67,6 +67,7 @@ object Old:
   /** status：exited / killed / interrupted（旧版在跑的也可能是别的值，按被中断算） */
   final case class Job(id: Long, sessionId: String, agentId: String, command: String, status: String, exitCode: Option[Int], startedAt: Long, finishedAt: Option[Long])
   final case class Grant(id: Long, agentId: String, skill: String, script: String, args: String, secrets: String, fingerprint: String, createdAt: Long)
+  final case class Wake(sessionId: String, dueAt: Long, note: String, createdAt: Long)
 
   /** 旧版的时间文本：`2026-10-19 13:58:05.487150+00:00` 或 ISO 8601（`…Z`）；不带时区的按 UTC。 */
   def millis(text: String): Long =
@@ -209,8 +210,15 @@ object Old:
 
     def messagesOf(role: String): Long = query("SELECT count(*) FROM messages WHERE json_extract(payload, '$.role') = ?", role)(_.getLong(1)).head
 
+    /** 还在等的唤醒（wake_me）：搬进新版的等待，到点照样唤醒（#881）。 */
+    def pendingWakes: List[Wake] =
+      query(
+        """SELECT h.session_id, w.due_at, w.note, w.created_at FROM wakeups w JOIN session_holds h ON h.id = w.hold_id
+          |WHERE h.kind = 'wake' AND h.status = 'active' AND h.ended_at IS NULL ORDER BY w.id""".stripMargin
+      )(r => Wake(r.getString(1), time(r, "due_at"), r.getString(3), time(r, "created_at")))
+
     /** 还在排队、没交给运行的信（迁移不搬：搬进来新版会立刻开运行）。 */
     def queuedMail: Long = query("SELECT count(*) FROM mail WHERE state = 'queued'")(_.getLong(1)).head
 
-    /** 还在进行的异步工作（后台任务、委派、唤醒）：旧版自己收尾，新版不接。 */
-    def activeHolds: Long = query("SELECT count(*) FROM session_holds WHERE status = 'active'")(_.getLong(1)).head
+    /** 还在进行的后台任务、委派（唤醒另搬）：新版不接。 */
+    def activeHolds: Long = query("SELECT count(*) FROM session_holds WHERE status = 'active' AND kind <> 'wake'")(_.getLong(1)).head
