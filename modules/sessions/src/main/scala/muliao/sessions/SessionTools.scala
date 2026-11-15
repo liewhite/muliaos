@@ -68,7 +68,6 @@ private[sessions] object SessionTools:
   private def fail(e: AppError): ToolFailure = ToolFailure.fromAppError(e)
   private def reject(m: String): ToolFailure = ToolFailure.Rejected(m)
 
-
   val AskUserDef = ToolDef[RunContext, AskUserIn](
     "ask_user",
     "问用户 1–4 个选择题（他总能选「其他」自己写），需要他拍板或给偏好时用；答案作为这个调用的结果回来。只在用户在等这个会话时可用（触发器、issue、别人委派来的会话里不可用：改用 notify_user，或在 issue 上设 blocked 交给用户）。能自己查到或定下的事别问。",
