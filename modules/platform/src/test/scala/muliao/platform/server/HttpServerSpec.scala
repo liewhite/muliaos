@@ -167,7 +167,7 @@ object HttpServerSpec extends ZIOSpecDefault:
         )
         ZIO.scoped {
           for
-            env   <- Server.defaultWith(_.port(0)).build
+            env   <- ((ZLayer.succeed(Server.Config.default.port(0)) ++ ZLayer.succeed(zio.http.netty.NettyConfig.defaultWithFastShutdown)) >>> Server.customized).build // 快速关闭，不等 2 秒安静期
             port  <- Server.install(routes).provideEnvironment(env)
             base   = s"http://127.0.0.1:$port"
             ua    <- call(Request.get(URL.decode(base + "/ua").toOption.get)).flatMap(r => ZIO.foreach(r.toOption)(_.body.asString).orDie)

@@ -186,4 +186,4 @@ object ScheduleSpec extends ZIOSpecDefault:
         yield assertTrue(n.size == 1, n.head.title.contains("remind"), n.head.body.contains("已归档"), ss.isEmpty, v.nextAt.contains(minute(3)))
       ))
     }
-  ) @@ TestAspect.sequential @@ TestAspect.timeout(2.minutes)
+  ) @@ TestAspect.timeout(2.minutes)

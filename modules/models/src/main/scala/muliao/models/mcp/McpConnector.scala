@@ -43,11 +43,15 @@ object McpConnector:
   /** 一次工具调用最多等多久 */
   val CallTimeout: Duration = 10.minutes
 
-  val layer: URLayer[SystemProxy, McpConnector] = ZLayer.fromFunction(Live.apply)
+  val layer: URLayer[SystemProxy, McpConnector] = layerWith(ConnectTimeout)
+
+  /** 连接等待时间可换的版本（测试里用短的，免得连不上的用例真等 30 秒）。 */
+  def layerWith(connectTimeout: Duration): URLayer[SystemProxy, McpConnector] =
+    ZLayer.fromFunction((proxy: SystemProxy) => Live(proxy, connectTimeout))
 
   private val mapper: McpJsonMapper = McpJsonDefaults.getMapper()
 
-  private final case class Live(proxy: SystemProxy) extends McpConnector:
+  private final case class Live(proxy: SystemProxy, connectTimeout: Duration) extends McpConnector:
 
     def connectAll(servers: Chunk[McpServerSpec], secrets: SecretLookup, launch: Launch): ZIO[Scope, Nothing, Connected] =
       ZIO
@@ -87,12 +91,12 @@ object McpConnector:
                             .sync(t)
                             .clientInfo(McpSchema.Implementation.builder("muliao", "1").build())
                             .requestTimeout(java.time.Duration.ofMillis(CallTimeout.toMillis))
-                            .initializationTimeout(java.time.Duration.ofMillis(ConnectTimeout.toMillis))
+                            .initializationTimeout(java.time.Duration.ofMillis(connectTimeout.toMillis))
                             .build()
                         )
                       )(c => ZIO.attemptBlocking(c.closeGracefully()).ignore)
             listed <- ZIO.attemptBlockingInterrupt { client.initialize(); listAll(client) }
-                        .timeoutFail(new RuntimeException(s"${ConnectTimeout.toSeconds} 秒内没连上"))(ConnectTimeout)
+                        .timeoutFail(new RuntimeException(s"${connectTimeout.toSeconds} 秒内没连上"))(connectTimeout)
                         .catchAll(e => ZIO.sleep(200.millis) *> stderr.flatMap(lines => ZIO.fail(withStderr(e, lines))))
           yield listed.map(tool(server.name, client, masker, gone))
         attempt.mapError(e => masker.mask(describe(e))).flatMap { tools =>

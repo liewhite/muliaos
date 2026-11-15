@@ -14,6 +14,15 @@ ThisBuild / scalacOptions ++= Seq(
   "-Werror"
 )
 
+// 各模块的测试各在自己的 JVM 里（Test / fork），sbt 默认同时只开 1 个测试 JVM，模块只能一个接一个跑；放开到 4 个，模块之间并行（#898）。
+// 限制只能叠加不能放宽，所以换掉 sbt 自带的那条（规则类不公开，只能按它的说明文字认）；sbt 改了默认值就在加载时报错，不悄悄失效。
+Global / concurrentRestrictions := {
+  val default     = s"Limit ${Tags.ForkedTestGroup.name} to 1"
+  val (old, rest) = (Global / concurrentRestrictions).value.partition(_.toString == default)
+  require(old.size == 1, s"没找到 sbt 自带的「$default」，看下 sbt 的默认限制改成什么了")
+  rest :+ Tags.limit(Tags.ForkedTestGroup, 4)
+}
+
 // quill 4.9.0 依赖 zio-json 0.10（只用于 Postgres jsonb，SQLite 用不到），允许被 1.x 取代
 ThisBuild / libraryDependencySchemes += "dev.zio" %% "zio-json" % VersionScheme.Always
 

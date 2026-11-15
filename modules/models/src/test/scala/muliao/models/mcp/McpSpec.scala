@@ -38,6 +38,9 @@ object McpSpec extends ZIOSpecDefault:
 
   val connector = SystemProxy.fixed(ProxySettings.direct) >>> McpConnector.layer
 
+  /** 只给「连不上」的用例用：连接等待 2 秒。连得上的用例仍用线上的等待时间，免得机器忙时起 server 慢而偶发失败。 */
+  val quickConnector = SystemProxy.fixed(ProxySettings.direct) >>> McpConnector.layerWith(2.seconds)
+
   /** 最小的 Streamable HTTP MCP server：只认带对 Authorization 的请求，JSON 直接回应。 */
   val httpRoutes = Routes(
     Method.POST / "mcp" -> handler { (req: Request) =>
@@ -137,14 +140,14 @@ object McpSpec extends ZIOSpecDefault:
     test("连不上的 server 当场收掉已起的进程，不等这次连接的 scope 结束") {
       for
         dir <- tempDir
-        // 起得来但关掉标准输出、不说协议：初始化等到超时（30 秒）失败
+        // 起得来但关掉标准输出、不说协议：初始化等到超时失败（本用例把连接等待换成 2 秒，不真等线上的 30 秒）
         r <- ZIO.scoped {
                for
                  c    <- ZIO.serviceWithZIO[McpConnector](_.connectAll(
                            Chunk(McpServerSpec("mute", McpTransport.Stdio("/bin/bash", Chunk("-c", "echo $$ > mute.pid; exec 1>&-; sleep 30"), Map.empty))),
                            secrets,
                            Launch(dir, Sandbox.Unrestricted)
-                         )).timeout(60.seconds)
+                         )).provideSomeLayer[Scope](quickConnector).timeout(60.seconds)
                  pid  <- ZIO.succeed(Files.readString(dir.resolve("mute.pid")).trim.toLong)
                  _    <- ZIO.sleep(500.millis)
                  live <- alive(pid)
@@ -171,7 +174,7 @@ object McpSpec extends ZIOSpecDefault:
     test("HTTP：请求头代入 secret；试连列出不带前缀的工具名；连不上的试连是领域错误") {
       ZIO.scoped {
         for
-          env  <- Server.defaultWith(_.port(0)).build
+          env  <- ((ZLayer.succeed(Server.Config.default.port(0)) ++ ZLayer.succeed(zio.http.netty.NettyConfig.defaultWithFastShutdown)) >>> Server.customized).build // 快速关闭，不等 2 秒安静期
           port <- Server.install(httpRoutes).provideEnvironment(env)
           dir  <- tempDir
           spec  = McpServerSpec("web", McpTransport.Http(s"http://127.0.0.1:$port/mcp", Map("Authorization" -> "Bearer ${vault:TOKEN}")))

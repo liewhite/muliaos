@@ -17,6 +17,10 @@ object WebSpec extends ZIOSpecDefault:
   val http: ZLayer[Any, Throwable, OutboundHttp] =
     (ZLayer.succeed(HttpSettings()) ++ SystemProxy.fixed(ProxySettings.direct)) >>> OutboundHttp.layer
 
+  /** 随机端口的本地服务；快速关闭，不等 Netty 默认的 2 秒安静期。 */
+  val testServer: ZLayer[Any, Throwable, Server] =
+    (ZLayer.succeed(Server.Config.default.port(0)) ++ ZLayer.succeed(zio.http.netty.NettyConfig.defaultWithFastShutdown)) >>> Server.customized
+
   /** 收到的请求（路径、头、体）。 */
   final case class Seen(path: String, auth: Option[String], body: String)
 
@@ -67,7 +71,7 @@ object WebSpec extends ZIOSpecDefault:
   def withServer[A](f: (String, Ref[Chunk[Seen]], OutboundHttp) => ZIO[Any, Any, A]): ZIO[Scope, Any, A] =
     for
       seen <- Ref.make(Chunk.empty[Seen])
-      env  <- Server.defaultWith(_.port(0)).build
+      env  <- testServer.build
       port <- Server.install(routes(seen)).provideEnvironment(env)
       out  <- http.build.map(_.get[OutboundHttp])
       a    <- f(s"http://127.0.0.1:$port", seen, out)

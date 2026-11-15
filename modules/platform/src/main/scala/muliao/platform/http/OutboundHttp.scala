@@ -44,7 +44,8 @@ object OutboundHttp:
     ZLayer.makeSome[HttpSettings & SystemProxy, OutboundHttp](
       ZLayer.fromFunction((s: HttpSettings) => ZClient.Config.default.connectionTimeout(s.connectTimeoutSeconds.seconds)),
       Client.live,
-      ZLayer.succeed(zio.http.netty.NettyConfig.default),
+      // 客户端只在进程退出（或测试的 scope 结束）时关：不用 Netty 默认的 2 秒安静期，关得快（#898，测试里每个用例省约 2 秒）
+      ZLayer.succeed(zio.http.netty.NettyConfig.defaultWithFastShutdown),
       DnsResolver.default,
       ZLayer.fromFunction(Live.apply)
     )
