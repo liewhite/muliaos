@@ -270,7 +270,8 @@ object Transcript:
       .orElse(Option.when(s.title.contains(" · "))(s.title.takeWhile(_ != ' ')).filter(_.nonEmpty))
       .getOrElse(s"trigger-${s.originRef.getOrElse("?")}")
     val parentAgent = s.parent.flatMap(sessionAgent.get).getOrElse("?")
-    val delegation  = Source.Delegation(SessionId.wrap(s.parent.getOrElse("")), AgentName.wrap(parentAgent))
+    // 发起会话已删的 thread：来源的会话编号记成「已删除」（新版来源不能为空）
+    val delegation  = Source.Delegation(SessionId.wrap(s.parent.filter(_.nonEmpty).getOrElse("已删除")), AgentName.wrap(parentAgent))
     val issue       = s.originRef.flatMap(_.toLongOption).map(i => Source.Issue(IssueId.wrap(i))).getOrElse(Source.User)
     val byTrigger   = Source.Trigger(TriggerName.wrap(trigger))
     val origin: Origin = s.origin match

@@ -28,11 +28,18 @@ object Endpoints:
   extension [I, O](e: Endpoint[Option[String], I, ApiError, O, Any])
     /** 需要登录的接口：先校验 cookie，再执行领域逻辑；领域错误统一转成接口错误体。 */
     def secured(auth: Auth)(logic: Principal => I => IO[AppError, O]): ApiEndpoint =
-      e.zServerSecurityLogic(auth.authenticate).serverLogic[Any](p => i => logic(p)(i).mapError(AppError.toApi))
+      e.zServerSecurityLogic(auth.authenticate).serverLogic[Any](p => i => toApi(e.showShort, logic(p)(i)))
 
   extension [I, O](e: PublicEndpoint[I, ApiError, O, Any])
     def public(logic: I => IO[AppError, O]): ApiEndpoint =
-      e.zServerLogic(i => logic(i).mapError(AppError.toApi))
+      e.zServerLogic(i => toApi(e.showShort, logic(i)))
+
+  /** 领域错误转成接口错误体；内部错误给前端的只有「详情见服务日志」，所以细节在这里进日志。 */
+  private def toApi[O](what: String, io: IO[AppError, O]): IO[ApiError, O] =
+    io.tapError {
+      case AppError.Internal(m, cause) => ZIO.logErrorCause(s"接口 $what 内部错误：$m", cause.fold(Cause.empty)(Cause.die(_)))
+      case _                           => ZIO.unit
+    }.mapError(AppError.toApi)
 
 /** HTTP 服务骨架：登录、实时刷新（SSE）、OpenAPI、静态前端、统一错误体、gzip。各领域的接口由组装入口传进来。 */
 object HttpServer:
