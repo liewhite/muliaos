@@ -12,16 +12,13 @@ object IssueModelSpec extends ZIOSpecDefault:
   private val bob = Assignee.Agent(AgentId.wrap("bob"))
 
   def spec = suite("IssueModel")(
-    test("筛选条件与查询参数互换：状态逗号分隔、认不出的丢掉，切换后按看板列序") {
-      val f = Filters.parse(Map("status" -> "done,xx,backlog", "assignee" -> "user", "owner" -> ""))
+    test("筛选：看板的列按筛选的状态，切换后按看板列序") {
+      val f = IssueQuery(List(IssueStatus.Done, IssueStatus.Backlog))
       assertTrue(
-        f.statuses == List(IssueStatus.Done, IssueStatus.Backlog),
-        f.assignee.contains("user"),
-        f.owner.isEmpty,
         f.columns == List(IssueStatus.Backlog, IssueStatus.Done),
-        Filters.statusParam(f.toggle(IssueStatus.InProgress)).contains("backlog,in_progress,done"),
-        Filters.statusParam(Filters.parse(Map.empty).toggle(IssueStatus.Done).filterNot(_ == IssueStatus.Done)).isEmpty,
-        Filters.parse(Map.empty).columns == Statuses
+        f.toggle(IssueStatus.InProgress).status == List(IssueStatus.Backlog, IssueStatus.InProgress, IssueStatus.Done),
+        IssueQuery().toggle(IssueStatus.Done).toggle(IssueStatus.Done).status.isEmpty,
+        IssueQuery().columns == Statuses
       )
     },
     test("依赖编号：# 可省、逗号空格都行，有非编号内容为 None") {

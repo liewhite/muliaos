@@ -31,7 +31,7 @@ object AgentList:
     val query  = Var("")
     Ui.page(
       "Agents",
-      actions = Ui.linkButton(Route.AgentNew.url)(Icon("Plus"), "新建")
+      actions = Ui.linkButton(Route.agentNew.url)(Icon("Plus"), "新建")
     )(
       Ui.loading(agents) { list =>
         val sections = list.combineWith(query.signal).map(parts)
@@ -63,7 +63,7 @@ object AgentList:
 
   /** 列表按编号复用元素，所以一张卡片的编号不变。 */
   private def card(agent: StrictSignal[AgentSummary]): HtmlElement =
-    val url    = Route.Agent(agent.now().id.value).url
+    val url    = Route.agent(agent.now().id).url
     val active = Router.location.map(_.path == url)
     Ui.appLink(url, withFrom = false)(
       div(

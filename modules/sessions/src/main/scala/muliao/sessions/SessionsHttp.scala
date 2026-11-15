@@ -42,10 +42,11 @@ final case class SessionsHttp(sessions: Sessions, console: SessionConsole, files
     ZIO.when(m.text.isBlank && m.files.isEmpty)(ZIO.fail(AppError.invalid("消息不能为空"))) *>
       sessions.deliver(Address.To(id), Letter(Source.User, m.text, Chunk.fromIterable(m.files), Some(ReplyTo.User))).unit
 
-  private def answer(id: SessionId, entry: Long, call: CallId, a: AnswerIn): IO[AppError, Unit] =
-    (a.answers, a.approved) match
-      case (Some(as), None) => console.answer(id, CallKey(entry, call), Answer.Answers(as))
-      case (None, Some(ok)) => console.answer(id, CallKey(entry, call), Answer.Decision(ok, a.always))
+  private def answer(in: CallAnswer): IO[AppError, Unit] =
+    val key = CallKey(in.entry, in.call)
+    (in.answer.answers, in.answer.approved) match
+      case (Some(as), None) => console.answer(in.session, key, Answer.Answers(as))
+      case (None, Some(ok)) => console.answer(in.session, key, Answer.Decision(ok, in.answer.always))
       case _                => ZIO.fail(AppError.invalid("answers 与 approved 给且只给一个"))
 
   private def compact(id: SessionId): IO[AppError, Unit] =
@@ -84,7 +85,7 @@ final case class SessionsHttp(sessions: Sessions, console: SessionConsole, files
 
   def routes: List[Route] =
     List(
-      SessionsApi.list.secured((agent, origins, q, before, limit) => console.list(agent, q, before, limit.getOrElse(50), origins)),
+      SessionsApi.list.secured(q => console.list(q.agent, q.q, q.before, q.limit.getOrElse(50), q.origin)),
       SessionsApi.create.secured(create),
       SessionsApi.get.secured(console.detail),
       SessionsApi.timeline.secured(sessions.timeline),
@@ -95,10 +96,10 @@ final case class SessionsHttp(sessions: Sessions, console: SessionConsole, files
       SessionsApi.compact.secured(compact),
       SessionsApi.read.secured(console.markRead),
       SessionsApi.delete.secured(console.delete),
-      SessionsApi.answer.secured((id, e, c, a) => answer(id, e, c, a)),
+      SessionsApi.answer.secured(answer),
       SessionsApi.upload.secured((name, ct, bytes) => files.upload(name, ct, Chunk.fromArray(bytes)).map(Timeline.file)),
       SessionsApi.download.secured(download),
       SessionsApi.blob.secured(blob),
-      SessionsApi.usage.secured((from, to) => console.usage(from, to))
+      SessionsApi.usage.secured(r => console.usage(r.from, r.to))
     )
 

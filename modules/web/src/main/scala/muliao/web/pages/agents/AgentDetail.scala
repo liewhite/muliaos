@@ -20,8 +20,8 @@ object AgentDetail:
     case Files   extends Tab("文件")
     case Jobs    extends Tab("后台任务")
 
-  def view(id: String): HtmlElement =
-    val agentId = AgentId.wrap(id)
+  def view(agentId: AgentId): HtmlElement =
+    val id      = agentId.value
     val detail  = Remote(ResourcesApi.getAgent)(agentId)
     val tab     = Var(Tab.Config)
     // 打开过的标签页一直挂着（切走再回来，正在改的表单还在）
@@ -29,9 +29,9 @@ object AgentDetail:
     val name    = detail.map(_.data.fold(id)(_.summary.name.value))
     Ui.page(
       child.text <-- name,
-      back = Some(Route.Agents),
+      back = Some(Route.agents),
       actions = child.maybe <-- detail.map(_.data.filterNot(d => AgentsData.archived(d.summary)).map(_ =>
-        Ui.linkButton(s"${Route.NewSession.url}?agent=${Http.enc(id)}", Variant.Secondary)(Icon("MessageSquarePlus"), "对话")
+        Ui.linkButton(Route.newSession(Some(agentId)).url, Variant.Secondary)(Icon("MessageSquarePlus"), "对话")
       ))
     )(
       Ui.loading(detail) { d =>
@@ -94,7 +94,7 @@ object AgentDetail:
           "删除",
           danger = true
         )
-        .foreach(ok => if ok then act.run(Http.call(ResourcesApi.deleteAgent)(id), leave = Some(() => Router.go(Route.Agents))): Unit)
+        .foreach(ok => if ok then act.run(Http.call(ResourcesApi.deleteAgent)(id), leave = Some(() => Router.go(Route.agents))): Unit)
 
     div(
       cls := "flex flex-col gap-3",
@@ -113,7 +113,7 @@ object AgentDetail:
           ),
           div(
             cls := "text-muted",
-            child <-- name.map(n => Ui.appLink(s"${Route.Assets.url}?owner=${Http.enc(n)}")(cls := "text-accent", "它名下的 AI 资产"))
+            child <-- name.map(n => Ui.appLink(Route.assets(owner = Some(n)).url)(cls := "text-accent", "它名下的 AI 资产"))
           ),
           div(cls := "break-all text-xs text-muted", "工作目录 ", span(cls := "font-mono", child.text <-- d.map(_.workspace))),
           div(
@@ -205,7 +205,7 @@ object AgentDetail:
       p(
         cls := "text-sm text-muted",
         "它运行时能用的工具与资源，以及凭哪条规则（「用」与「改」各一条）。改分发在「配置」，改内容在 ",
-        Ui.appLink(Route.Assets.url)(cls := "text-accent", "AI 资产"),
+        Ui.appLink(Route.assets().url)(cls := "text-accent", "AI 资产"),
         "。"
       ),
       child.maybe <-- d.map(x =>
@@ -231,6 +231,6 @@ object AgentDetail:
           case Nil => "它没有别的记忆可用。"
           case ms  => s"它还能用这些记忆：${ms.mkString("、")}。"
         ),
-        div("全局与共享记忆在 ", Ui.appLink(s"${Route.Assets.url}?kind=memory")(cls := "text-accent", "AI 资产 · 记忆"), " 里改。")
+        div("全局与共享记忆在 ", Ui.appLink(Route.assets(AssetTab.Memory).url)(cls := "text-accent", "AI 资产 · 记忆"), " 里改。")
       )
     )

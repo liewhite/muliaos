@@ -12,19 +12,20 @@ import IssueParts.*
 
 /** /issues/<号>：属性（随改随存）、开始与叫停、依赖、关联会话、审核、描述、时间线、评论；标题、描述与依赖在编辑器里改。 */
 object IssueView:
-  def view(id: Long): HtmlElement =
-    val issueId = IssueId.wrap(id)
+  /** @param reject 从通知的「打回」点进来：审核卡片聚焦理由 */
+  def view(issueId: IssueId, reject: Boolean): HtmlElement =
+    val id      = issueId.value
     val load    = Remote(BoardApi.get)(issueId)
     val agents  = AgentsData.list
     val editing = Var(false)
     val remove  = new Action
     def delete(): Unit =
       Confirm.ask(s"删除 #$id？", Some("评论与时间线一起删除，agent 的会话保留。"), "删除", danger = true).foreach { ok =>
-        if ok then remove.run(Http.call(BoardApi.delete)(issueId), toast = Some("删除"), leave = Some(() => Router.go(Route.Issues))): Unit
+        if ok then remove.run(Http.call(BoardApi.delete)(issueId), toast = Some("删除"), leave = Some(() => Router.go(Route.issues()))): Unit
       }
     Ui.page(
       s"#$id",
-      back = Some(Route.Issues),
+      back = Some(Route.issues()),
       actions = Seq(
         Ui.iconBtn("Pencil", "编辑", iconCls = "size-4")(onClick --> (_ => editing.set(true))),
         Ui.iconBtn("Trash2", "删除", iconCls = "size-4")(disabled <-- remove.busy.signal, onClick --> (_ => delete()))
@@ -32,12 +33,12 @@ object IssueView:
     )(
       // 看到了 issue 就看到了请你审核它的通知
       onMountCallback(_ =>
-        Http.call(NotificationsApi.readPage)(ReadPage(Route.Issue(id).url)).failed.foreach(e => dom.console.error("标记 issue 通知已读失败", e.getMessage))
+        Http.call(NotificationsApi.readPage)(ReadPage(Route.issue(issueId).url)).failed.foreach(e => dom.console.error("标记 issue 通知已读失败", e.getMessage))
       ),
-      Ui.loading(load)(d => body(issueId, d, agents, editing))
+      Ui.loading(load)(d => body(issueId, reject, d, agents, editing))
     )
 
-  private def body(id: IssueId, d: Signal[IssueDetail], agents: Signal[List[AgentSummary]], editing: Var[Boolean]): Modifier[HtmlElement] =
+  private def body(id: IssueId, reject: Boolean, d: Signal[IssueDetail], agents: Signal[List[AgentSummary]], editing: Var[Boolean]): Modifier[HtmlElement] =
     val change  = new Action
     val summary = d.map(_.summary)
     // 页面上正显示的那份：下拉框选了当前值不提交
@@ -88,7 +89,7 @@ object IssueView:
       change.errorView(),
       links(d),
       sessions(d),
-      child.maybe <-- summary.map(reviewable).distinct.map(r => Option.when(r)(review(id))),
+      child.maybe <-- summary.map(reviewable).distinct.map(r => Option.when(r)(review(id, reject))),
       child.maybe <-- editing.signal.map(e =>
         Option.when(!e)(
           div(
@@ -165,7 +166,7 @@ object IssueView:
   // ---- 依赖与会话 ----
 
   private def issueLink(l: IssueLink): HtmlElement =
-    Ui.appLink(Route.Issue(l.id.value).url)(cls := "flex items-center gap-1 text-accent", title := s"${l.title}（${l.status.shown}）", statusDot(l.status), s"#${l.id.value}")
+    Ui.appLink(Route.issue(l.id).url)(cls := "flex items-center gap-1 text-accent", title := s"${l.title}（${l.status.shown}）", statusDot(l.status), s"#${l.id.value}")
 
   private def links(d: Signal[IssueDetail]): HtmlElement =
     div(
@@ -194,7 +195,7 @@ object IssueView:
         case Nil => Nil
         case ss =>
           span(cls := "text-muted", "关联会话") :: ss.map { s =>
-            Ui.appLink(Route.Session(s.session.value).url)(
+            Ui.appLink(Route.session(s.session).url)(
               cls := "flex items-center gap-1 text-accent",
               Icon("MessageSquare", "size-4"),
               s"${s.agentName} 的会话",
@@ -207,10 +208,9 @@ object IssueView:
   // ---- 审核 ----
 
   /** 指派给用户的 issue 在这里审核（推送通知点开就是这一页；通知上的「打回」带 ?review=reject 打开，聚焦理由）。 */
-  private def review(id: IssueId): HtmlElement =
+  private def review(id: IssueId, reject: Boolean): HtmlElement =
     val reason = Var("")
     val act    = new Action
-    val reject = Router.now.params.get("review").contains("reject")
     def sendBack(): Unit =
       if !act.busy.now() && reason.now().trim.nonEmpty then
         act.run(Http.call(BoardApi.sendBack)((id, SendBackIn(reason.now().trim)))).foreach(ok => if ok then reason.set(""))
@@ -237,7 +237,7 @@ object IssueView:
   /** 这条动态发生在哪个会话：点开看过程（返回回到这个 issue）。 */
   private def sourceSession(s: Option[SessionId]): Option[HtmlElement] =
     s.map(sid =>
-      Ui.appLink(Route.Session(sid.value).url)(
+      Ui.appLink(Route.session(sid).url)(
         cls := "flex shrink-0 items-center text-muted hover:text-accent",
         aria.label := "来源会话",
         title := "打开做这件事的会话",

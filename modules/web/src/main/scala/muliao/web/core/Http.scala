@@ -95,6 +95,3 @@ object Http:
   /** 浏览器的文件读成字节（上传、语音）。 */
   def bytesOf(blob: dom.Blob): Future[Array[Byte]] =
     blob.arrayBuffer().toFuture.map((buf: ArrayBuffer) => new Int8Array(buf).toArray)
-
-  /** 编码进路径 / 查询参数里的一段。 */
-  def enc(s: String): String = js.URIUtils.encodeURIComponent(s)

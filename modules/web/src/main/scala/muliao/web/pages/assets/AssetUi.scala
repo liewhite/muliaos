@@ -47,7 +47,7 @@ object AssetUi:
   def agentChip(name: String, agents: Signal[List[AgentSummary]], tone: Tone = Tone.Accent): HtmlElement =
     span(
       child <-- agents.map(_.find(_.name.value == name)).map {
-        case Some(a) => Ui.appLink(Route.Agent(a.id.value).url)(Ui.chip(name, tone)())
+        case Some(a) => Ui.appLink(Route.agent(a.id).url)(Ui.chip(name, tone)())
         case None    => Ui.chip(name, tone)()
       }
     )

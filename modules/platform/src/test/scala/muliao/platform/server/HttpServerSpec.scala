@@ -154,7 +154,7 @@ object HttpServerSpec extends ZIOSpecDefault:
       }
     },
     test("接口描述包含平台接口") {
-      val doc = HttpServer.openApi(List(HttpServer.events, HttpServer.openApiEndpoint) ++ muliao.contract.AuthApi.all, "t")
+      val doc = HttpServer.openApi(List(Endpoints.stream(muliao.contract.Api.changes), HttpServer.openApiEndpoint) ++ muliao.contract.AuthApi.all, "t")
       assertTrue(doc.contains("/api/auth/login"), doc.contains("/api/events"), doc.contains("ApiError"))
     },
     suite("出站 HTTP")(

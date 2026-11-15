@@ -80,7 +80,7 @@ object IssueRefs:
         Pattern.findAllMatchIn(text).foreach { m =>
           frag.appendChild(dom.document.createTextNode(text.substring(at, m.start)))
           val a = dom.document.createElement("a").asInstanceOf[dom.html.Anchor]
-          a.href = Route.Issue(m.group(1).toLong).url
+          a.href = Route.issue(muliao.contract.IssueId.wrap(m.group(1).toLong)).url
           a.textContent = m.matched
           frag.appendChild(a)
           at = m.end

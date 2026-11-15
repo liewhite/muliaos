@@ -145,7 +145,7 @@ final class TranscriptView:
     )(toolDetail(c))
 
   private def threadLink(t: SessionSummary): HtmlElement =
-    Ui.appLink(Route.Session(t.id.value).url)(
+    Ui.appLink(Route.session(t.id).url)(
       cls := "flex items-center gap-2 self-start rounded-lg px-2 py-1 text-sm hover:bg-surface-hover",
       Icon("GitBranch", "size-3.5 shrink-0 text-muted"),
       span(cls := "truncate font-medium", t.originRef.getOrElse("thread")),
@@ -298,7 +298,7 @@ final class TranscriptView:
   private def fromLabel(f: From): Option[Modifier[HtmlElement]] = f match
     case From.User           => None
     case From.Trigger(name)  => Some(Seq[Modifier[HtmlElement]](Icon("Zap", "size-3.5"), s"触发器 ${name.getOrElse("")}"))
-    case From.Issue(ref)     => Some(Seq[Modifier[HtmlElement]](Icon("KanbanSquare", "size-3.5"), ref.flatMap(_.toLongOption).fold[Modifier[HtmlElement]]("issue")(n => Ui.appLink(Route.Issue(n).url)(cls := "text-accent hover:underline", s"issue #$n"))))
+    case From.Issue(ref)     => Some(Seq[Modifier[HtmlElement]](Icon("KanbanSquare", "size-3.5"), ref.flatMap(r => IssueId.make(r.stripPrefix("#").toLongOption.getOrElse(0L)).toOption).fold[Modifier[HtmlElement]]("issue")(n => Ui.appLink(Route.issue(n).url)(cls := "text-accent hover:underline", s"issue #${n.value}"))))
     case From.Delegation(by) => Some(Seq[Modifier[HtmlElement]](Icon("GitBranch", "size-3.5"), s"来自 ${by.getOrElse("上级会话")} 的委派"))
     case From.Event(k)       => Some(Seq[Modifier[HtmlElement]](Icon("BellDot", "size-3.5"), k.getOrElse("事件")))
 

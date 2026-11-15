@@ -9,30 +9,21 @@ import Http.ec
 
 /** /ai-assets：全部 AI 资源，按种类（`?kind=`）与归属（`?owner=`）筛选。每项显示归属与被谁使用；没加载的文件与原因、access.toml 写坏的提示放在最上面。 */
 object AssetsPage:
-  /** 种类标签页；`id` 是地址里的 `?kind=`。 */
-  enum KindTab(val id: String, val label: String, val kinds: Set[AssetItemKind]):
-    case Skill  extends KindTab("skill", "Skill", Set(AssetItemKind.Skill))
-    case Mcp    extends KindTab("mcp", "MCP", Set(AssetItemKind.Mcp))
-    case Secret extends KindTab("secret", "Secret", Set(AssetItemKind.Secret))
-    case Memory extends KindTab("memory", "记忆", Set(AssetItemKind.Memory))
-    /** agent.toml 与 access.toml */
-    case Config extends KindTab("config", "配置文件", Set(AssetItemKind.Agent, AssetItemKind.Access))
-
-  object KindTab:
-    def of(id: Option[String]): KindTab = id.flatMap(i => values.find(_.id == i)).getOrElse(Skill)
-
   /** 归属筛选：全部、平台或某个 agent 名。 */
   def ownerMatches(filter: Option[String], item: AssetItem): Boolean = filter.forall(_ == item.owner)
 
-  def items(index: AssetIndex, tab: KindTab, owner: Option[String]): List[AssetItem] =
+  def items(index: AssetIndex, tab: AssetTab, owner: Option[String]): List[AssetItem] =
     index.items.filter(i => tab.kinds(i.kind) && ownerMatches(owner, i))
 
-  def view(): HtmlElement =
+  /** @param at 地址里的种类与归属（改它就是改地址） */
+  def view(at: Signal[(AssetTab, Option[String])]): HtmlElement =
     val index  = Remote(ResourcesApi.listAssets)(())
     val agents = AgentsData.list
-    val tab    = Router.query.map(q => KindTab.of(q.get("kind"))).distinct
-    val owner  = Router.query.map(_.get("owner").filter(_ != "all")).distinct
+    val tab    = at.map(_._1).distinct
+    val owner  = at.map(_._2).distinct
+    val edits  = new EventBus[((AssetTab, Option[String])) => (AssetTab, Option[String])]
     Ui.page("AI 资产")(
+      edits.events.withCurrentValueOf(at) --> ((edit, t, o) => { val (t2, o2) = edit((t, o)); Router.update(Route.assets(t2, o2)) }),
       p(
         cls := "text-sm text-muted",
         "每项 AI 资产都是资源目录下的文件，在谁的目录下就归谁（平台或某个 agent）。agent 对它能做什么按权限 ",
@@ -49,15 +40,15 @@ object AssetsPage:
             Fields.select[String](
               "归属",
               owner.map(o => Some(o.getOrElse("all"))),
-              o => Router.setParam("owner", Option.when(o != "all")(o)),
+              o => edits.emit((t, _) => (t, Option.when(o != "all")(o))),
               agents.map(as => Opt("all", "全部") :: Opt(AssetUi.Platform, "平台") :: as.map(a => Opt(a.name.value, a.name.value)))
             )
           ),
-          Tabs[KindTab](
+          Tabs[AssetTab](
             "资产种类",
             tab,
-            t => Router.setParam("kind", Some(t.id)),
-            KindTab.values.toList.map(t => t -> span(t.label, child.text <-- idx.combineWith(owner).map((i, o) => s"（${items(i, t, o).size}）")))
+            t => edits.emit((_, o) => (t, o)),
+            AssetTab.values.toList.map(t => t -> span(t.label, child.text <-- idx.combineWith(owner).map((i, o) => s"（${items(i, t, o).size}）")))
           ),
           // 每个种类一个独立的实例（切换种类时新建表单不带过去）
           child <-- tab.map(t => panel(t, idx.combineWith(owner).map((i, o) => items(i, t, o)), agents))
@@ -80,12 +71,12 @@ object AssetsPage:
       )
     )
 
-  private def panel(t: KindTab, list: Signal[List[AssetItem]], agents: Signal[List[AgentSummary]]): HtmlElement = t match
-    case KindTab.Skill  => SkillTab.view(list, agents)
-    case KindTab.Mcp    => McpTab.view(list, agents)
-    case KindTab.Secret => SecretTab.view(list, agents)
-    case KindTab.Memory => MemoryTab.view(list, agents)
-    case KindTab.Config => ConfigTab.view(list)
+  private def panel(t: AssetTab, list: Signal[List[AssetItem]], agents: Signal[List[AgentSummary]]): HtmlElement = t match
+    case AssetTab.Skill  => SkillTab.view(list, agents)
+    case AssetTab.Mcp    => McpTab.view(list, agents)
+    case AssetTab.Secret => SecretTab.view(list, agents)
+    case AssetTab.Memory => MemoryTab.view(list, agents)
+    case AssetTab.Config => ConfigTab.view(list)
 
   /** 列表：空时提示。 */
   def listOf(list: Signal[List[AssetItem]], empty: String)(item: StrictSignal[AssetItem] => HtmlElement): HtmlElement =
@@ -111,7 +102,7 @@ object SkillTab:
   def view(list: Signal[List[AssetItem]], agents: Signal[List[AgentSummary]]): HtmlElement =
     div(
       cls := "flex flex-col gap-3",
-      div(Ui.linkButton(Route.SkillEdit.url, Variant.Secondary)(Icon("Plus"), "新建 skill")),
+      div(Ui.linkButton(Route.skill(None).url, Variant.Secondary)(Icon("Plus"), "新建 skill")),
       AssetsPage.listOf(list, "没有 skill") { s =>
         val url = SkillEditor.url(s.now().name, s.now().owner)
         Ui.card(

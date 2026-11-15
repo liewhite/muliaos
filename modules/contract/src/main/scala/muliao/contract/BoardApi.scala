@@ -138,13 +138,16 @@ final case class SendBackIn(reason: String) derives JsonCodec, Schema
 /** 叫停：停掉在做的会话，再改成 `status`（backlog / blocked / cancelled / in_progress；in_progress 是改方向，要留言）。 */
 final case class StopIssueIn(status: IssueStatus, message: Option[String] = None) derives JsonCodec, Schema
 
+/** issue 列表的筛选：`status` 不给是全部；`assignee` 是 `user` 或 agent 编号；`owner` 是 agent 编号。 */
+final case class IssueQuery(status: List[IssueStatus] = Nil, assignee: Option[String] = None, owner: Option[AgentId] = None)
+
 object BoardApi:
   private val issues = Api.secure.in("issues")
   private val one    = issues.in(path[IssueId]("id"))
 
-  val list: Endpoint[Option[String], (List[IssueStatus], Option[String], Option[AgentId]), ApiError, List[IssueSummary], Any] =
+  val list: Endpoint[Option[String], IssueQuery, ApiError, List[IssueSummary], Any] =
     issues.get
-      .in(query[List[IssueStatus]]("status").and(query[Option[String]]("assignee")).and(query[Option[AgentId]]("owner")))
+      .in(query[List[IssueStatus]]("status").and(query[Option[String]]("assignee")).and(query[Option[AgentId]]("owner")).mapTo[IssueQuery])
       .out(jsonBody[List[IssueSummary]])
       .name("listIssues")
       .refreshedBy(Topic.Issues)

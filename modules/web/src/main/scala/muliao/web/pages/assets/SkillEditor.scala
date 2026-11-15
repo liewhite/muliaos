@@ -9,12 +9,12 @@ import scala.concurrent.Future
 
 import Http.ec
 
-/** /ai-assets/skill?name=&owner=：编辑 SKILL.md（保存带指纹，期间被改过就提示重来）、浏览附件；不带 name 是新建。 */
+/** /ai-assets/skill?name=&owner=（见 [[Page.Skill]]）：编辑 SKILL.md（保存带指纹，期间被改过就提示重来）、浏览附件；不带 name 是新建。 */
 object SkillEditor:
-  private val SkillsUrl = s"${Route.Assets.url}?kind=skill"
+  private val SkillsUrl = Route.assets(AssetTab.Skill).url
 
-  def url(name: String, owner: String): String =
-    s"${Route.SkillEdit.url}?name=${Http.enc(name)}&owner=${Http.enc(owner)}"
+  /** 已有 skill 的编辑页（名字来自服务端或刚保存成功）。 */
+  def url(name: String, owner: String): String = Route.skill(Some(SkillRef(SkillName.wrap(name), Some(owner)))).url
 
   def mainPath(owner: String, name: String): String = s"$owner/skills/$name/SKILL.md"
 
@@ -29,12 +29,13 @@ object SkillEditor:
        |
        |""".stripMargin
 
-  def view(): HtmlElement =
+  /** @param target 地址里的 skill；没有是新建 */
+  def view(target: Signal[Option[SkillRef]]): HtmlElement =
     div(
       cls := "h-full",
-      child <-- Router.query.map(q => (q.get("name").filter(_.nonEmpty), q.get("owner").filter(_.nonEmpty))).distinct.map {
-        case (Some(n), owner) => existing(n, owner)
-        case (None, _)        => create()
+      child <-- target.distinct.map {
+        case Some(r) => existing(r.name.value, r.owner)
+        case None    => create()
       }
     )
 
@@ -52,11 +53,11 @@ object SkillEditor:
         .run(
           Http.call(ResourcesApi.writeAssetFile)(AssetFileWrite(mainPath(o, n), content.now(), None)).map { _ =>
             Toast.success("skill 已保存")
-            Router.replace(url(n, o))
+            Router.update(Route.skill(Some(SkillRef(SkillName.wrap(n), Some(o)))))
           }
         )
         .foreach(_ => ())
-    Ui.page("新建 skill", back = Some(Route.Assets))(
+    Ui.page("新建 skill", back = Some(Route.assets()))(
       Ui.card(
         div(
           cls := "card__content flex flex-col gap-4",
@@ -79,7 +80,7 @@ object SkillEditor:
     val owner: Signal[Load[Option[String]]] = ownerParam match
       case Some(o) => Val(Load.Loaded(Some(o)))
       case None    => index.map(_.map(_.items.find(x => x.kind == AssetItemKind.Skill && x.name == name).map(_.owner)))
-    Ui.page(span(cls := "font-mono", name), back = Some(Route.Assets))(
+    Ui.page(span(cls := "font-mono", name), back = Some(Route.assets()))(
       Ui.loading(owner)(o =>
         child <-- o.distinct.map {
           case None    => Ui.emptyHint(s"没有叫 $name 的 skill")

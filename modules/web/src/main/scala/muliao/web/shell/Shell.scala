@@ -16,28 +16,22 @@ final case class NavItem(route: Route, label: String, icon: String)
 object Nav:
   /** 首页导航（手机底栏、桌面左侧栏）：五项，新会话居中画成圆形主按钮。 */
   val activity: List[(NavItem, Boolean)] = List(
-    NavItem(Route.Sessions, "会话", "MessageSquare")        -> false,
-    NavItem(Route.Issues, "Issues", "KanbanSquare")         -> false,
-    NavItem(Route.NewSession, "新会话", "Plus")              -> true,
-    NavItem(Route.Pages, "页面", "LayoutDashboard")          -> false,
-    NavItem(Route.Notifications, "通知", "Bell")             -> false
+    NavItem(Route.home, "会话", "MessageSquare")                     -> false,
+    NavItem(Route.issues(), "Issues", "KanbanSquare")                -> false,
+    NavItem(Route.newSession(), "新会话", "Plus")                     -> true,
+    NavItem(Route.Single(Page.Pages), "页面", "LayoutDashboard")      -> false,
+    NavItem(Route.Single(Page.Notifications), "通知", "Bell")         -> false
   )
 
   /** 管理菜单：配置类页面。 */
   val adminGroups: List[(String, List[NavItem])] = List(
-    "运行"  -> List(NavItem(Route.Agents, "Agents", "Bot"), NavItem(Route.Triggers, "触发器", "Zap"), NavItem(Route.Usage, "Token 用量", "BarChart3")),
-    "资源"  -> List(NavItem(Route.Assets, "AI 资产", "Boxes"), NavItem(Route.Roles, "角色", "ShieldCheck")),
-    "本设备" -> List(NavItem(Route.Settings, "设置", "Settings"))
+    "运行"  -> List(NavItem(Route.agents, "Agents", "Bot"), NavItem(Route.Single(Page.Triggers), "触发器", "Zap"), NavItem(Route.Single(Page.Usage), "Token 用量", "BarChart3")),
+    "资源"  -> List(NavItem(Route.assets(), "AI 资产", "Boxes"), NavItem(Route.Single(Page.Roles), "角色", "ShieldCheck")),
+    "本设备" -> List(NavItem(Route.Single(Page.Settings), "设置", "Settings"))
   )
 
-  /** 导航项是否算「当前页」：会话是首页，它的子页（新会话除外）也算。 */
-  def active(item: Route, at: Option[Route]): Boolean = (item, at) match
-    case (Route.Sessions, Some(Route.Sessions | Route.Session(_))) => true
-    case (Route.Issues, Some(Route.Issues | Route.Issue(_)))       => true
-    case (Route.Pages, Some(Route.Pages | Route.Page(_, _)))       => true
-    case (Route.Notifications, Some(Route.Notifications))          => true
-    case (r, Some(x))                                              => Route.adminItem(x).contains(r)
-    case _                                                         => false
+  /** 导航项是否算「当前页」：当前页与它属于导航里的同一项（新会话不属于任何一项）。 */
+  def active(item: Route, at: Option[Route]): Boolean = item.section.isDefined && item.section == at.flatMap(_.section)
 
   def adminNav(onNavigate: () => Unit): HtmlElement =
     navTag(
@@ -63,17 +57,8 @@ object Nav:
     )
 
 object Shell:
-  /** 页面怎么排：会话、Agents 在宽屏（xl）列表与详情分屏；其余整页。 */
-  private enum Layout:
-    case SessionsSplit, AgentsSplit, Single
-
-  private def layoutOf(r: Route): Layout = r match
-    case Route.Sessions | Route.NewSession | Route.Session(_) => Layout.SessionsSplit
-    case Route.Agents | Route.AgentNew | Route.Agent(_)       => Layout.AgentsSplit
-    case _                                                    => Layout.Single
-
   /** 列表 + 详情：宽屏左列表右详情；窄屏只显示其一，打开详情时列表隐藏。 */
-  private def listDetail(list: HtmlElement, detail: Signal[Option[Route]], empty: String)(render: Route => HtmlElement): HtmlElement =
+  private def listDetail[P](list: HtmlElement, detail: Signal[Option[P]], empty: String)(render: P => HtmlElement): HtmlElement =
     div(
       cls := "flex h-full",
       div(
@@ -88,45 +73,46 @@ object Shell:
           div(
             cls := "h-full min-w-0 flex-1",
             // 每个详情一个独立的页面实例：切到另一个会话/agent 时草稿、附件、展开状态不带过去
-            child <-- detail.map(_.get).distinct.map(render)
+            children <-- detail.map(_.toList).distinct.map(_.map(render))
           )
       }
     )
 
-  private def renderSingle(r: Route): HtmlElement = r match
-    case Route.Notifications   => pages.notifications.NotificationsPage.view()
-    case Route.Roles           => pages.agents.RolesPage.view()
-    case Route.Triggers        => pages.triggers.TriggersPage.view()
-    case Route.Issues          => pages.issues.IssuesPage.view()
-    case Route.Issue(id)       => pages.issues.IssueView.view(id)
-    case Route.Settings        => pages.settings.SettingsPage.view()
-    case Route.Assets          => pages.assets.AssetsPage.view()
-    case Route.SkillEdit       => pages.assets.SkillEditor.view()
-    case Route.Pages           => pages.sites.SitePages.view()
-    case Route.Page(a, n)      => pages.sites.SitePages.pageView(a, n)
-    case Route.Usage           => pages.usage.UsagePage.view()
-    case other                 => div(s"不该到这里：$other")
+  /** 整页的页面。带参数的页面拿到参数的 Signal：改筛选条件不重建页面；issue 详情每个 issue 一个实例。 */
+  private def single(page: Signal[Page]): Signal[HtmlElement] =
+    page.splitMatchOne
+      .handleCase { case Page.Notifications => () } (_ => pages.notifications.NotificationsPage.view())
+      .handleCase { case Page.Roles => () } (_ => pages.agents.RolesPage.view())
+      .handleCase { case Page.Triggers => () } (_ => pages.triggers.TriggersPage.view())
+      .handleCase { case Page.Settings => () } (_ => pages.settings.SettingsPage.view())
+      .handleCase { case Page.Pages => () } (_ => pages.sites.SitePages.view())
+      .handleCase { case Page.Usage => () } (_ => pages.usage.UsagePage.view())
+      .handleCase { case Page.Issues(f) => f } { f => pages.issues.IssuesPage.view(f) }
+      .handleCase { case Page.Issue(id, reject) => (id, reject) } { at => div(cls := "h-full", child <-- at.distinct.map((id, reject) => pages.issues.IssueView.view(id, reject))) }
+      .handleCase { case Page.Assets(tab, owner) => (tab, owner) } { at => pages.assets.AssetsPage.view(at) }
+      .handleCase { case Page.Skill(t) => t } { t => pages.assets.SkillEditor.view(t) }
+      .handleCase { case Page.Site(a, n) => (a, n) } { at => div(cls := "h-full", child <-- at.distinct.map((a, n) => pages.sites.SitePages.pageView(a, n))) }
+      .toSignal
 
   private def content(route: Signal[Route]): HtmlElement =
     div(
       cls := "h-full",
-      child <-- route.map(layoutOf).distinct.map {
-        case Layout.SessionsSplit =>
-          listDetail(pages.sessions.SessionList.view(), route.map { case Route.Sessions => None; case r => Some(r) }, "选择一个会话") {
-            case Route.NewSession  => pages.sessions.NewSessionPage.view()
-            case Route.Session(id) => pages.sessions.SessionView.view(id)
-            case other             => div(s"不该到这里：$other")
+      child <-- route.splitMatchOne
+        .handleCase { case Route.Sessions(p) => p } { pane =>
+          listDetail(pages.sessions.SessionList.view(), pane, "选择一个会话") {
+            case SessionPane.New(agent) => pages.sessions.NewSessionPage.view(agent)
+            case SessionPane.Open(id)   => pages.sessions.SessionView.view(id)
           }
-        case Layout.AgentsSplit =>
-          listDetail(pages.agents.AgentList.view(), route.map { case Route.Agents => None; case r => Some(r) }, "选择一个 agent") {
-            case Route.AgentNew  => pages.agents.AgentCreate.view()
-            case Route.Agent(id) => pages.agents.AgentDetail.view(id)
-            case other           => div(s"不该到这里：$other")
+        }
+        .handleCase { case Route.Agents(p) => p } { pane =>
+          listDetail(pages.agents.AgentList.view(), pane, "选择一个 agent") {
+            case AgentPane.New      => pages.agents.AgentCreate.view()
+            case AgentPane.Open(id) => pages.agents.AgentDetail.view(id)
           }
-        case Layout.Single =>
-          // 每个页面（含每个 issue）一个独立实例；页面出错只影响自己
-          div(cls := "h-full", child <-- route.distinct.map(renderSingle))
-      }
+        }
+        // 每个页面一个独立实例；页面出错只影响自己
+        .handleCase { case Route.Single(p) => p } { page => div(cls := "h-full", child <-- single(page)) }
+        .toSignal
     )
 
   /** 首页导航的一项；通知带未读角标。 */
@@ -149,7 +135,7 @@ object Shell:
         span(
           cls := "relative",
           Icon(item.icon, "size-5"),
-          Option.when(item.route == Route.Notifications)(
+          Option.when(item.route.section.contains(Section.Notifications))(
             child.maybe <-- unread.map(n =>
               Option.when(n > 0)(
                 span(
@@ -172,8 +158,8 @@ object Shell:
     div(
       cls := "flex h-full flex-col md:flex-row",
       // 认不出的地址回首页
-      route.updates.filter(_.isEmpty) --> (_ => Router.replace("/")),
-      onMountCallback(_ => if Router.now.route.isEmpty then Router.replace("/")),
+      route.updates.filter(_.isEmpty) --> (_ => Router.update(Route.home)),
+      onMountCallback(_ => if Router.now.route.isEmpty then Router.update(Route.home)),
       // 未读数跟着角标；推送到达时按服务端的数纠正
       unread --> (n => Badge.set(n)),
       Badge.pushed --> (_ => Events.refreshNow.emit(())),
@@ -189,7 +175,7 @@ object Shell:
         div(cls := "my-1 h-px w-8 bg-separator"),
         Nav.activity.map((it, primary) => tabLink(it, primary, unread, "h-14 w-14 rounded-lg hover:bg-surface-hover"))
       ),
-      child.maybe <-- route.map(_.flatMap(Route.adminItem).isDefined).distinct.map(admin =>
+      child.maybe <-- route.map(_.flatMap(_.section).exists(_.admin)).distinct.map(admin =>
         Option.when(admin)(
           asideTag(
             cls := "hidden w-56 shrink-0 flex-col border-r border-separator bg-surface lg:flex",
@@ -206,7 +192,7 @@ object Shell:
           case _              => None
         },
         div(cls := "min-h-0 flex-1", child <-- route.map(_.isDefined).distinct.map {
-          case true  => content(route.map(_.getOrElse(Route.Sessions)))
+          case true  => content(route.map(_.getOrElse(Route.home)))
           case false => div()
         }),
         navTag(
@@ -237,7 +223,7 @@ object Login:
     val action   = new Action
     def submit(): Unit =
       if password.now().nonEmpty then
-        action.run(Auth.login(password.now()), leave = Some(() => Router.replace("/"))).foreach(_ => ())
+        action.run(Auth.login(password.now()), leave = Some(() => Router.update(Route.home))).foreach(_ => ())
     div(
       cls := "flex h-full items-center justify-center p-6",
       Ui.card(

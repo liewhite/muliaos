@@ -189,6 +189,8 @@ lazy val web = project
   .dependsOn(contract.js)
   .settings(
     scalaJSUseMainModuleInitializer := true,
+    // contract 的 zio-schema（给工具参数用）经 zio-prelude 带进时区库，约 600KB：前端不用 zio-schema、也不解析时区，排除（#890 实测前端包 +14%）
+    excludeDependencies += ExclusionRule("io.github.cquiroz", "scala-java-time-tzdb_sjs1_3"),
     scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.ESModule).withESFeatures(_.withESVersion(org.scalajs.linker.interface.ESVersion.ES2018))), // ES2018：正则的后行断言与 \p{L}
     libraryDependencies ++= Seq(
       "com.raquo"                   %%% "laminar"            % V.laminar,

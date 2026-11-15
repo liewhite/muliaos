@@ -125,7 +125,7 @@ object RolesPage:
               case (_, ms, as) =>
                 ms.map(m =>
                   as.find(_.name == m) match
-                    case Some(a) => Ui.appLink(Route.Agent(a.id.value).url)(Ui.chip(m.value, Tone.Accent)())
+                    case Some(a) => Ui.appLink(Route.agent(a.id).url)(Ui.chip(m.value, Tone.Accent)())
                     case None    => Ui.chip(m.value, Tone.Accent)()
                 )
             }

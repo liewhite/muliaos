@@ -125,27 +125,15 @@ object IssueModel:
     case None    => "无负责项目"
     case Some(o) => agents.find(_.id == o).map(_.name.value).orElse(name).getOrElse(o.value)
 
-  // ---- 筛选（地址查询参数） ----
+  // ---- 筛选（地址查询参数，见 Route） ----
 
-  /** 列表的筛选条件，与地址的查询参数 `status`（逗号分隔）、`assignee`（user 或 agent 编号）、`owner` 互换。 */
-  final case class Filters(statuses: List[IssueStatus], assignee: Option[String], owner: Option[AgentId]):
-    def query: (List[IssueStatus], Option[String], Option[AgentId]) = (statuses, assignee, owner)
-
+  extension (f: IssueQuery)
     /** 看板显示的列：没筛状态时全部。 */
-    def columns: List[IssueStatus] = if statuses.isEmpty then Statuses else Statuses.filter(statuses.contains)
+    def columns: List[IssueStatus] = if f.status.isEmpty then Statuses else Statuses.filter(f.status.contains)
 
-    def toggle(s: IssueStatus): List[IssueStatus] =
-      if statuses.contains(s) then statuses.filterNot(_ == s) else Statuses.filter(x => x == s || statuses.contains(x))
-
-  object Filters:
-    def parse(params: Map[String, String]): Filters =
-      Filters(
-        statuses = params.get("status").toList.flatMap(_.split(',').toList).flatMap(IssueStatus.parse(_).toOption).distinct,
-        assignee = params.get("assignee").filter(_.nonEmpty),
-        owner = params.get("owner").filter(_.nonEmpty).flatMap(o => AgentId.make(o).toOption)
-      )
-
-    def statusParam(ss: List[IssueStatus]): Option[String] = Option.when(ss.nonEmpty)(ss.map(_.label).mkString(","))
+    /** 点了一个状态：选上或去掉（按看板的列序排）。 */
+    def toggle(s: IssueStatus): IssueQuery =
+      f.copy(status = if f.status.contains(s) then f.status.filterNot(_ == s) else Statuses.filter(x => x == s || f.status.contains(x)))
 
   // ---- 分列 ----
 

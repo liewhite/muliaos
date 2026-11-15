@@ -23,7 +23,7 @@ object SessionList:
   private def fetch(filter: Filter, keyword: String, count: Int): Future[List[SessionSummary]] =
     def loop(before: Option[Long], acc: List[SessionSummary]): Future[List[SessionSummary]] =
       Http
-        .call(SessionsApi.list)((None, filter.origins, Option(keyword).filter(_.nonEmpty), before, Some(PageSize)))
+        .call(SessionsApi.list)(SessionQuery(None, filter.origins, Option(keyword).filter(_.nonEmpty), before, Some(PageSize)))
         .flatMap { page =>
           val all = acc ++ page.items.filterNot(s => acc.exists(_.id == s.id))
           page.next match
@@ -39,12 +39,12 @@ object SessionList:
 
   /** 一张会话卡片；`withAgent` 时（置顶区）带上 agent 名与它现在配置的模型。 */
   private def card(id: SessionId, s: Signal[SessionSummary], withAgent: Boolean, models: Signal[Map[AgentId, String]]): HtmlElement =
-    Ui.appLink(Route.Session(id.value).url, withFrom = false)(
+    Ui.appLink(Route.session(id).url, withFrom = false)(
       cls := "block",
       div(
         cls <-- s.combineWith(Router.location).map((x, l) =>
           s"card card--default transition-colors hover:bg-surface-hover ${stateCard(x.state)} " +
-            (if l.route.contains(Route.Session(id.value)) then "ring-2 ring-accent" else "")
+            (if l.route.contains(Route.session(id)) then "ring-2 ring-accent" else "")
         ),
         div(
           cls := "card__content flex flex-row items-center gap-3",

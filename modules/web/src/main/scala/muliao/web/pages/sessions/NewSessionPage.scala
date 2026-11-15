@@ -104,9 +104,10 @@ object AgentPicker:
 
 /** 新会话页：选 agent（地址 `?agent=` 或默认 agent）、写消息、附件、语音，开始后跳到会话页。 */
 object NewSessionPage:
-  def view(): HtmlElement =
+  /** @param preset 预选的 agent（地址 `?agent=`） */
+  def view(preset: Option[AgentId]): HtmlElement =
     val agents  = AgentsData.all
-    val chosen  = Var(Router.now.params.get("agent").flatMap(a => AgentId.make(a).toOption))
+    val chosen  = Var(preset)
     val prompt  = Var("")
     val uploads = new Uploads
     val action  = new Action
@@ -123,12 +124,12 @@ object NewSessionPage:
         agentNow.now().foreach { a =>
           action
             .run(
-              Http.call(SessionsApi.create)(NewSession(a, prompt.now().trim, uploads.done.map(_._2.id))).map(c => Router.replace(Route.Session(c.id.value).url)),
+              Http.call(SessionsApi.create)(NewSession(a, prompt.now().trim, uploads.done.map(_._2.id))).map(c => Router.update(Route.session(c.id))),
               leave = Some(() => ())
             )
             .foreach(_ => ())
         }
-    Ui.page("新会话", back = Some(Route.Sessions))(
+    Ui.page("新会话", back = Some(Route.home))(
       canStart --> canNow,
       agent --> agentNow,
       Ui.loading(agents) { data =>
@@ -136,7 +137,7 @@ object NewSessionPage:
           cls := "contents",
           child <-- data.map(_.isEmpty).distinct.map {
             case true =>
-              div(cls := "flex flex-col items-center gap-3", Ui.emptyHint("还没有 agent。"), Ui.linkButton(Route.AgentNew.url)("创建 agent"))
+              div(cls := "flex flex-col items-center gap-3", Ui.emptyHint("还没有 agent。"), Ui.linkButton(Route.agentNew.url)("创建 agent"))
             case false =>
               Ui.card(
                 div(

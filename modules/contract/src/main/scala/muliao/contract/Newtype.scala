@@ -15,8 +15,7 @@ import zio.json.{JsonCodec, JsonFieldDecoder, JsonFieldEncoder}
 abstract class Newtype[A](using
     baseJson: JsonCodec[A],
     baseSchema: Schema[A],
-    baseCodec: Codec[String, A, CodecFormat.TextPlain],
-    baseZio: zio.schema.Schema[A]
+    baseCodec: Codec[String, A, CodecFormat.TextPlain]
 ):
   opaque type Type = A
 
@@ -41,8 +40,8 @@ abstract class Newtype[A](using
   given Codec[String, Type, CodecFormat.TextPlain] =
     baseCodec.mapEither(make)(_.value)
 
-  /** 用作工具参数：外部输入，先校验。 */
-  given zioSchema: zio.schema.Schema[Type] = baseZio.transformOrFail(make, t => Right(t.value))
+  /** 用作工具参数：外部输入，先校验。带 using 参数，前端不用它时整段被裁掉（不把 zio-schema 打进前端包）。 */
+  given zioSchema(using base: zio.schema.Schema[A]): zio.schema.Schema[Type] = base.transformOrFail(make, t => Right(t.value))
 
 /** `T` 是 `A` 的不透明包装。 */
 final case class IsNewtype[T, A](wrap: A => T, unwrap: T => A)

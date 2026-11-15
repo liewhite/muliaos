@@ -71,7 +71,7 @@ object UsagePage:
       // 换区间重新拉一份（用量只增不改，不随主题刷新）
       child <-- window.signal.map { w =>
         val (from, to) = Report.window(w.days, js.Date.now())
-        val report     = Remote(SessionsApi.usage)((from, to)).map(_.map(Report.of))
+        val report     = Remote(SessionsApi.usage)(muliao.contract.TimeRange(from, to)).map(_.map(Report.of))
         div(cls := "flex flex-col gap-3", Ui.loading(report)(r => children <-- r.map(sections)))
       }
     )

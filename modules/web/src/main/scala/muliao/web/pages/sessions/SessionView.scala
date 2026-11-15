@@ -102,7 +102,7 @@ object SessionView:
   /** issue 会话的页头标题：指回它的 issue，显示编号、标题、当前状态。 */
   private def issueTitle(n: Long, fallback: String): HtmlElement =
     val issue = Remote(BoardApi.get)(IssueId.wrap(n))
-    Ui.appLink(Route.Issue(n).url)(
+    Ui.appLink(Route.issue(IssueId.wrap(n)).url)(
       cls := "flex min-w-0 items-center gap-1.5 hover:text-accent",
       child <-- issue.map(l => span(cls := "min-w-0 truncate", l.data.fold(fallback)(d => s"#$n ${d.summary.title}"))),
       child.maybe <-- issue.map(_.data.map(d => span(cls := "shrink-0 text-xs font-normal text-muted", d.summary.status.shown))),
@@ -146,8 +146,7 @@ object SessionView:
       case _ => None
   }
 
-  def view(idText: String): HtmlElement =
-    val id         = SessionId.wrap(idText)
+  def view(id: SessionId): HtmlElement =
     val bottom     = new FollowBottom
     val transcript = new TranscriptView
     val draft      = Var("")
@@ -191,7 +190,7 @@ object SessionView:
       send(Some(content)).foreach(ok => if !ok then draft.set(content))
     })
 
-    val answer: (Long, CallId, AnswerIn) => Future[Unit] = (entry, call, a) => Http.call(SessionsApi.answer)((id, entry, call, a))
+    val answer: (Long, CallId, AnswerIn) => Future[Unit] = (entry, call, a) => Http.call(SessionsApi.answer)(CallAnswer(id, entry, call, a))
     val ctx = detail
       .map(_.data)
       .map(d => (d.flatMap(_.run).exists(_.state == RunState.Running), d.map(_.threads).getOrElse(Nil)))
@@ -201,8 +200,8 @@ object SessionView:
     val summary = detail.map(_.data.map(_.summary))
     val parent  = summary.map(_.flatMap(_.parent))
     // 返回：thread 回发起会话，其余回列表（来源页优先，见 Router.back）
-    val backTo  = parent.map(_.fold(Route.Sessions)(p => Route.Session(p.value)))
-    val backNow = Var[Route](Route.Sessions)
+    val backTo  = parent.map(_.fold(Route.home)(p => Route.session(p)))
+    val backNow = Var[Route](Route.home)
 
     def remove(): Unit =
       Confirm.ask("删除这个会话？", Some("会话的全部消息都会被删除；它开出的 thread 保留。"), "删除", danger = true).foreach { ok =>
@@ -286,12 +285,12 @@ object SessionView:
           onMountCallback(_ => bottom.pin()),
           div(
             cls := "flex items-center justify-center gap-2",
-            child <-- d.map(x => Ui.appLink(Route.Agent(x.summary.agent.value).url)(Ui.chip(x.summary.agentName, Tone.Accent)())),
+            child <-- d.map(x => Ui.appLink(Route.agent(x.summary.agent).url)(Ui.chip(x.summary.agentName, Tone.Accent)())),
             span(cls := "text-xs text-muted", child.text <-- d.map(x => Ui.formatTime(x.summary.createdAt)))
           ),
           child.maybe <-- d.map(x =>
             x.summary.parent.map(p =>
-              Ui.appLink(Route.Session(p.value).url, withFrom = false)(
+              Ui.appLink(Route.session(p).url, withFrom = false)(
                 cls := "flex items-center justify-center gap-1 text-xs text-accent",
                 Icon("CornerLeftUp", "size-3.5"),
                 s"来自上级会话的 thread「${x.summary.originRef.getOrElse("")}」"

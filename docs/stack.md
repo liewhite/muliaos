@@ -76,8 +76,8 @@
 - **错误**：领域失败归入 `AppError` 四类（`Domain`/`Unavailable`/`External`/`Internal`）；接口层 `AppError.toApi` 转统一错误体；工具层 `ToolFailure.fromAppError` 转「请重试 / 暂时不可用 / 中止」，挂起用 `ToolOutcome.Suspended`。
 - **重试**：外部调用 `.retryTransient()`（2 秒起翻倍、单次最长 5 分钟、累计 30 分钟放弃，遵守 Retry-After），只重试 `Unavailable`。
 - **出站 HTTP**：一律经 `OutboundHttp`（系统代理及其例外列表、统一 User-Agent、状态码与连接错误分类），不直接用 zio-http 客户端。`send`/`open` 只把 2xx 当成功；要按对方契约自己解读状态码（跟随跳转、区分错误体）用 `exchange`。
-- **接口**：在 contract 里基于 `Api.base`/`Api.secure` 声明，服务端用 `Endpoints.secured(逻辑)`（流式用 `securedStream`）得到 `Route`，登录校验由 `HttpServer.serve` 统一套上，领域不经手登录；不要登录的用 `Route.unsecured`。各领域的 `XHttp(服务...).routes` 由组装入口直接调用，不做成 layer。
-- **工具**：静态定义 `val XxxDef = ToolDef[Ctx, In](名字, 说明, Access, Scheduling, Display)`（参数类型 `In` 派生 zio-schema，字段说明用 `@description`，敏感字段标 `@sensitive`），拿到服务后 `XxxDef { (in, ctx) => ... }` 得到 `Tool`。每个领域导出 `specs`（全部定义的 `spec`），组装入口据此静态给出全部内置工具目录；`Tool(...)(...)` 只在测试里用。
+- **接口**：在 contract 里基于 `Api.base`/`Api.secure` 声明，服务端用 `Endpoints.secured(逻辑)` 得到 `Route`；多个查询参数用 `.mapTo[case class]`、路径加请求体用 `.mapInTo[case class]` 收成一个类型，不用位置元组。实时连接（SSE）在 contract 声明为 `Feed[输入, 事件]`（地址加事件名，data 是事件的 JSON），服务端 `feed.securedFeed(建订阅)`（连接帧 ready/ping 见 `Sse`），前端 `Live.frames(feed)(输入)`，登录校验由 `HttpServer.serve` 统一套上，领域不经手登录；不要登录的用 `Route.unsecured`。各领域的 `XHttp(服务...).routes` 由组装入口直接调用，不做成 layer。
+- **工具**：静态定义 `val XxxDef = ToolDef[Ctx, In](名字, 说明, Access, Scheduling, in => Display...)`（参数类型 `In` 派生 zio-schema，字段说明用 `@description`，敏感字段标 `@sensitive`；`Labeled` 枚举与 `Newtype` 编号自带 zio-schema，直接当字段类型；界面展示 `Display` 是带数据的 ADT，命令、路径、委派对象由这个函数从参数取，前端不按字段名猜），拿到服务后 `XxxDef { (in, ctx) => ... }` 得到 `Tool`。每个领域导出 `specs`（全部定义的 `spec`），组装入口据此静态给出全部内置工具目录；`Tool(...)(...)` 只在测试里用。
 - **命令**：`Exec.run(spec, timeout)` / `Exec.start(spec)`；走标准输入输出对话的（本地 MCP server）用 `Exec.attach(spec)`；沙箱 `Sandbox.Confined(可写, 私有, 只读)` 只收 `RealPath`（`RealPath.resolve` 解析出的真实路径），可写范围由调用方按权限算好；平台自己判断能不能写用同一份规则的 `permits`。「解析真实路径后是否在某根目录下」一律用 `RealPath.under(根, 路径)`。
 - **可选配置段**：配了才有的功能（网页工具、语音转写）用 `ConfigFile.optionalSection`，文件里没有这一段得到 `None`。
 
@@ -103,7 +103,7 @@
 - **agent 显示名**：`Agents.names(编号)` 一次查出（含已删除的，查不到显示编号）；不逐个 `get`。
 - **工作状态**：`Sessions.states(ids)` 是全系统唯一的判断（running / waiting / idle），看板停滞、触发器防重叠、界面都用它。
 - **会话等的后台任务**：开始时 `Sessions.openJobWait(会话, 任务号, 说明, 心跳)`，结束时 `closeJobWait(任务号, Some(事件信))`；`SessionPorts.jobs` 是必填的 `JobControl`（工作区的 `Workspace.jobControl`：心跳检查里的一句现状、会话被停止时结束任务）。等待项是 ADT `WaitRef = Job | Wake | Delegation`，唤醒与委派由会话领域自己处理。
-- **状态与种类**：跨领域、存库、走接口的状态与种类都是 `Labeled` 枚举（contract 的 `Labels` 给出解析、JSON、tapir 编解码，`Sql` 自动按 `label` 存取，工具参数用 `LabeledArg.schema`），不写字符串比较；带分支字段的接口数据（时间线条目、回复段、实时事件、挂起说明、等待项）是 JSON 里 `kind` 为分支名的 ADT。
+- **状态与种类**：跨领域、存库、走接口的状态与种类都是 `Labeled` 枚举（contract 的 `Labels` 给出解析、JSON、tapir、zio-schema 编解码，`Sql` 自动按 `label` 存取，当工具参数时 JSON Schema 列出全部 label），不写字符串比较；带分支字段的接口数据（时间线条目、回复段、实时事件、挂起说明、等待项）是 JSON 里 `kind` 为分支名的 ADT。
 - **要用户批准的执行**：工具返回 `ToolOutcome.Suspended(Pause.Approval(给用户看的摘要, 数据))`，工具本身用 `Approvable(工具)(批准后怎么做)` 包起来：用户批准后会话领域按调用的工具名找回它接着执行（`always` 表示用户选了以后不再问）。
 - **工具调用的状态**：`CallStatus = Pending | Running | Suspended(挂起说明) | Approved(批准说明, always) | Done(结果)`，各步带着自己的数据和时间；库里仍是平铺的列，写入只经 `CallTx.save(调用, 状态)`，读出经 `Decode.call` 还原。
 - **事件**：`Contribution.listener` 订阅 `SessionEvent`（提交后按贡献的顺序同步逐个调用）：`Settled`（回到空闲/最终失败/被停止，`toUser` 表示用户在等；最终失败无论谁在等都该通知用户）、`NeedsUser`（提问、等批准）、`Deleted`。未读是必填的 `SessionPorts.unread`（通知领域的 `SessionLink.unread`）。
@@ -128,7 +128,7 @@
 - **停滞与请表态**：停滞在读的时候算（`Rules.stalled`：该有人处理、它的 issue 会话空闲或还没有，状态取 `Sessions.states`）。issue 会话做完一段工作（会话事件 `Settled` 且回答完）后如果 issue 还该它处理，投一封请表态的信；表 `issue_nudge` 记下已请过，下次有动态投给它时清掉，所以不会反复催。会话最终失败只记一条动态，不重投。
 - **审核**：`approve` / `sendBack` 只对指派给用户、还没结束的 issue 有效（否则 409）；打回给最近把指派改成用户的 agent（时间线里找），没有就给 owner。agent 把 issue 交给用户时（`Rules.handedToUser`）在同一事务里发通知，点开 `/issues/<号>`，正文取它刚写的评论。
 - **时间线**：表 `issue_event` 只增不改，`actor` 是 `user` / `system` / agent 编号，`session_id` 是发生在哪个会话，`activity` 是 `Activity` 的 JSON。工作历史（#873）的「对 issue 的操作」从这里按时间、agent 取。
-- **工具参数里的枚举**：Scala 3 enum 加 `@caseName("in_progress")` 并派生 zio-schema，JSON Schema 里就是带 `enum` 的字符串（`ToolArgs` 取 `@caseName`），解码也认它。
+- **工具参数里的枚举**：接口里已有的 `Labeled` 枚举（如 `IssueStatus`）直接当字段类型；只给工具用的（如叫停后的状态）是 Scala 3 enum 加 `@caseName("in_progress")` 并派生 zio-schema，JSON Schema 里就是带 `enum` 的字符串（`ToolArgs` 取 `@caseName`），解码也认它。
 - **测试**：`RulesSpec`（规则纯函数）、`BoardSpec`（真库、真会话与通知领域、假模型：投递规则、依赖放行、停滞与请表态、审核与冲突、会话失败、叫停、开始、删除、删 agent、工具、HTTP）。
 
 ## 工作历史与活动回顾（history，#873）

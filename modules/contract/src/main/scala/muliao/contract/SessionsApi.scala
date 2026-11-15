@@ -302,6 +302,21 @@ object LiveView:
 final case class UsageLine(day: String, agent: AgentId, agentName: String, model: String, requests: Long, input: Long, output: Long, cacheRead: Long, cacheWrite: Long)
     derives JsonCodec, Schema
 
+/** 会话列表的查询条件（各字段含义见 [[SessionsApi.list]]）。 */
+final case class SessionQuery(
+    agent: Option[AgentId] = None,
+    origin: List[OriginKind] = Nil,
+    q: Option[String] = None,
+    before: Option[Long] = None,
+    limit: Option[Int] = None
+)
+
+/** 答复会话里 `entry` 那条回复中的调用 `call`。 */
+final case class CallAnswer(session: SessionId, entry: Long, call: CallId, answer: AnswerIn)
+
+/** [from, to)，epoch 毫秒。 */
+final case class TimeRange(from: Long, to: Long)
+
 object SessionsApi:
   private val sessions = Api.secure.in("sessions")
   /** 一个会话下的接口。 */
@@ -311,7 +326,7 @@ object SessionsApi:
   val live: Feed[SessionId, LiveView] =
     Feed(one.get.in("live").name("sessionLive").description("会话页的实时事件（SSE），`live` 事件的 data 为 LiveView 的 JSON。"), "live")
 
-  val list: Endpoint[Option[String], (Option[AgentId], List[OriginKind], Option[String], Option[Long], Option[Int]), ApiError, SessionPage, Any] =
+  val list: Endpoint[Option[String], SessionQuery, ApiError, SessionPage, Any] =
     sessions.get
       .in(
         query[Option[AgentId]]("agent")
@@ -319,6 +334,7 @@ object SessionsApi:
           .and(query[Option[String]]("q"))
           .and(query[Option[Long]]("before"))
           .and(query[Option[Int]]("limit"))
+          .mapTo[SessionQuery]
       )
       .out(jsonBody[SessionPage])
       .name("listSessions")
@@ -349,10 +365,11 @@ object SessionsApi:
   val delete: Endpoint[Option[String], SessionId, ApiError, Unit, Any] =
     one.delete.out(statusCode(StatusCode.NoContent)).name("deleteSession").description("删除会话：忙时拒绝；它开出的 thread 保留。")
 
-  val answer: Endpoint[Option[String], (SessionId, Long, CallId, AnswerIn), ApiError, Unit, Any] =
+  val answer: Endpoint[Option[String], CallAnswer, ApiError, Unit, Any] =
     one.post
       .in("calls" / path[Long]("entry") / path[CallId]("call") / "answer")
       .in(jsonBody[AnswerIn])
+      .mapInTo[CallAnswer]
       .out(statusCode(StatusCode.NoContent))
       .name("answerCall")
       .description("回答 ask_user 的提问，或批准/拒绝等批准的调用。")
@@ -383,10 +400,10 @@ object SessionsApi:
       .name("downloadBlob")
       .description("按内容摘要取工具结果里的图片。")
 
-  val usage: Endpoint[Option[String], (Long, Long), ApiError, List[UsageLine], Any] =
+  val usage: Endpoint[Option[String], TimeRange, ApiError, List[UsageLine], Any] =
     Api.secure.get
       .in("usage")
-      .in(query[Long]("from").and(query[Long]("to")))
+      .in(query[Long]("from").and(query[Long]("to")).mapTo[TimeRange])
       .out(jsonBody[List[UsageLine]])
       .name("usage")
       .description("[from, to)（毫秒）之间按天（配置时区）、agent、模型汇总的 token 用量。")

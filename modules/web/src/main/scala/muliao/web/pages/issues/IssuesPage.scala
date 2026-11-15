@@ -25,17 +25,19 @@ object IssuesPage:
   private val viewVar = Stored.choice("muliao.issues.view", View.values.toList, View.Board)
   private val scope   = Stored.choice("muliao.issues.graphScope", IssueGraph.Scope.values.toList, IssueGraph.Scope.Open)
 
-  def view(): HtmlElement =
+  /** @param filters 地址里的筛选条件（改它就是改地址） */
+  def view(filters: Signal[IssueQuery]): HtmlElement =
     val agents  = AgentsData.list
-    val filters = Router.query.map(Filters.parse).distinct
-    val loaded  = filters.flatMapSwitch(f => Remote(BoardApi.list)(f.query))
+    val loaded  = filters.flatMapSwitch(f => Remote(BoardApi.list)(f))
+    val edits   = new EventBus[IssueQuery => IssueQuery]
     // 拖拽后先在本地挪动，接口成功、重新拉到的数据落下后以服务端为准；连着拖几张时每张各占一项
     val moves   = Var(Map.empty[IssueId, Move])
     val shown   = loaded.combineWith(moves.signal).map((l, m) => l.map(applyMoves(_, m)))
     val mover   = new Mover(moves)
     Ui.page("Issues", wide = true)(
       loaded.updates --> (_ => moves.update(_.filterNot(_._2.settled))),
-      div(cls := "mx-auto w-full max-w-3xl px-4 pt-3", toolbar(viewVar, scope, filters, agents)),
+      edits.events.withCurrentValueOf(filters) --> ((edit, f) => Router.update(Route.issues(edit(f)))),
+      div(cls := "mx-auto w-full max-w-3xl px-4 pt-3", toolbar(viewVar, scope, filters, edits.writer, agents)),
       Ui.loading(shown) { issues =>
         child <-- viewVar.signal.map {
           case View.Board => board(issues, filters.map(_.columns), agents, mover.move)
@@ -65,7 +67,13 @@ object IssuesPage:
 
   // ---- 工具栏 ----
 
-  private def toolbar(viewVar: Var[View], scope: Var[IssueGraph.Scope], filters: Signal[Filters], agents: Signal[List[AgentSummary]]): HtmlElement =
+  private def toolbar(
+      viewVar: Var[View],
+      scope: Var[IssueGraph.Scope],
+      filters: Signal[IssueQuery],
+      edit: Observer[IssueQuery => IssueQuery],
+      agents: Signal[List[AgentSummary]]
+  ): HtmlElement =
     div(
       cls := "flex flex-col gap-3",
       Fields.segmented("视图", viewVar.signal, viewVar.set, View.values.toList),
@@ -79,22 +87,22 @@ object IssuesPage:
         Fields.select[Option[AgentId]](
           "负责项目",
           filters.map(f => Some(f.owner)),
-          o => Router.setParam("owner", o.map(_.value)),
+          o => edit.onNext(_.copy(owner = o)),
           agents.map(as => Opt(Option.empty[AgentId], "所有项目") :: ownerOptions(as, None, assignable = false).map(o => o.copy(id = Some(o.id))))
         ),
         Fields.select[Option[String]](
           "指派给",
           filters.map(f => Some(f.assignee)),
-          a => Router.setParam("assignee", a),
+          a => edit.onNext(_.copy(assignee = a)),
           agents.map(as => Opt(Option.empty[String], "所有人") :: Opt(Some(Assignee.UserKey), "我") :: as.map(a => Opt(Some(a.id.value), a.name.value)))
         )
       ),
-      statusFilter(filters),
+      statusFilter(filters, edit),
       newIssueForm(agents)
     )
 
   /** 按状态筛选：可多选，都不选是全部。 */
-  private def statusFilter(filters: Signal[Filters]): HtmlElement =
+  private def statusFilter(filters: Signal[IssueQuery], edit: Observer[IssueQuery => IssueQuery]): HtmlElement =
     div(
       cls := "flex flex-col gap-1",
       span(cls := "label", "状态"),
@@ -103,13 +111,13 @@ object IssuesPage:
         role := "group",
         aria.label := "按状态筛选",
         Statuses.map { s =>
-          val on = filters.map(_.statuses.contains(s))
+          val on = filters.map(_.status.contains(s))
           button(
             tpe := "button",
             cls := "toggle-button toggle-button--default toggle-button--sm flex items-center gap-1.5",
             aria.pressed <-- on.map(_.toString),
             dataAttr("selected") <-- on.map(_.toString),
-            onClick(_.sample(filters)) --> (f => Router.setParam("status", Filters.statusParam(f.toggle(s)))),
+            onClick --> (_ => edit.onNext(_.toggle(s))),
             statusDot(s),
             s.shown
           )
@@ -223,7 +231,7 @@ object IssuesPage:
           d.over.filter(_ != d.from).foreach(onMove(d.id, _))
       }
       drag.set(None)
-    def open(id: IssueId): Unit = if !justDragged then Router.go(Route.Issue(id.value).url, withFrom = true)
+    def open(id: IssueId): Unit = if !justDragged then Router.go(Route.issue(id).url, withFrom = true)
     val groups = issues.map(groupByStatus)
     val overCol = drag.signal.map(_.filter(_.active).flatMap(_.over))
 
@@ -338,7 +346,7 @@ object IssuesPage:
 
   private def row(agents: Signal[List[AgentSummary]])(sig: StrictSignal[IssueSummary]): HtmlElement =
     val i0 = sig.now()
-    Ui.appLink(Route.Issue(i0.id.value).url)(
+    Ui.appLink(Route.issue(i0.id).url)(
       cls := "flex items-center gap-3 border-b border-separator px-1 py-2 text-sm hover:bg-surface-hover",
       children <-- sig.combineWith(agents).map { (i, as) =>
         List(
@@ -421,7 +429,7 @@ object IssuesPage:
   private def graphNode(n: IssueGraph.Node, hover: Var[Option[IssueId]], hue: Option[Int]): HtmlElement =
     val i   = n.issue
     val pos = s"left: ${n.x}px; top: ${n.y}px; width: ${IssueGraph.NodeWidth}px; height: ${IssueGraph.NodeHeight}px"
-    Ui.appLink(Route.Issue(i.id.value).url)(
+    Ui.appLink(Route.issue(i.id).url)(
       cls := "absolute flex flex-col justify-between gap-1 rounded-lg border border-l-4 border-separator bg-surface px-2.5 py-1.5 text-sm shadow-sm transition-colors hover:bg-surface-hover",
       cls := (if i.status.finished then "opacity-60" else ""),
       hue match

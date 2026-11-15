@@ -52,7 +52,7 @@ object VaultScopeToolsSpec extends ZIOSpecDefault:
         b     <- agents.flatMap(_.create(NewAgent("bob", "x")))
         vault <- ZIO.service[Vault]
         dirs  <- ZIO.service[TestEnv.Dirs]
-        n1    <- vault.set(Actor.Agent(a.id), "ALICE_TOKEN", "v1", Some("说明"), Some(false), Owner.Platform)
+        n1    <- vault.set(Actor.Agent(a.id), "ALICE_TOKEN", "明文 v1", Some("说明"), Some(false), Owner.Platform)
         file   = dirs.assets.resolve("alice/secrets/ALICE_TOKEN.toml")
         raw   <- ZIO.succeed(Files.readString(file))
         perm  <- ZIO.succeed(Files.getPosixFilePermissions(file).toString)
@@ -69,21 +69,21 @@ object VaultScopeToolsSpec extends ZIOSpecDefault:
         e5    <- vault.reveal(a.id, List("NOPE"), SecretUse.Script).either
       yield assertTrue(
         n1,
-        !raw.contains("v1"),
+        !raw.contains("明文 v1"),
         raw.contains("allow_shell = false"),
         perm == "[OWNER_READ, OWNER_WRITE]",
-        s1 == Map("ALICE_TOKEN" -> "v1"),
+        s1 == Map("ALICE_TOKEN" -> "明文 v1"),
         reason(e1).contains("skill 脚本"),
         reason(e2).contains("不能用"),
         reason(e3).contains("没有改它的权限"),
-        s2 == Map("ALICE_TOKEN" -> "v1"),
+        s2 == Map("ALICE_TOKEN" -> "明文 v1"),
         !n2,
         s3 == Map("ALICE_TOKEN" -> "v2"),
         raw2.contains("说明"), // 空说明沿用原来的
         raw2.contains("allow_shell = false"),
         reason(e4).contains("不合法"),
         reason(e5).contains("NOPE"),
-        !reason(e1).contains("v1")
+        !reason(e1).contains("明文 v1")
       )
     },
     test("主密钥不对拒绝启动（已有 secret 一个都解不开）") {

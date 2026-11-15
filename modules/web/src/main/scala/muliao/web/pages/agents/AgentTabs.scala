@@ -37,7 +37,7 @@ object AgentHistory:
         button(tpe := "submit", cls := Ui.buttonCls(Variant.Secondary), Icon("Search"), "搜索")
       ),
       child <-- query.signal.distinct.map { q =>
-        val list = Remote(HistoryApi.list)((Some(id), Option(q).filter(_.nonEmpty), None, None, None, Some(200)))
+        val list = Remote(HistoryApi.list)(HistorySearch(agent = Some(id), q = Option(q).filter(_.nonEmpty), limit = Some(200)))
         div(
           cls := "flex flex-col gap-3",
           Ui.loading(list)(entries =>
@@ -67,7 +67,7 @@ object AgentHistory:
         ),
         p(cls := "whitespace-pre-wrap text-muted", e.summary),
         Option.when(e.refs.nonEmpty)(div(cls := "flex flex-wrap gap-1", e.refs.map(r => code(cls := "rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs", r)))),
-        e.session.map(s => div(Ui.appLink(Route.Session(s.value).url)(cls := "text-xs text-accent", "记下它的会话")))
+        e.session.map(s => div(Ui.appLink(Route.session(s).url)(cls := "text-xs text-accent", "记下它的会话")))
       )
     )
 
@@ -121,7 +121,7 @@ object AgentJobs:
         div(
           cls := "flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted",
           span(child.text <-- j.map(x => s"#${x.id.value} · 开始于 ${Ui.formatTime(x.startedAt)}" + x.endedAt.fold("")(e => s" · 结束于 ${Ui.formatTime(e)}"))),
-          Ui.appLink(Route.Session(j.now().session.value).url)(cls := "text-accent", "发起它的会话"),
+          Ui.appLink(Route.session(j.now().session).url)(cls := "text-accent", "发起它的会话"),
           span(cls := "font-mono break-all", child.text <-- j.map(_.log))
         ),
         div(

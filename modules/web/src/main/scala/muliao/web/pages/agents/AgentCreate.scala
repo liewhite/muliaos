@@ -11,7 +11,7 @@ import Http.ec
 object AgentCreate:
   def view(): HtmlElement =
     val defaults = Remote(ResourcesApi.agentDefaults)(())
-    Ui.page("新建 agent", back = Some(Route.Agents))(
+    Ui.page("新建 agent", back = Some(Route.agents))(
       Ui.card(
         div(
           cls := "card__content flex flex-col gap-4",
@@ -30,7 +30,7 @@ object AgentCreate:
       act
         .run(Http.call(ResourcesApi.createAgent)(AgentForm.create(value.now())).map { d =>
           Toast.success("已创建")
-          Router.replace(Route.Agent(d.summary.id.value).url)
+          Router.update(Route.agent(d.summary.id))
         })
         .foreach(_ => ())
     div(

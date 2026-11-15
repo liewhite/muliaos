@@ -168,7 +168,7 @@ object Detail:
       )
 
   private def sessionLink(id: SessionId, text: String): HtmlElement =
-    Ui.appLink(Route.Session(id.value).url)(cls := "text-accent", text)
+    Ui.appLink(Route.session(id).url)(cls := "text-accent", text)
 
   /** 详情正文开头的几行，查看与编辑时都显示。 */
   def facts(t: Signal[TriggerView]): Modifier[HtmlElement] = Seq(

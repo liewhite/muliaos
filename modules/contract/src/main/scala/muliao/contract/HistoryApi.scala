@@ -22,9 +22,19 @@ final case class HistoryEntryView(
     createdAt: Long
 ) derives JsonCodec, Schema
 
+/** 工作历史的检索条件（各字段含义见 [[HistoryApi.list]]）。 */
+final case class HistorySearch(
+    agent: Option[AgentId] = None,
+    q: Option[String] = None,
+    since: Option[String] = None,
+    until: Option[String] = None,
+    minImportance: Option[Int] = None,
+    limit: Option[Int] = None
+)
+
 object HistoryApi:
 
-  val list: Endpoint[Option[String], (Option[AgentId], Option[String], Option[String], Option[String], Option[Int], Option[Int]), ApiError, List[HistoryEntryView], Any] =
+  val list: Endpoint[Option[String], HistorySearch, ApiError, List[HistoryEntryView], Any] =
     Api.secure.get
       .in("history")
       .in(
@@ -34,6 +44,7 @@ object HistoryApi:
           .and(query[Option[String]]("until"))
           .and(query[Option[Int]]("minImportance"))
           .and(query[Option[Int]]("limit"))
+          .mapTo[HistorySearch]
       )
       .out(jsonBody[List[HistoryEntryView]])
       .name("listHistory")

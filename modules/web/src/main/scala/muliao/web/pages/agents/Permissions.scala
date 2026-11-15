@@ -138,7 +138,7 @@ object Grants:
           if r.assets.isEmpty then List(span(cls := "text-sm text-muted", "没有 skill、MCP、secret、记忆"))
           else
             r.assets.map(g =>
-              Ui.appLink(s"${Route.Assets.url}?kind=${g.kind.label}")(
+              Ui.appLink(Route.assets(AssetTab.of(Some(g.kind.label))).url)(
                 title := s"用：${g.use}" + g.write.fold("")(w => s"\n改：$w"),
                 secondaryChip(span(cls := "text-muted", g.kind.shownName), " ", span(cls := "font-mono", g.name))
               )

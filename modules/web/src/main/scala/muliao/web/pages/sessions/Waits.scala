@@ -70,7 +70,7 @@ object Waits:
         row(
           Icon("GitBranch", "size-3.5 shrink-0 text-muted"),
           thread match
-            case Some(t) => Ui.appLink(Route.Session(t.value).url)(cls := "max-w-full truncate text-accent hover:underline", w.label)
+            case Some(t) => Ui.appLink(Route.session(t).url)(cls := "max-w-full truncate text-accent hover:underline", w.label)
             case None    => span(cls := "max-w-full truncate", w.label)
           ,
           span(cls := "text-muted", child.text <-- now.map(since(w.createdAt, _))),

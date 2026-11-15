@@ -44,7 +44,7 @@ object SitePages:
   private def card(p: StrictSignal[PageView]): HtmlElement =
     val first = p.now()
     // 键是 agent 下的页面名，地址不会变
-    Ui.appLink(Route.Page(first.agent.value, first.page).url)(
+    Ui.appLink(Route.Single(Page.Site(first.agent, first.page)).url)(
       cls := "rounded-3xl outline-none focus-visible:ring-2 focus-visible:ring-accent",
       div(
         cls := "card card--default h-full gap-1 transition-shadow hover:shadow-md",
@@ -55,14 +55,14 @@ object SitePages:
       )
     )
 
-  def pageView(agent: String, name: String): HtmlElement =
+  def pageView(agent: AgentId, name: String): HtmlElement =
     val pages   = load()
-    val page    = pages.map(_.data.flatMap(_.find(p => p.agent.value == agent && p.page == name)))
+    val page    = pages.map(_.data.flatMap(_.find(p => p.agent == agent && p.page == name)))
     // 刷新时递增：iframe 换一个重新加载
     val version = Var(0)
     Ui.page(
       child.text <-- page.map(_.fold(name)(p => s"${p.page} · ${p.agentName}")),
-      back = Some(Route.Pages),
+      back = Some(Route.Single(Page.Pages)),
       wide = true,
       actions = child.maybe <-- page.map(_.map { p =>
         div(
@@ -73,7 +73,7 @@ object SitePages:
       })
     )(
       Ui.loading(pages) { list =>
-        child <-- list.map(_.find(p => p.agent.value == agent && p.page == name)).distinct.combineWith(version.signal).map {
+        child <-- list.map(_.find(p => p.agent == agent && p.page == name)).distinct.combineWith(version.signal).map {
           case (Some(p), _) =>
             iframe(
               src := p.url,
