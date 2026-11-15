@@ -1,6 +1,6 @@
 package muliao.workspace
 
-import muliao.contract.{AgentId, DirEntry, DirListing}
+import muliao.contract.{AgentId, DirEntry, DirListing, SkillName}
 import muliao.exec.RealPath
 import muliao.platform.AppError
 import muliao.resources.ResourcePaths
@@ -21,7 +21,7 @@ final case class Download(contentType: String, disposition: String, bytes: Array
 trait Browse:
   def listDir(agent: AgentId, path: Option[String]): IO[AppError, DirListing]
   def workspaceFile(agent: AgentId, path: String): IO[AppError, Download]
-  def skillFile(skill: String, path: String): IO[AppError, Download]
+  def skillFile(skill: SkillName, path: String): IO[AppError, Download]
 
 object Browse:
   val layer: URLayer[Agents & ResourcePaths & AssetStore, Browse] = ZLayer.derive[Live]
@@ -90,7 +90,7 @@ object Browse:
     def workspaceFile(agent: AgentId, path: String): IO[AppError, Download] =
       agents.get(agent) *> fetch(paths.workspace(agent), path.stripPrefix("/"))
 
-    def skillFile(skill: String, path: String): IO[AppError, Download] =
-      store.snapshot.flatMap(snap => ZIO.fromOption(snap.skill(skill)).orElseFail(AppError.notFound(s"没有 skill $skill"))).flatMap(d =>
+    def skillFile(skill: SkillName, path: String): IO[AppError, Download] =
+      store.snapshot.flatMap(snap => ZIO.fromOption(snap.skill(skill)).orElseFail(AppError.notFound(s"没有 skill ${skill.value}"))).flatMap(d =>
         fetch(d.dir, path.stripPrefix("/"))
       )

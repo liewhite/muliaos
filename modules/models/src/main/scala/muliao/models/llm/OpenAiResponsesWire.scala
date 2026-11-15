@@ -22,7 +22,7 @@ object OpenAiResponsesWire extends Wire:
   def endpoint(base: String): String                   = s"$base/responses"
   def headers(apiKey: String): Seq[(String, String)]   = Seq("Authorization" -> s"Bearer $apiKey")
   def modelsUrl(base: String, cursor: Option[String]): String = s"$base/models"
-  def modelsPage(page: Json): (Chunk[String], Option[String]) = (page.at("data").arr.flatMap(_.at("id").str), None)
+  def modelsPage(page: Json): ModelsPage = ModelsPage(page.at("data").arr.flatMap(_.at("id").str), None)
 
   // ---- 请求体 ----
 
@@ -122,8 +122,9 @@ object OpenAiResponsesWire extends Wire:
     val msg = s"$code：$message"
     if transientCodes(code) then AppError.Unavailable(msg) else AppError.External(msg)
 
-  private def texts(list: Json, kind: String): Chunk[String] =
-    list.arr.filter(c => kind.isEmpty || c.at("type").str.contains(kind)).flatMap(_.at("text").str)
+  /** 内容列表里的文字；`only` 给出时只取这种 `type` 的块。 */
+  private def texts(list: Json, only: Option[String]): Chunk[String] =
+    list.arr.filter(c => only.forall(t => c.at("type").str.contains(t))).flatMap(_.at("text").str)
 
   /** 一个输出项对应的段。`done`：这是结束时的完整项，只有它带 Seal。 */
   private def partOf(item: Json, done: Boolean): Either[AppError, ReplyPart] =
@@ -134,10 +135,10 @@ object OpenAiResponsesWire extends Wire:
     item.at("type").strOr() match
       case "message" =>
         val phase = Option(item.at("phase")).filterNot(_.isNull).map("phase" -> _).toList
-        Right(ReplyPart.Text(texts(item.at("content"), "").mkString, seal(phase))) // 正文与拒答都当文字
+        Right(ReplyPart.Text(texts(item.at("content"), None).mkString, seal(phase))) // 正文与拒答都当文字
       case "reasoning" =>
-        val summary = texts(item.at("summary"), "summary_text")
-        val raw     = texts(item.at("content"), "reasoning_text")
+        val summary = texts(item.at("summary"), Some("summary_text"))
+        val raw     = texts(item.at("content"), Some("reasoning_text"))
         val enc     = Option(item.at("encrypted_content")).filterNot(_.isNull).map("encrypted_content" -> _).toList
         val useRaw  = summary.isEmpty && raw.nonEmpty
         val text    = if useRaw then raw.mkString("\n\n") else summary.mkString("\n\n")

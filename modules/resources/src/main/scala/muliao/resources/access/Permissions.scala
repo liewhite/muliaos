@@ -44,13 +44,16 @@ enum Decision:
     case Allowed(_) => true
     case _          => false
 
+/** 一条规则与它的出处（哪个角色，或 agent 自己的）。 */
+final case class SourcedRule(rule: Rule, source: Source)
+
 /** 一个 agent 的最终权限：base + 各角色 + 自己的规则，deny 优先（但不拦它自己的资源）。 */
 final case class Permissions(
     agent: AgentId,
     name: AgentName,
     roles: List[RoleName],
-    allow: List[(Rule, Source)],
-    deny: List[(Rule, Source)]
+    allow: List[SourcedRule],
+    deny: List[SourcedRule]
 ):
   val isAdmin: Boolean = roles.contains(BuiltinRole.Admin.roleName)
 
@@ -59,20 +62,20 @@ final case class Permissions(
     if owner == Owner.Agent(this.name) && kind != AssetKind.Tool then Decision.Allowed(Grant.Ownership)
     else if kind == AssetKind.Memory && name == Permissions.GlobalMemory && action == Action.Use then Decision.Allowed(Grant.GlobalMemory)
     else
-      deny.find(_._1.selects(action, kind, name)) match
-        case Some((r, s)) => Decision.Denied(r, s)
+      deny.find(_.rule.selects(action, kind, name)) match
+        case Some(SourcedRule(r, s)) => Decision.Denied(r, s)
         case None =>
           if isAdmin then Decision.Allowed(Grant.Everything)
           else if kind == AssetKind.Tool && action == Action.Use && toolAccess.exists(_ != Access.Admin) then Decision.Allowed(Grant.NonAdminTools)
-          else allow.find(_._1.selects(action, kind, name)).fold(Decision.NotGranted)((r, s) => Decision.Allowed(Grant.ByRule(r, s)))
+          else allow.find(_.rule.selects(action, kind, name)).fold(Decision.NotGranted)(g => Decision.Allowed(Grant.ByRule(g.rule, g.source)))
 
   def canUseTool(name: String, access: Access): Boolean =
     decide(Action.Use, AssetKind.Tool, name, Owner.Platform, Some(access)).allowed
 
   /** `write:path` 给的目录（被 deny 的 `write:path` 收回的在 [[deniedPaths]]）。 */
-  def writablePaths: List[Path] = allow.flatMap((r, _) => Rule.pathOf(r)).distinct
+  def writablePaths: List[Path] = allow.flatMap(g => Rule.pathOf(g.rule)).distinct
 
-  def deniedPaths: List[Path] = deny.flatMap((r, _) => Rule.pathOf(r)).distinct
+  def deniedPaths: List[Path] = deny.flatMap(g => Rule.pathOf(g.rule)).distinct
 
 object Permissions:
   val GlobalMemory = "global"
@@ -85,6 +88,6 @@ object Permissions:
       agent,
       name,
       roles,
-      roleRules.flatMap((r, d) => d.allow.map(_ -> Source.Role(r))) ++ grants.allow.map(_ -> Source.Own),
-      roleRules.flatMap((r, d) => d.deny.map(_ -> Source.Role(r))) ++ grants.deny.map(_ -> Source.Own)
+      roleRules.flatMap((r, d) => d.allow.map(SourcedRule(_, Source.Role(r)))) ++ grants.allow.map(SourcedRule(_, Source.Own)),
+      roleRules.flatMap((r, d) => d.deny.map(SourcedRule(_, Source.Role(r)))) ++ grants.deny.map(SourcedRule(_, Source.Own))
     )

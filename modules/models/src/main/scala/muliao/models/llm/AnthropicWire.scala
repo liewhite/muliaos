@@ -27,10 +27,10 @@ object AnthropicWire extends Wire:
   def modelsUrl(base: String, cursor: Option[String]): String =
     s"$base/v1/models?limit=1000${cursor.fold("")(c => s"&after_id=${java.net.URLEncoder.encode(c, "UTF-8")}")}"
 
-  def modelsPage(page: Json): (Chunk[String], Option[String]) =
+  def modelsPage(page: Json): ModelsPage =
     val names = page.at("data").arr.flatMap(_.at("id").str)
     val next  = if page.at("has_more").bool.contains(true) then page.at("last_id").str else None
-    (names, next)
+    ModelsPage(names, next)
 
   // ---- 请求体 ----
 

@@ -183,7 +183,9 @@ object HistoryTools:
           _      <- ZIO.fail(AppError.invalid("clip 不能是负数")).when(in.clip < 0)
           g      <- ZIO.foreach(in.grep.filter(_.nonEmpty))(regex)
           s      <- ZIO.foreach(in.since.filter(_.trim.nonEmpty))(since)
-          (i, xs) <- history.read(in.session)
+          read   <- history.read(in.session)
+          i       = read.info
+          xs      = read.items
           ns     <- history.names(List(i.agent))
           picked  = xs.filter(ReadFilter(in.labels, g, s).accepts)
           blocks  = picked.zipWithIndex.map((x, n) => Reading.render(n + 1, x, in.clip, history.zone))

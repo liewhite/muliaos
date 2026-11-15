@@ -51,7 +51,7 @@ final case class ScriptGrantView(
     id: Long,
     agent: AgentId,
     agentName: String,
-    skill: String,
+    skill: SkillName,
     script: String,
     args: List[String],
     secrets: List[String],
@@ -80,8 +80,8 @@ object WorkspaceApi:
       .name("workspaceFile")
       .description("取 agent 工作目录里的一个文件（不可信内容：只有常见图片内联显示）。")
 
-  val skillFile: Endpoint[Option[String], (String, String), ApiError, (String, String, Array[Byte]), Any] =
-    download(Api.secure.get.in("assets" / "skills" / path[String]("name") / "raw").in(query[String]("path")))
+  val skillFile: Endpoint[Option[String], (SkillName, String), ApiError, (String, String, Array[Byte]), Any] =
+    download(Api.secure.get.in("assets" / "skills" / path[SkillName]("name") / "raw").in(query[String]("path")))
       .name("skillFile")
       .description("取 skill 目录里的一个文件原样内容（附件里的图片、二进制文件；文本用 readAssetFile）。")
 

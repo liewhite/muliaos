@@ -17,7 +17,7 @@ object AccessValidation:
       case Selector.Path(_) => true
       case Selector.Named(kinds, glob) =>
         (kinds(AssetKind.Tool) && tools.exists(glob.matches)) ||
-        snapshot.named.exists((k, n, _) => kinds(k) && glob.matches(n))
+        snapshot.named.exists(a => kinds(a.kind) && glob.matches(a.name))
 
   /** `before` 为空表示原来没有这份文件或原来就是坏的。 */
   def check(before: Option[AccessConfig], after: AccessConfig, live: Set[AgentId], snapshot: Snapshot, tools: List[String]): Either[String, Unit] =

@@ -120,7 +120,7 @@ object Models:
     def listModels(name: String): IO[AppError, Chunk[String]] =
       provider(name).flatMap { p =>
         val wire = Wire.of(p.protocol)
-        def page(cursor: Option[String]): IO[AppError, (Chunk[String], Option[String])] =
+        def page(cursor: Option[String]): IO[AppError, ModelsPage] =
           for
             u    <- url(wire.modelsUrl(base(p), cursor))
             resp <- http.send(withHeaders(Request.get(u), wire.headers(p.apiKey))).timeoutFail(AppError.Unavailable(s"查 $name 的模型列表超时"))(ListTimeout)
@@ -129,8 +129,8 @@ object Models:
           yield wire.modelsPage(json)
         def loop(cursor: Option[String], acc: Chunk[String]): IO[AppError, Chunk[String]] =
           page(cursor).flatMap {
-            case (names, Some(next)) => loop(Some(next), acc ++ names)
-            case (names, None)       => ZIO.succeed(acc ++ names)
+            case ModelsPage(names, Some(next)) => loop(Some(next), acc ++ names)
+            case ModelsPage(names, None)       => ZIO.succeed(acc ++ names)
           }
         loop(None, Chunk.empty)
       }

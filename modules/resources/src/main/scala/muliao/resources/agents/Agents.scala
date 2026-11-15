@@ -378,7 +378,7 @@ object Agents:
                              case Decision.Allowed(Grant.ByRule(_, _)) => true
                              case _                                    => false
                          )
-        moves = snap.skills.filter(s => s.owner == owner && usedByOthers(AssetKind.Skill, s.name)).map(s => s.dir -> paths.assets.resolve(s"platform/skills/${s.name}")) ++
+        moves = snap.skills.filter(s => s.owner == owner && usedByOthers(AssetKind.Skill, s.name.value)).map(s => s.dir -> paths.assets.resolve(s"platform/skills/${s.name.value}")) ++
                   snap.mcps.filter(m => m.owner == owner && usedByOthers(AssetKind.Mcp, m.name)).map(m => m.file -> paths.assets.resolve(s"platform/mcp/${m.name}.json")) ++
                   snap.secrets.filter(s => s.owner == owner && usedByOthers(AssetKind.Secret, s.key)).map(s => s.file -> paths.assets.resolve(s"platform/secrets/${s.key}.toml"))
         _ <- ZIO.foreachDiscard(moves) { (from, to) =>

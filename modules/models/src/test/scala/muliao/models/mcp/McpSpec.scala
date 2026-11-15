@@ -187,7 +187,7 @@ object McpSpec extends ZIOSpecDefault:
       }
     },
     test("模板：代入并交回用到的明文；不在 toString 里") {
-      for (s, r) <- VaultTemplate.fill("a ${vault:TOKEN} b ${vault:TOKEN}", secrets)
+      for Filled(s, r) <- VaultTemplate.fill("a ${vault:TOKEN} b ${vault:TOKEN}", secrets)
       yield assertTrue(s == "a tok-12345-secret b tok-12345-secret", r.values == Map("TOKEN" -> "tok-12345-secret"), !r.toString.contains("tok-"))
     }
   ).provideLayerShared(connector) @@ withLiveClock @@ timeout(120.seconds)

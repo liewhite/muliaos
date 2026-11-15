@@ -30,7 +30,7 @@ object Workspace:
 
   /** 本领域的工具名与类别（组装时汇进资源领域的全部内置工具目录）。 */
   val toolInfos: List[ToolInfo] =
-    (FileTools.catalog ++ ShellTools.catalog ++ SkillRun.catalog).map((n, a) => ToolInfo(n, a))
+    FileTools.catalog ++ ShellTools.catalog ++ SkillRun.catalog
 
   private val register: ZLayer[Files & FileAccess & AgentExec & Jobs & ScriptGrants & SessionHooks & AgentHooks, Nothing, WorkspaceTools] =
     ZLayer {

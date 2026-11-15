@@ -164,7 +164,7 @@ object Convert:
       reported = true, j.startedAt, j.finishedAt.orElse(Some(j.startedAt)))
 
   def grant(g: Old.Grant): GrantRow =
-    GrantRow(g.id, AgentId.wrap(g.agentId), g.skill, g.script, g.args, g.secrets, g.fingerprint, g.createdAt)
+    GrantRow(g.id, AgentId.wrap(g.agentId), SkillName.wrap(g.skill), g.script, g.args, g.secrets, g.fingerprint, g.createdAt)
 
   /** 委派记录（都已结束）。`callEntry`：发起会话里那次调用所在的回复条目。回答推给用户的委派新版不记，返回 None。 */
   def delegation(t: Old.ThreadCall, callEntry: Option[Long], at: Long): Option[DelegationRow] =

@@ -1,6 +1,6 @@
 package muliao.workspace.scripts
 
-import muliao.contract.{AgentId, ScriptGrantView}
+import muliao.contract.{AgentId, ScriptGrantView, SkillName}
 import muliao.platform.AppError
 import muliao.platform.db.Database
 import muliao.resources.agents.Agents
@@ -13,7 +13,7 @@ import java.nio.file.{Files, Path}
 import java.security.MessageDigest
 
 /** 「始终允许」的键：同一 agent 以同样的参数和 secret 运行同一个 skill 脚本，且 skill 里除 SKILL.md 外的文件都没变。 */
-final case class GrantKey(agent: AgentId, skill: String, script: String, args: List[String], secrets: List[String], filesHash: String):
+final case class GrantKey(agent: AgentId, skill: SkillName, script: String, args: List[String], secrets: List[String], filesHash: String):
   private[scripts] def argsJson: String    = args.toJson
   private[scripts] def secretsJson: String = secrets.distinct.sorted.toJson
 

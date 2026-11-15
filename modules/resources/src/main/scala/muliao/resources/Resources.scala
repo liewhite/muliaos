@@ -1,6 +1,6 @@
 package muliao.resources
 
-import muliao.contract.{AgentId, AgentName, RoleName, AssetKind}
+import muliao.contract.{AgentId, AgentName, AssetKind, RoleName, SkillName}
 import muliao.exec.{RealPath, Sandbox}
 import muliao.platform.AppError
 import muliao.resources.access.*
@@ -121,7 +121,7 @@ object Resources:
           case Decision.Allowed(g) => Some(ToolGrant(t.name, t.access, g))
           case _                   => None
       }
-      val assets = snap.named.flatMap { (k, n, o) =>
+      val assets = snap.named.flatMap { case NamedAsset(k, n, o) =>
         p.decide(Action.Use, k, n, o) match
           case Decision.Allowed(g) =>
             val w = p.decide(Action.Write, k, n, o) match
@@ -154,7 +154,7 @@ object Resources:
           permissions = p,
           tools = eff.tools.map(_.name).toSet,
           memories = shared ++ own,
-          skills = snap.skills.filter(s => usable.contains(AssetKind.Skill -> s.name)).map(s => SkillEntry(s, s.owner == Owner.Agent(a.name))).sortBy(_.doc.name),
+          skills = snap.skills.filter(s => usable.contains(AssetKind.Skill -> s.name.value)).map(s => SkillEntry(s, s.owner == Owner.Agent(a.name))).sortBy(_.doc.name),
           mcps = snap.mcps.filter(m => usable.contains(AssetKind.Mcp -> m.name)).sortBy(_.name),
           secrets = snap.secrets.filter(s => usable.contains(AssetKind.Secret -> s.key)).sortBy(_.key),
           problems = snap.problems.filter(relevant(p, _)),
@@ -176,13 +176,14 @@ object Resources:
           snap   <- store.snapshot
           p       = permsOf(a, access.config)
           ownDir  = paths.assets.resolve(a.name.value)
-          resourcePaths = (k: AssetKind, n: String, o: Owner) => resourcePath(snap, k, n, o).toList
+          resourcePaths = (a: NamedAsset) => resourcePath(snap, a.kind, a.name, a.owner).toList
+          canWrite      = (a: NamedAsset) => p.decide(Action.Write, a.kind, a.name, a.owner).allowed
           granted =
             if p.isAdmin then List(paths.assets)
             else
-              snap.named.filter((k, n, o) => o != Owner.Agent(a.name) && p.decide(Action.Write, k, n, o).allowed).flatMap(resourcePaths.tupled)
+              snap.named.filter(x => x.owner != Owner.Agent(a.name) && canWrite(x)).flatMap(resourcePaths)
           revoked =
-            if p.isAdmin then snap.named.filter((k, n, o) => !p.decide(Action.Write, k, n, o).allowed).flatMap(resourcePaths.tupled)
+            if p.isAdmin then snap.named.filterNot(canWrite).flatMap(resourcePaths)
             else Nil
           writable <- resolveAll(List(paths.workspace(a.id), ownDir) ++ settings.writableDirs ++ p.writablePaths ++ granted)
           readOnly <- resolveAll(p.deniedPaths ++ revoked)
@@ -195,7 +196,7 @@ object Resources:
 
     private def resourcePath(snap: Snapshot, k: AssetKind, n: String, o: Owner): Option[Path] = k match
       case AssetKind.Memory => snap.sharedMemory(n).map(_.file)
-      case AssetKind.Skill  => snap.skill(n).filter(_.owner == o).map(_.dir)
+      case AssetKind.Skill  => snap.skill(SkillName.wrap(n)).filter(_.owner == o).map(_.dir)
       case AssetKind.Mcp    => snap.mcp(n).filter(_.owner == o).map(_.file)
       case AssetKind.Secret => snap.secret(n).filter(_.owner == o).map(_.file)
       case AssetKind.Tool   => None

@@ -107,6 +107,6 @@ object RealAssetsCheck extends ZIOAppDefault:
       _ <- ZIO.foreachDiscard(sample) { id =>
              res.forRun(id).flatMap(rr => Console.printLine(s"slack-hub：工具 ${rr.tools.toList.sorted.mkString(",")}；skill ${rr.skills.map(_.doc.name).mkString(",")}"))
            }
-      perOwner = snap.named.groupBy(_._3).view.mapValues(_.size).toMap
-      _ <- Console.printLine(s"平台名下资源 ${perOwner.getOrElse(Owner.Platform, 0)} 项；按种类：" + AssetKind.values.map(k => s"${k.label} ${snap.named.count(_._1 == k)}").mkString("，"))
+      perOwner = snap.named.groupBy(_.owner).view.mapValues(_.size).toMap
+      _ <- Console.printLine(s"平台名下资源 ${perOwner.getOrElse(Owner.Platform, 0)} 项；按种类：" + AssetKind.values.map(k => s"${k.label} ${snap.named.count(_.kind == k)}").mkString("，"))
     yield ()

@@ -221,7 +221,9 @@ object HistorySpec extends ZIOSpecDefault:
           (_, r7) <- ask(bob, tool("session_read", """{"session":"","labels":[]}"""))
           miss   <- h.read("ffffffffffffffff").either
           many   <- h.read("").either
-          (info, items) <- h.read(p.toUpperCase)
+          read   <- h.read(p.toUpperCase)
+          info    = read.info
+          items   = read.items
           all    = r1.head._2
         yield assertTrue(
           all.startsWith(s"# 会话 ${s1.value}（bob，用户新建）："),

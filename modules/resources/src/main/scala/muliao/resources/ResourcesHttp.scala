@@ -166,7 +166,7 @@ final case class ResourcesHttp(
           case Right(r) =>
             val tools = catalog.tools.map(_.name).filter(n => r.selects(Action.Use, AssetKind.Tool, n))
             val named = snap.named.collect {
-              case (k, n, _) if Action.values.exists(a => r.selects(a, k, n)) => s"${k.label}:$n"
+              case NamedAsset(k, n, _) if Action.values.exists(a => r.selects(a, k, n)) => s"${k.label}:$n"
             }
             val path = Rule.pathOf(r).map(_.toString).toList
             RuleCheck(t, None, tools ++ named.distinct ++ path)
@@ -195,7 +195,7 @@ final case class ResourcesHttp(
         case MemoryDoc(MemoryScope.Private(a), f, _) =>
           AssetItem(AssetItemKind.Memory, a.value, a.value, rel(f), List(a), Some("私有记忆"), None, None)
       }
-      val skills = snap.skills.map(s => AssetItem(AssetItemKind.Skill, s.name, s.owner.label, rel(s.main), usedBy(AssetKind.Skill, s.name, s.owner), Some(s.description), None, None))
+      val skills = snap.skills.map(s => AssetItem(AssetItemKind.Skill, s.name.value, s.owner.label, rel(s.main), usedBy(AssetKind.Skill, s.name.value, s.owner), Some(s.description), None, None))
       val mcps = snap.mcps.map(m => AssetItem(AssetItemKind.Mcp, m.name, m.owner.label, rel(m.file), usedBy(AssetKind.Mcp, m.name, m.owner), None, Some(m.config.enabled), None))
       val secrets = snap.secrets.map(s =>
         AssetItem(AssetItemKind.Secret, s.key, s.owner.label, rel(s.file), usedBy(AssetKind.Secret, s.key, s.owner), Some(s.content.description), None, Some(s.content.allowShell))
@@ -230,13 +230,13 @@ final case class ResourcesHttp(
       _       <- store.write(p, content, privateFile = AssetPath.classify(paths.assets.relativize(p)).isInstanceOf[AssetPath.Secret])
     yield AssetFile(req.path, content, Some(FileFingerprint.of(content).value))
 
-  private def skillFiles(name: String): IO[AppError, SkillFiles] =
+  private def skillFiles(name: SkillName): IO[AppError, SkillFiles] =
     for
       snap <- store.snapshot
-      s    <- ZIO.fromOption(snap.skill(name)).orElseFail(AppError.notFound(s"没有已加载的 skill $name"))
+      s    <- ZIO.fromOption(snap.skill(name)).orElseFail(AppError.notFound(s"没有已加载的 skill ${name.value}"))
       files <- ZIO
                  .attemptBlocking(scala.util.Using.resource(Files.walk(s.dir))(_.iterator.asScala.filter(Files.isRegularFile(_)).map(f => s.dir.relativize(f).toString).filterNot(_.split('/').exists(_.startsWith("."))).toList.sorted))
-                 .mapError(e => AppError.internal(s"列 skill $name 的文件失败", e))
+                 .mapError(e => AppError.internal(s"列 skill ${name.value} 的文件失败", e))
     yield SkillFiles(name, s.owner.label, files)
 
   private def ownerOf(label: String): IO[AppError, Owner] =
@@ -267,7 +267,7 @@ final case class ResourcesHttp(
     store.snapshot.flatMap { snap =>
       def found[A](a: Option[A], what: String)(f: A => Found) = ZIO.fromOption(a.map(f)).orElseFail(AppError.notFound(s"没有已加载的 $what $name"))
       kind match
-        case AssetKind.Skill  => found(snap.skill(name), "skill")(s => Found(s.dir, s.owner))
+        case AssetKind.Skill  => found(snap.skill(SkillName.wrap(name)), "skill")(s => Found(s.dir, s.owner))
         case AssetKind.Mcp    => found(snap.mcp(name), "MCP")(m => Found(m.file, m.owner))
         case AssetKind.Secret => found(snap.secret(name), "secret")(s => Found(s.file, s.owner))
         case AssetKind.Memory =>

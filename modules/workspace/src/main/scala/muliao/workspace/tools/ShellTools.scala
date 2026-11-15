@@ -1,5 +1,6 @@
 package muliao.workspace.tools
 
+import muliao.resources.ToolInfo
 import muliao.contract.JobId
 import muliao.exec.{Exec, Program}
 import muliao.platform.AppError
@@ -121,4 +122,4 @@ object ShellTools:
       )).mapError(rejected)
     }
 
-  val catalog: List[(String, Access)] = List("run_shell" -> Access.Write, "job_status" -> Access.Read, "job_kill" -> Access.Write)
+  val catalog: List[ToolInfo] = List(ToolInfo("run_shell", Access.Write), ToolInfo("job_status", Access.Read), ToolInfo("job_kill", Access.Write))

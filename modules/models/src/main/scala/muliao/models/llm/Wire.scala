@@ -36,7 +36,7 @@ trait Wire:
   def modelsUrl(base: String, cursor: Option[String]): String
 
   /** 一页模型列表里的模型名，以及下一页的游标（没有下一页为空）。 */
-  def modelsPage(page: Json): (Chunk[String], Option[String])
+  def modelsPage(page: Json): ModelsPage
 
 object Wire:
   def of(p: Protocol): Wire = p match
@@ -57,3 +57,6 @@ private[llm] final case class Emitted(builder: ReplyBuilder, events: Chunk[Reply
 
 private[llm] object Emitted:
   def from(b: ReplyBuilder): Emitted = Emitted(b, Chunk.empty)
+
+/** 模型列表的一页：模型名，与下一页的游标（没有了为空）。 */
+final case class ModelsPage(names: Chunk[String], next: Option[String])

@@ -1,7 +1,7 @@
 package muliao.workspace.store
 
 import io.getquill.*
-import muliao.contract.{AgentId, JobId, JobStatus, SessionId}
+import muliao.contract.{AgentId, JobId, JobStatus, SessionId, SkillName}
 import muliao.platform.db.*
 import muliao.platform.db.Sql.*
 
@@ -20,7 +20,7 @@ final case class JobRow(
 final case class GrantRow(
     id: Long,
     agentId: AgentId,
-    skill: String,
+    skill: SkillName,
     script: String,
     args: String,
     secrets: String,
@@ -61,7 +61,7 @@ object Repo:
 
   // ---- 始终允许 ----
 
-  def findGrant(agent: AgentId, skill: String, script: String, args: String, secrets: String, filesHash: String): Read[Boolean] =
+  def findGrant(agent: AgentId, skill: SkillName, script: String, args: String, secrets: String, filesHash: String): Read[Boolean] =
     Sql.run(
       grants.filter(g =>
         g.agentId == lift(agent) && g.skill == lift(skill) && g.script == lift(script) && g.args == lift(args) && g.secrets == lift(secrets) &&

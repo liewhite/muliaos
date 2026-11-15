@@ -22,6 +22,9 @@ enum WriteMode:
 /** 文件工具与界面共用的读写：按 agent 的可写范围检查（平台私有文件对非 admin 读写都不行），资源目录里的文件经资源领域的写入口
   * （格式校验、防并发覆盖、原子写）。记下每次运行读过的资源文件的指纹，供整体覆盖时比对。
   */
+/** 要写的一个文件与内容。 */
+final case class FileWrite(path: Path, content: String)
+
 trait FileAccess:
   /** 读一个文件。 */
   def load(agent: AgentId, run: Option[RunId], path: Path): IO[AppError, FileContent]
@@ -30,7 +33,7 @@ trait FileAccess:
   def bytes(agent: AgentId, path: Path): IO[AppError, Array[Byte]]
 
   /** 写一组文件：先全部检查（权限、资源文件的校验），都通过才写；返回各文件实际写入的内容（资源文件可能被规整）。 */
-  def store(agent: AgentId, run: RunId, files: List[(Path, String)], mode: WriteMode): IO[AppError, List[String]]
+  def store(agent: AgentId, run: RunId, files: List[FileWrite], mode: WriteMode): IO[AppError, List[String]]
 
 object FileAccess:
   val layer: URLayer[Resources & AssetGuard & AssetStore, FileAccess] =
@@ -105,37 +108,37 @@ object FileAccess:
 
     /** 一个文件要怎么写：普通文件直接写，资源文件经写入口。 */
     private enum Target:
-      case Plain(real: RealPath)
+      case Plain(real: RealPath, content: String)
       case Asset(real: RealPath, content: String, secret: Boolean)
 
-    def store(agent: AgentId, run: RunId, files: List[(Path, String)], mode: WriteMode): IO[AppError, List[String]] =
+    def store(agent: AgentId, run: RunId, files: List[FileWrite], mode: WriteMode): IO[AppError, List[String]] =
       for
         scope <- resources.writableScope(agent)
         root  <- assetRoot
         // 先全部检查，任何一个不行都不写
-        targets <- ZIO.foreach(files) { (path, content) =>
+        targets <- ZIO.foreach(files) { case FileWrite(path, content) =>
                      for
                        real <- RealPath.resolve(path)
                        _ <- ZIO.unless(scope.permits(real))(
                               resources.explainDenied(agent, path).flatMap(why => ZIO.fail(AppError.forbidden(s"写不了 $path：$why")))
                             )
                        t <-
-                         if !RealPath.within(real, root) then ZIO.succeed(Target.Plain(real))
+                         if !RealPath.within(real, root) then ZIO.succeed(Target.Plain(real, content))
                          else
                            for
                              expect <- expectation(run, real.path, mode)
                              out    <- guard.check(Actor.Agent(agent), real.path, content, expect)
                              secret  = AssetPath.classify(root.path.relativize(real.path)).isInstanceOf[AssetPath.Secret]
                            yield Target.Asset(real, out, secret)
-                     yield (t, content)
+                     yield t
                    }
         written <- ZIO.foreach(targets) {
-                     case (Target.Plain(real), content) =>
+                     case Target.Plain(real, content) =>
                        blocking(s"写 ${real.path} 失败") {
                          Option(real.path.getParent).foreach(Files.createDirectories(_))
                          Files.writeString(real.path, content)
                        }.as(content)
-                     case (Target.Asset(real, out, secret), _) =>
+                     case Target.Asset(real, out, secret) =>
                        assets.write(real.path, out, privateFile = secret) *> remember(run, real.path, FileFingerprint.of(out)).as(out)
                    }
       yield written

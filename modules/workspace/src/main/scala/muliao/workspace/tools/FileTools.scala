@@ -1,10 +1,11 @@
 package muliao.workspace.tools
 
+import muliao.resources.ToolInfo
 import muliao.contract.FileView
 import muliao.platform.AppError
 import muliao.sessions.{Files, RunContext}
 import muliao.toolkit.*
-import muliao.workspace.{FileAccess, FileContent, WriteMode}
+import muliao.workspace.{FileAccess, FileContent, FileWrite, WriteMode}
 import muliao.workspace.text.*
 import zio.*
 import zio.json.*
@@ -149,7 +150,7 @@ object FileTools:
     ) { (in, ctx) =>
       val path = FileAccess.resolve(ctx.workspace, in.path)
       access
-        .store(ctx.agent, ctx.run, List(path -> in.content), WriteMode.Overwrite)
+        .store(ctx.agent, ctx.run, List(FileWrite(path, in.content)), WriteMode.Overwrite)
         .map(out => ToolOutcome.text(s"已写入 ${in.path}（${LineIndex(out.head).count} 行，${out.head.length} 个字符）。"))
         .mapError(rejected)
     }
@@ -163,26 +164,32 @@ object FileTools:
       case (None, Some(s), Some(e), Some(a)) if !all => Right(Edit(Locator.Lines(s, e, a), newText))
       case _ => Left("每处修改要么给 old_text（可加 replace_all），要么给 start_line + end_line + anchor 三个，二选一")
 
+  /** 一个文件（参数里的写法）要做的修改，按给出的顺序。 */
+  final case class FileEdits(path: String, edits: List[Edit])
+
   /** 整理参数：得到按文件分组的修改（文件按第一次出现的顺序）。 */
-  def plan(in: EditIn): Either[String, List[(String, List[Edit])]] =
-    val items: Either[String, List[(String, Edit)]] =
+  def plan(in: EditIn): Either[String, List[FileEdits]] =
+    val items: Either[String, List[FileEdits]] =
       if in.edits.isEmpty then
         for
           path <- in.path.toRight("缺 path")
           text <- in.newText.toRight("缺 new_text")
           e    <- toEdit(in.oldText, text, in.replaceAll, in.startLine, in.endLine, in.anchor)
-        yield List(path -> e)
+        yield List(FileEdits(path, List(e)))
       else if in.oldText.isDefined || in.newText.isDefined || in.replaceAll || in.startLine.isDefined || in.endLine.isDefined || in.anchor.isDefined then
         Left("用 edits 时顶层只给 path（作为各处修改的默认文件），其余都写在 edits 里")
       else
-        in.edits.zipWithIndex.foldLeft[Either[String, List[(String, Edit)]]](Right(Nil)) { case (acc, (it, i)) =>
+        in.edits.zipWithIndex.foldLeft[Either[String, List[FileEdits]]](Right(Nil)) { case (acc, (it, i)) =>
           for
             done <- acc
             path <- it.path.orElse(in.path).toRight(s"第 ${i + 1} 处修改没有 path，顶层也没给")
             e    <- toEdit(it.oldText, it.newText, it.replaceAll, it.startLine, it.endLine, it.anchor).left.map(m => s"第 ${i + 1} 处修改：$m")
-          yield done :+ (path -> e)
+          yield done :+ FileEdits(path, List(e))
         }
-    items.map(list => list.map(_._1).distinct.map(p => p -> list.collect { case (`p`, e) => e }))
+    items.map(list => list.map(_.path).distinct.map(p => FileEdits(p, list.filter(_.path == p).flatMap(_.edits))))
+
+  /** 改好、还没写的一个文件。 */
+  private final case class Planned(raw: String, path: java.nio.file.Path, edited: Edited)
 
   def editFile(access: FileAccess): Tool[RunContext] =
     Tool[RunContext, EditIn](
@@ -196,19 +203,19 @@ object FileTools:
     ) { (in, ctx) =>
       for
         groups <- ZIO.fromEither(plan(in)).mapError(m => ToolFailure.Rejected(m))
-        edited <- ZIO.foreach(groups) { (raw, edits) =>
+        edited <- ZIO.foreach(groups) { case FileEdits(raw, edits) =>
                     val path = FileAccess.resolve(ctx.workspace, raw)
                     access.load(ctx.agent, None, path).mapError(rejected).flatMap {
                       case FileContent.Text(t) =>
-                        ZIO.fromEither(TextEdit(t, edits)).mapError(m => ToolFailure.Rejected(s"$raw：$m。没有改任何文件。")).map(e => (raw, path, e))
+                        ZIO.fromEither(TextEdit(t, edits)).mapError(m => ToolFailure.Rejected(s"$raw：$m。没有改任何文件。")).map(Planned(raw, path, _))
                       case _ => ZIO.fail(ToolFailure.Rejected(s"$raw 不是文本文件，不能 edit_file。没有改任何文件。"))
                     }
                   }
-        written <- access.store(ctx.agent, ctx.run, edited.map((_, p, e) => p -> e.text), WriteMode.Patch).mapError(rejected)
+        written <- access.store(ctx.agent, ctx.run, edited.map(p => FileWrite(p.path, p.edited.text)), WriteMode.Patch).mapError(rejected)
       yield
         // 资源文件写入口可能规整了内容（如记忆的空白），回显按实际写入的
-        val reports = edited.zip(written).map { case ((raw, _, e), out) =>
-          EditReport.render(raw, if out == e.text then e else Edited(out, e.replacements, List(0 -> out.length)))
+        val reports = edited.zip(written).map { case (Planned(raw, _, e), out) =>
+          EditReport.render(raw, if out == e.text then e else Edited(out, e.replacements, List(Span(0, out.length))))
         }
         ToolOutcome.text(reports.mkString("\n\n"))
     }
@@ -232,5 +239,5 @@ object FileTools:
     }
 
   /** 本组工具的名字与类别（组装时汇进全部内置工具目录）。 */
-  val catalog: List[(String, Access)] =
-    List("read_file" -> Access.Read, "write_file" -> Access.Write, "edit_file" -> Access.Write, "share_file" -> Access.Write)
+  val catalog: List[ToolInfo] =
+    List(ToolInfo("read_file", Access.Read), ToolInfo("write_file", Access.Write), ToolInfo("edit_file", Access.Write), ToolInfo("share_file", Access.Write))

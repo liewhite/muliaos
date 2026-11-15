@@ -7,7 +7,7 @@ import muliao.platform.{AppError, GeneralSettings}
 import muliao.platform.db.Database
 import muliao.platform.events.ChangeBus
 import muliao.resources.agents.Agents
-import muliao.sessions.{SessionInfo, Sessions}
+import muliao.sessions.Sessions
 import zio.*
 
 import java.time.{Instant, LocalDate, ZoneId}
@@ -31,7 +31,7 @@ trait History:
   def overview(agent: Option[AgentId], day: LocalDate): IO[AppError, DayOverview]
 
   /** 按编号或唯一前缀读一个会话：会话信息与按时间排的条目。 */
-  def read(session: String): IO[AppError, (SessionInfo, List[ReadItem])]
+  def read(session: String): IO[AppError, SessionRead]
 
   /** agent 编号到显示名（删除了的也有名字；查不到用编号）。 */
   def names(ids: Iterable[AgentId]): UIO[Map[AgentId, String]]
@@ -83,11 +83,11 @@ object History:
         hist   <- db.read(Repo.recent(HistoryQuery(agent = agent, since = Some(day), until = Some(day), limit = Int.MaxValue)))
       yield DayOverview(agent, day, zone, acts, issues, hist.reverse)
 
-    def read(session: String): IO[AppError, (SessionInfo, List[ReadItem])] =
+    def read(session: String): IO[AppError, SessionRead] =
       for
         info <- sessions.find(session)
         tl   <- sessions.timeline(info.id)
-      yield info -> Reading.items(tl)
+      yield SessionRead(info, Reading.items(tl))
 
     def names(ids: Iterable[AgentId]): UIO[Map[AgentId, String]] =
       ZIO.foreach(ids.toList.distinct)(id => agents.get(id).map(a => id -> a.name.value).orElseSucceed(id -> id.value)).map(_.toMap)

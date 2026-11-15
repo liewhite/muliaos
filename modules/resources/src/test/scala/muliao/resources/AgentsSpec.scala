@@ -1,6 +1,6 @@
 package muliao.resources
 
-import muliao.contract.{AgentState, Thinking}
+import muliao.contract.{AgentState, Thinking, SkillName}
 import muliao.contract.{AgentId, RoleName}
 import muliao.platform.AppError
 import muliao.resources.agents.*
@@ -78,7 +78,7 @@ object AgentsSpec extends ZIOSpecDefault:
         b.id == a.id,
         b.name.value == "bob",
         b.renamedFrom.isEmpty,
-        snap.skill("mine").exists(_.owner.label == "bob"),
+        snap.skill(SkillName.wrap("mine")).exists(_.owner.label == "bob"),
         acc.config.grantsOf(a.id).roles == List(RoleName.wrap("admin")),
         c.name.value == "Bob",
         names.contains("Bob"),
@@ -143,8 +143,8 @@ object AgentsSpec extends ZIOSpecDefault:
       yield assertTrue(
         reason(e).contains("在等后台任务"),
         clean == List(a.id),
-        snap.skill("shared-tool").exists(_.owner == Owner.Platform),
-        snap.skill("private-tool").isEmpty,
+        snap.skill(SkillName.wrap("shared-tool")).exists(_.owner == Owner.Platform),
+        snap.skill(SkillName.wrap("private-tool")).isEmpty,
         snap.secret("ALICE_KEY").exists(_.owner == Owner.Platform),
         !acc.config.agents.contains(a.id),
         acc.config.agents.contains(b.id),

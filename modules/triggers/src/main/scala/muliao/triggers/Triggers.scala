@@ -46,7 +46,7 @@ object Triggers:
   val PageUrl = "/triggers"
 
   /** 本领域给 agent 的工具名与类别（组装时汇进全部内置工具目录）。 */
-  val toolInfos: List[ToolInfo] = TriggerTools.catalog.map((n, a) => ToolInfo(n, a))
+  val toolInfos: List[ToolInfo] = TriggerTools.catalog
 
   type Env = Database & ChangeBus & Sessions & SessionHooks & Agents & AgentHooks & Notifications & AgentExec & ResourcePaths & GeneralSettings &
     TriggerSettings

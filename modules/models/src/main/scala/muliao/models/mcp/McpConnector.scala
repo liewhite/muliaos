@@ -75,12 +75,12 @@ object McpConnector:
 
     /** 连一个 server；失败原因已打码。 */
     private def connect(server: McpServerSpec, secrets: SecretLookup, launch: Launch): ZIO[Scope, String, Chunk[Tool[Any]]] =
-      VaultTemplate.fill(server.transport, secrets).mapError(_.message).flatMap { (transport, revealed) =>
+      VaultTemplate.fill(server.transport, secrets).mapError(_.message).flatMap { case Filled(transport, revealed) =>
         val masker = Masker(Chunk.fromIterable(revealed.values.map(SecretEnv(_, _))))
         val attempt =
           for
             opened <- open(server.name, transport, launch, masker)
-            (t, gone, stderr) = opened
+            Opened(t, gone, stderr) = opened
             client <- ZIO.acquireRelease(
                         ZIO.attemptBlocking(
                           McpClient
@@ -113,12 +113,15 @@ object McpConnector:
       if lines.isEmpty then e else RuntimeException(s"${describe(e)}（server 的标准错误：${lines.mkString(" / ")}）")
 
     /** 建传输；同时给出「server 没了」的信号（stdio 进程退出，调用中的请求据此尽早失败，不用等到超时）和 server 标准错误的最近几行。 */
+    /** 打开的连接：传输、进程退出时给出说明、最近的标准错误。 */
+    private final case class Opened(transport: McpClientTransport, gone: UIO[String], stderr: UIO[Chunk[String]])
+
     private def open(
         name: String,
         transport: McpTransport,
         launch: Launch,
         masker: Masker
-    ): ZIO[Scope, Throwable, (McpClientTransport, UIO[String], UIO[Chunk[String]])] =
+    ): ZIO[Scope, Throwable, Opened] =
       transport match
         case McpTransport.Stdio(cmd, args, env) =>
           for
@@ -126,7 +129,7 @@ object McpConnector:
             runtime <- ZIO.runtime[Any]
           yield
             val t = ExecStdioTransport(command, mapper, runtime, name, masker)
-            (t, command.exitCode.map(c => s"server 进程已退出（退出码 $c）"), t.recentErrors)
+            Opened(t, command.exitCode.map(c => s"server 进程已退出（退出码 $c）"), t.recentErrors)
         case McpTransport.Http(url, headers) =>
           for
             uri      <- ZIO.attempt(URI(url))
@@ -142,7 +145,7 @@ object McpConnector:
               .requestBuilder(request)
               .jsonMapper(mapper)
               .build()
-            (t, ZIO.never, ZIO.succeed(Chunk.empty))
+            Opened(t, ZIO.never, ZIO.succeed(Chunk.empty))
 
     private def describe(e: Throwable): String =
       val msgs = Iterator.iterate(e)(_.getCause).takeWhile(_ != null).take(4).map(t => Option(t.getMessage).getOrElse(t.getClass.getSimpleName))

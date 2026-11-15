@@ -1,6 +1,6 @@
 package muliao.resources.tree
 
-import muliao.contract.{AgentName, Thinking, AssetKind}
+import muliao.contract.{AgentName, AssetKind, SkillName, Thinking}
 
 import java.nio.file.Path
 
@@ -37,7 +37,7 @@ object MemoryDoc:
   val GlobalName = "global"
 
 /** 一个 skill：目录 + SKILL.md 的 frontmatter。`approval` 是要用户批准才执行的脚本（相对 skill 目录）。 */
-final case class SkillDoc(name: String, owner: Owner, dir: Path, description: String, approval: Set[String]):
+final case class SkillDoc(name: SkillName, owner: Owner, dir: Path, description: String, approval: Set[String]):
   def main: Path = dir.resolve(SkillDoc.Main)
 
 object SkillDoc:

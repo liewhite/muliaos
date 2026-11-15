@@ -168,7 +168,7 @@ final case class AssetFile(path: String, content: String, fingerprint: Option[St
 
 final case class AssetFileWrite(path: String, content: String, fingerprint: Option[String]) derives JsonCodec, Schema
 
-final case class SkillFiles(name: String, owner: String, files: List[String]) derives JsonCodec, Schema
+final case class SkillFiles(name: SkillName, owner: String, files: List[String]) derives JsonCodec, Schema
 
 /** 设 secret（值只能设不能看）。`owner` 只在新建时有用，缺省归平台。 */
 final case class SecretWrite(value: Option[String] = None, description: Option[String] = None, allowShell: Option[Boolean] = None, owner: Option[String] = None)
@@ -224,7 +224,7 @@ object ResourcesApi:
     assets.put.in("file").in(jsonBody[AssetFileWrite]).out(jsonBody[AssetFile]).name("writeAssetFile")
       .description("写资源文件：先校验格式与位置；带回读到的指纹，期间被改过就 Conflict。")
 
-  val skillFiles = assets.get.in("skills" / path[String]("name") / "files").out(jsonBody[SkillFiles]).name("skillFiles")
+  val skillFiles = assets.get.in("skills" / path[SkillName]("name") / "files").out(jsonBody[SkillFiles]).name("skillFiles")
 
   val putSecret =
     assets.put.in("secrets" / path[String]("key")).in(jsonBody[SecretWrite]).out(statusCode(StatusCode.NoContent)).name("putSecret")

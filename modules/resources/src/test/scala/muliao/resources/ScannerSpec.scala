@@ -1,6 +1,6 @@
 package muliao.resources
 
-import muliao.contract.{Thinking, AssetKind}
+import muliao.contract.{Thinking, AssetKind, SkillName}
 import muliao.contract.AgentName
 import muliao.resources.tree.*
 import zio.*
@@ -34,7 +34,7 @@ object ScannerSpec extends ZIOSpecDefault:
       val s = Scanner.scan(root)
       assertTrue(
         s.problems.isEmpty,
-        s.skill("code-std").exists(d => d.description == "写代码时 读它" && d.approval == Set("scripts/run.sh") && d.owner == Owner.Platform),
+        s.skill(SkillName.wrap("code-std")).exists(d => d.description == "写代码时 读它" && d.approval == Set("scripts/run.sh") && d.owner == Owner.Platform),
         s.mcp("web").exists(_.config.secretRefs == Set("TOKEN_A")),
         s.secret("TOKEN_A").exists(d => !d.content.allowShell && d.owner == Owner.Agent(AgentName.wrap("alice"))),
         s.profiles.get(AgentName.wrap("alice")).contains(AgentProfile("做事", "claude:x", Thinking.High, Some("g"))),
@@ -96,8 +96,8 @@ object ScannerSpec extends ZIOSpecDefault:
       )
       val s = Scanner.scan(root)
       assertTrue(
-        s.skill("shared").exists(_.owner == Owner.Platform),
-        s.skill("dup").isEmpty,
+        s.skill(SkillName.wrap("shared")).exists(_.owner == Owner.Platform),
+        s.skill(SkillName.wrap("dup")).isEmpty,
         s.secret("K").isEmpty,
         s.problems.exists(p => p.path == root.resolve("alice/skills/shared/SKILL.md") && p.reason.contains("平台已有")),
         s.problems.count(_.reason.contains("都不加载")) == 4,

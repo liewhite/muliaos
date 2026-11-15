@@ -4,22 +4,25 @@ package muliao.workspace.text
 object EditReport:
   val Context = 2
 
+  /** 一块回显的行号范围（含两端）。 */
+  private final case class Lines(first: Int, last: Int)
+
   def render(path: String, e: Edited): String =
     val index = LineIndex(e.text)
     val head  = s"edited $path (${e.replacements} replacements; now ${index.count} lines); cat -n of the changed lines with $Context lines of context:"
     if index.count == 0 then s"$head\n(文件现在是空的)"
     else
       val blocks = e.changed
-        .map { (from, until) =>
-          val first = index.lineAt(from)
-          val last  = if until > from then index.lineAt(until - 1) else first
-          ((first - Context).max(1), (last + Context).min(index.count))
+        .map { span =>
+          val first = index.lineAt(span.from)
+          val last  = if span.until > span.from then index.lineAt(span.until - 1) else first
+          Lines((first - Context).max(1), (last + Context).min(index.count))
         }
-        .sortBy(_._1)
-        .foldLeft(List.empty[(Int, Int)]) {
-          case ((s, e) :: rest, (a, b)) if a <= e + 1 => (s, e.max(b)) :: rest
-          case (acc, block)                           => block :: acc
+        .sortBy(_.first)
+        .foldLeft(List.empty[Lines]) {
+          case (prev :: rest, b) if b.first <= prev.last + 1 => prev.copy(last = prev.last.max(b.last)) :: rest
+          case (acc, block)                                  => block :: acc
         }
         .reverse
-      val body = blocks.map((a, b) => (a to b).map(n => CatN.line(n, index.line(n))).mkString("\n")).mkString("\n--\n")
+      val body = blocks.map(b => (b.first to b.last).map(n => CatN.line(n, index.line(n))).mkString("\n")).mkString("\n--\n")
       s"$head\n$body"

@@ -1,5 +1,6 @@
 package muliao.triggers
 
+import muliao.resources.ToolInfo
 import muliao.contract.*
 import muliao.platform.AppError
 import muliao.resources.agents.Agents
@@ -83,13 +84,13 @@ object TriggerTools:
       finishedAt: Option[String]
   ) derives JsonEncoder
 
-  val catalog: List[(String, Access)] = List(
-    "trigger_kinds"  -> Access.Read,
-    "trigger_list"   -> Access.Read,
-    "trigger_create" -> Access.Write,
-    "trigger_update" -> Access.Write,
-    "trigger_run"    -> Access.Write,
-    "trigger_delete" -> Access.Write
+  val catalog: List[ToolInfo] = List(
+    ToolInfo("trigger_kinds", Access.Read),
+    ToolInfo("trigger_list", Access.Read),
+    ToolInfo("trigger_create", Access.Write),
+    ToolInfo("trigger_update", Access.Write),
+    ToolInfo("trigger_run", Access.Write),
+    ToolInfo("trigger_delete", Access.Write)
   )
 
   private def fail(e: AppError): ToolFailure = ToolFailure.fromAppError(e)

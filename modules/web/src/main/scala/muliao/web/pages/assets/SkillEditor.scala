@@ -130,12 +130,12 @@ object SkillEditor:
     private def fetch(path: String): Future[List[String]] = cached match
       case Some(f) if path.nonEmpty => f
       case _ =>
-        val f = Http.call(ResourcesApi.skillFiles)(name).map(_.files)
+        val f = Http.call(ResourcesApi.skillFiles)(SkillName.wrap(name)).map(_.files)
         cached = Some(f)
         f
     def list(path: String): Future[DirContent] =
       fetch(path).map(fs => DirContent(level(fs, path), truncated = false))
-    def read(path: String): Future[Array[Byte]] = Http.call(WorkspaceApi.skillFile)((name, path)).map(_._3)
+    def read(path: String): Future[Array[Byte]] = Http.call(WorkspaceApi.skillFile)((SkillName.wrap(name), path)).map(_._3)
     def url(path: String): String               = s"/api/assets/skills/${Http.enc(name)}/raw?path=${Http.enc(path)}"
 
   /** 全部文件的相对路径 → 某一层目录里的条目（目录在前，各自按名字排）。 */

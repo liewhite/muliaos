@@ -1,8 +1,10 @@
 package muliao.workspace.scripts
 
+import muliao.resources.ToolInfo
 import muliao.exec.{Program, RealPath}
 import muliao.resources.SkillEntry
 import muliao.resources.vault.SecretUse
+import muliao.contract.SkillName
 import muliao.sessions.{ApprovalHandler, ApproverName, Pause, RunContext}
 import muliao.toolkit.*
 import muliao.workspace.tools.{CommandRunner, RunMode}
@@ -47,7 +49,7 @@ object SkillRun:
   private def check(in: SkillRunIn, ctx: RunContext): IO[ToolFailure, Checked] =
     for
       entry <- ZIO
-                 .fromOption(ctx.resources.skills.find(_.doc.name == in.skill))
+                 .fromOption(ctx.resources.skills.find(_.doc.name == SkillName.wrap(in.skill)))
                  .orElseFail(ToolFailure.Rejected(s"没有 skill ${in.skill}，或你不能用它：只能用 skill 索引里的"))
       script <- ZIO.fromEither(normalize(in.script)).mapError(ToolFailure.Rejected(_))
       mode   <- ZIO.fromEither(RunMode.of(in.background, in.timeout, in.heartbeatSeconds)).mapError(ToolFailure.Rejected(_))
@@ -124,4 +126,4 @@ object SkillRun:
         out <- execute(runner, ctx, a.call, c)
       yield out
 
-  val catalog: List[(String, Access)] = List("skill_run" -> Access.Write)
+  val catalog: List[ToolInfo] = List(ToolInfo("skill_run", Access.Write))

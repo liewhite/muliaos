@@ -9,6 +9,9 @@ import scala.util.matching.Regex
 /** `session_read` 读出的一条。`label`：USER / TRIGGER / ISSUE / DELEGATION / EVENT（来信）、ASSISTANT（回答正文）、`call <工具>`、`result <工具>`、
   * `error <工具>`、CONTEXT（运行上下文）、COMPACTION（压缩摘要）、`NOTICE <种类>`（失败、停止等）。`clippable`：正文按 clip 截断（工具调用、结果、事件等）。
   */
+/** 读出的一个会话：基本信息与按时间排的条目。 */
+final case class SessionRead(info: muliao.sessions.SessionInfo, items: List[ReadItem])
+
 final case class ReadItem(label: String, detail: Option[String], at: Long, text: String, clippable: Boolean)
 
 /** 筛选条件：`labels` 里任一个等于标签或是它加空格的开头（`call` 匹配 `call run_shell`）；`grep` 在标签与正文里找（不分大小写）；`since` 之后（含）的。 */

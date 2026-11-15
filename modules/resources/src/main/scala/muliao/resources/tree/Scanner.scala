@@ -1,6 +1,6 @@
 package muliao.resources.tree
 
-import muliao.contract.{AgentName, AssetKind}
+import muliao.contract.{AgentName, AssetKind, SkillName}
 import muliao.resources.access.AccessConfig
 
 import java.nio.charset.{CharacterCodingException, CodingErrorAction, StandardCharsets}
@@ -35,16 +35,19 @@ final case class Snapshot(
   def privateMemory(agent: AgentName): Option[MemoryDoc] =
     memories.find(_.scope == MemoryScope.Private(agent))
 
-  def skill(name: String): Option[SkillDoc]   = skills.find(_.name == name)
+  def skill(name: SkillName): Option[SkillDoc] = skills.find(_.name == name)
   def mcp(name: String): Option[McpDoc]       = mcps.find(_.name == name)
   def secret(key: String): Option[SecretDoc]  = secrets.find(_.key == key)
 
   /** 已加载的、按名字分发的资源：种类、名字、主人。 */
-  def named: List[(AssetKind, String, Owner)] =
-    memories.collect { case MemoryDoc(MemoryScope.Shared(n), _, _) => (AssetKind.Memory, n, Owner.Platform) } ++
-      skills.map(s => (AssetKind.Skill, s.name, s.owner)) ++
-      mcps.map(m => (AssetKind.Mcp, m.name, m.owner)) ++
-      secrets.map(s => (AssetKind.Secret, s.key, s.owner))
+  def named: List[NamedAsset] =
+    memories.collect { case MemoryDoc(MemoryScope.Shared(n), _, _) => NamedAsset(AssetKind.Memory, n, Owner.Platform) } ++
+      skills.map(s => NamedAsset(AssetKind.Skill, s.name.value, s.owner)) ++
+      mcps.map(m => NamedAsset(AssetKind.Mcp, m.name, m.owner)) ++
+      secrets.map(s => NamedAsset(AssetKind.Secret, s.key, s.owner))
+
+/** 按名字分发的一项资源：种类、名字、主人。 */
+final case class NamedAsset(kind: AssetKind, name: String, owner: Owner)
 
 /** 扫描资源目录（阻塞 IO，调用方放到阻塞线程上）。 */
 object Scanner:
@@ -156,7 +159,7 @@ object Scanner:
           if !Formats.validSlug(n) then Bad(AssetKind.Skill, n, o, p, "skill 名（目录名）只能用小写字母、数字和 -")
           else
             readText(p).flatMap(t => Formats.parseSkill(t, n, rel => Files.isRegularFile(dir.resolve(rel)))) match
-              case Right(m) => Ok(AssetKind.Skill, n, o, p, Loaded.Skill(SkillDoc(n, o, dir, m.description, m.approval)))
+              case Right(m) => Ok(AssetKind.Skill, n, o, p, Loaded.Skill(SkillDoc(SkillName.wrap(n), o, dir, m.description, m.approval)))
               case Left(r)  => Bad(AssetKind.Skill, n, o, p, r)
         )
       case (p, AssetPath.Mcp(o, n)) =>

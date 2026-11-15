@@ -55,3 +55,7 @@ type RoleName = RoleName.Type
 /** 上传文件（附件）。 */
 object FileId extends StringId
 type FileId = FileId.Type
+
+/** skill 名（它所在的目录名），同一 agent 能用的 skill 之间唯一。 */
+object SkillName extends StringId
+type SkillName = SkillName.Type
