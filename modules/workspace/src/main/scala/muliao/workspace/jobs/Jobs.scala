@@ -112,7 +112,7 @@ object Jobs:
 
     private val now = Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
 
-    /** 任务表的写都经它提交：提交后广播主题 jobs。 */
+    /** 界面能看到的任务数据（状态、退出码、时间）都经它写：提交后广播主题 jobs。 */
     private def write[A](tx: Tx[A]): IO[AppError, A] = db.write(tx <* bus.publishAfterCommit(Topic.Jobs))
 
     private def logFile(agent: AgentId, id: JobId): Path = paths.workspace(agent).resolve(logName(id))

@@ -150,8 +150,9 @@ object BoardApi:
       .refreshedBy(Topic.Issues)
       .description("issue 列表，最近更新的在前。`status` 可重复给多个；`assignee` 是 `user` 或 agent 编号；`owner` 是 agent 编号。")
 
+  // 详情里有处理会话的工作状态，所以也跟着 sessions（列表不跟：任何会话有动静就重拉整个看板太频繁）。
   val get: Endpoint[Option[String], IssueId, ApiError, IssueDetail, Any] =
-    one.get.out(jsonBody[IssueDetail]).name("getIssue").refreshedBy(Topic.Issues).description("issue 详情：描述、依赖、被谁依赖、时间线、处理它的会话。")
+    one.get.out(jsonBody[IssueDetail]).name("getIssue").refreshedBy(Topic.Issues, Topic.Sessions).description("issue 详情：描述、依赖、被谁依赖、时间线、处理它的会话。")
 
   val create: Endpoint[Option[String], NewIssue, ApiError, IssueDetail, Any] =
     issues.post.in(jsonBody[NewIssue]).out(jsonBody[IssueDetail]).name("createIssue").description("新建 issue。")

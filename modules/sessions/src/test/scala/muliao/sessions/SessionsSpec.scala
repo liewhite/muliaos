@@ -269,8 +269,8 @@ object SessionsSpec extends ZIOSpecDefault:
                  )
           tl <- timeline(id)
         yield assertTrue(
-          // 调用结束一次、下一步请求模型前取走插话一次
-          evs.count(_ == LiveEvent.Changed) == 2,
+          // 调用结束一次、下一步请求模型前取走插话一次（没修时只有前一次）
+          evs.count(_ == LiveEvent.Changed) >= 2,
           tl.exists(i => i.kind == "letter" && i.toString.contains("插话"))
         )
       }

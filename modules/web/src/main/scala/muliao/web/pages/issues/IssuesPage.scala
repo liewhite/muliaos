@@ -24,12 +24,6 @@ object IssuesPage:
   private val viewStore  = Stored[View]("muliao.issues.view", View.values.toList, _.key, View.Board)
   private val scopeStore = Stored[IssueGraph.Scope]("muliao.issues.graphScope", IssueGraph.Scope.values.toList, _.key, IssueGraph.Scope.Open)
 
-  private def mapLoad[A, B](l: Load[A])(f: A => B): Load[B] = l match
-    case Load.Pending     => Load.Pending
-    case Load.Ready(a)    => Load.Ready(f(a))
-    case Load.Failed(m)   => Load.Failed(m)
-    case Load.Stale(a, e) => Load.Stale(f(a), e)
-
   def view(): HtmlElement =
     val viewVar = Var(viewStore.load())
     val scope   = Var(scopeStore.load())
@@ -38,7 +32,7 @@ object IssuesPage:
     val loaded  = filters.flatMapSwitch(f => Remote(BoardApi.list)(f.query))
     // 拖拽后先在本地挪动，接口成功、重新拉到的数据落下后以服务端为准；连着拖几张时每张各占一项
     val moves   = Var(Map.empty[IssueId, Move])
-    val shown   = loaded.combineWith(moves.signal).map((l, m) => mapLoad(l)(applyMoves(_, m)))
+    val shown   = loaded.combineWith(moves.signal).map((l, m) => l.map(applyMoves(_, m)))
     val mover   = new Mover(moves)
     Ui.page("Issues", wide = true)(
       loaded.updates --> (_ => moves.update(_.filterNot(_._2.settled))),

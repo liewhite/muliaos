@@ -165,7 +165,7 @@ private[sessions] final case class Control(
     for
       i <- info(id)
       _ <- delegations.threadGone(i)
-      // 先 touched 再删：删掉之后行没了，但广播与实时事件照发（列表去掉它，开着的会话页重拉得到「不存在」）
+      // touch 对删掉的行无效，这里只借它发通知（列表去掉它，开着的会话页重拉得到「不存在」）
       t <- now
       _ <- db.write(Repo.orphanThreads(id) *> touched(id, t) *> Repo.deleteSession(id))
       _ <- waits.forgetSession(id)
