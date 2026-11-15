@@ -36,10 +36,10 @@ object McpSpec extends ZIOSpecDefault:
   def alive(pid: Long): UIO[Boolean] =
     ZIO.attemptBlocking(ProcessBuilder("/bin/kill", "-0", pid.toString).start().waitFor() == 0).orElseSucceed(false)
 
-  val connector = SystemProxy.fixed(ProxySettings.direct) >>> McpConnector.layer
+  val connector = SystemProxy.fixed(ProxySettings.direct) >>> McpConnector.layer()
 
   /** 只给「连不上」的用例用：连接等待 2 秒。连得上的用例仍用线上的等待时间，免得机器忙时起 server 慢而偶发失败。 */
-  val quickConnector = SystemProxy.fixed(ProxySettings.direct) >>> McpConnector.layerWith(2.seconds)
+  val quickConnector = SystemProxy.fixed(ProxySettings.direct) >>> McpConnector.layer(2.seconds)
 
   /** 最小的 Streamable HTTP MCP server：只认带对 Authorization 的请求，JSON 直接回应。 */
   val httpRoutes = Routes(
@@ -147,7 +147,7 @@ object McpSpec extends ZIOSpecDefault:
                            Chunk(McpServerSpec("mute", McpTransport.Stdio("/bin/bash", Chunk("-c", "echo $$ > mute.pid; exec 1>&-; sleep 30"), Map.empty))),
                            secrets,
                            Launch(dir, Sandbox.Unrestricted)
-                         )).provideSomeLayer[Scope](quickConnector).timeout(60.seconds)
+                         )).provideSomeLayer[Scope](quickConnector).timeout(15.seconds)
                  pid  <- ZIO.succeed(Files.readString(dir.resolve("mute.pid")).trim.toLong)
                  _    <- ZIO.sleep(500.millis)
                  live <- alive(pid)

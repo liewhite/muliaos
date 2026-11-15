@@ -43,10 +43,8 @@ object McpConnector:
   /** 一次工具调用最多等多久 */
   val CallTimeout: Duration = 10.minutes
 
-  val layer: URLayer[SystemProxy, McpConnector] = layerWith(ConnectTimeout)
-
-  /** 连接等待时间可换的版本（测试里用短的，免得连不上的用例真等 30 秒）。 */
-  def layerWith(connectTimeout: Duration): URLayer[SystemProxy, McpConnector] =
+  /** `connectTimeout`：连接等待时间（测试里用短的，免得连不上的用例真等 30 秒）。 */
+  def layer(connectTimeout: Duration = ConnectTimeout): URLayer[SystemProxy, McpConnector] =
     ZLayer.fromFunction((proxy: SystemProxy) => Live(proxy, connectTimeout))
 
   private val mapper: McpJsonMapper = McpJsonDefaults.getMapper()

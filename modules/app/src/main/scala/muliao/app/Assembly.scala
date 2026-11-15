@@ -89,7 +89,7 @@ object Assembly:
       AgentExec.layer,
       // 模型接入与外部服务
       models,
-      McpConnector.layer,
+      McpConnector.layer(),
       optional(cfg.web, cfg.transcription),
       // 会话与下游领域
       LiveHub.layer,
