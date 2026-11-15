@@ -6,9 +6,9 @@ import muliao.platform.DomainModule
   *
   * 给别的领域用的接口：
   *   - [[agents.Agents]]：agent 的身份与生命周期（`requireActive` 判断能不能接新工作）；
-  *   - [[Resources]]：一次运行的资源快照 `forRun`、最终权限、可写范围 `writableScope`（转成写沙箱）、写不了时的说明；
+  *   - [[Resources]]：一次运行的资源快照 `forRun`、最终权限、可写范围 `writableScope`（就是写沙箱 `Sandbox.Confined`）、写不了时的说明；
   *   - [[ResourcePrompt]]：给模型的记忆、skill 索引段落与每次运行的资源提醒；
-  *   - [[guard.AssetGuard]]：文件工具写资源目录前的校验（格式、位置、重名、记忆长度、并发覆盖）；
+  *   - [[guard.AssetGuard]]：写文件的入口校验，得到 `Vetted` 才能写（资源文件的格式、位置、重名、记忆长度、并发覆盖）；
   *   - [[vault.Vault]]：secret 的存与解（命令注入、skill 脚本、MCP）；
   *   - [[tree.AssetStore]]：资源目录快照与变化广播（主题 `assets`）；agent 变化广播主题 `agents`；
   *   - [[tools.AgentTools]]：list_agents、get_agent、create_agent、delete_agent、vault_set；

@@ -45,6 +45,6 @@ object IssueParts:
     Opt(AssigneeChoice.Nobody, "未指派") :: Opt(AssigneeChoice.Me, "我") ::
       AgentsData.selectable(agents, keep).map(a => Opt(AssigneeChoice.Agent(a.id), a.name.value))
 
-  def statusOptions: List[Opt[IssueStatus]] = Statuses.map(s => Opt(s, statusLabel(s)))
+  def statusOptions: List[Opt[IssueStatus]] = Opt.of(Statuses)
 
-  def priorityOptions: List[Opt[Priority]] = Priorities.map(p => Opt(p, priorityLabel(p)))
+  def priorityOptions: List[Opt[Priority]] = Opt.of(Priorities)

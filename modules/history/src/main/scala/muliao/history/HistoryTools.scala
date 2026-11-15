@@ -133,7 +133,7 @@ object HistoryTools:
           _     <- ZIO.fail(AppError.invalid("limit 要在 1–200 之间")).when(in.limit < 1 || in.limit > 200)
           found <- history.search(HistoryQuery(a, HistoryQuery.words(in.query), since, until, imp, in.limit))
           ns    <- history.names(found.map(_.agent))
-        yield found.map(e => Line(e.id, e.day.toString, ns.getOrElse(e.agent, e.agent.value), e.title, e.summary, e.refs, e.importance.level))
+        yield found.map(e => Line(e.id, e.day.toString, ns(e.agent), e.title, e.summary, e.refs, e.importance.level))
       )(_.toJsonPretty)
     }
 
@@ -151,7 +151,7 @@ object HistoryTools:
           d     <- in.day.fold(history.today)(day("day", _))
           o     <- history.overview(a, d)
           ns    <- history.names(a.toList ++ o.sessions.sessions.map(_.agent) ++ o.sessions.said.map(_.agent) ++ o.sessions.failures.map(_.agent) ++ o.history.map(_.agent))
-          lines  = OverviewText(id => ns.getOrElse(id, id.value), history.zone).lines(o)
+          lines  = OverviewText(ns, history.zone).lines(o)
           page  <- ZIO.fromEither(Pages.slice(lines, in.offset, "行")).mapError(AppError.invalid)
         yield page
       )(identity)
@@ -192,7 +192,7 @@ object HistoryTools:
           page   <- ZIO.fromEither(Pages.slice(blocks, in.offset, "条")).mapError(AppError.invalid)
         yield
           val body = if picked.isEmpty then s"（没有符合条件的条目；全部 ${xs.size} 条）" else page
-          header(i, ns.getOrElse(i.agent, i.agent.value)) + "\n\n" + body
+          header(i, ns(i.agent)) + "\n\n" + body
       )(identity)
     }
 

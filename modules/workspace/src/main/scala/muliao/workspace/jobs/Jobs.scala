@@ -1,11 +1,11 @@
 package muliao.workspace.jobs
 
 import muliao.contract.{AgentId, JobId, JobStatus, JobView, SessionId, Topic}
-import muliao.exec.{Exec, RunningCommand}
+import muliao.exec.{Exec, RunningCommand, Sandbox}
 import muliao.platform.AppError
 import muliao.platform.db.{Database, Tx}
 import muliao.platform.events.ChangeBus
-import muliao.resources.{ResourcePaths, WritableScope}
+import muliao.resources.ResourcePaths
 import muliao.sessions.{EventKind, Letter, Sessions, Source}
 import muliao.workspace.{AgentCommand, AgentExec, Durations}
 import muliao.workspace.store.{JobRow, Repo}
@@ -98,7 +98,7 @@ object Jobs:
   def logName(id: JobId): String = s"jobs/${id.value}.log"
 
   /** 一个在跑的任务。 */
-  private final case class Live(agent: AgentId, command: RunningCommand, scope: Scope.Closeable, killed: Ref[Boolean], writable: WritableScope)
+  private final case class Live(agent: AgentId, command: RunningCommand, scope: Scope.Closeable, killed: Ref[Boolean], writable: Sandbox.Confined)
 
   private final case class Impl(
       db: Database,

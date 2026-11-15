@@ -13,8 +13,8 @@ import Http.ec
 object TriggersPage:
   def view(): HtmlElement =
     val triggers = Remote(TriggersApi.list)(None)
-    val agents   = AgentsData.load()
-    val agentList = agents.map(_.data.getOrElse(Nil))
+    val agents    = AgentsData.all
+    val agentList = AgentsData.list
     val openId   = Var(Option.empty[TriggerId])
     Ui.page("触发器", wide = true)(
       div(

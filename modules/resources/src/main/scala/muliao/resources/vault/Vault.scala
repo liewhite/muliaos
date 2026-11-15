@@ -94,7 +94,7 @@ object Vault:
                                     fernet.encrypt(value, now),
                                     allowShell.getOrElse(doc.content.allowShell)
                                   )
-                           _ <- store.write(doc.file, Formats.renderSecret(next), privateFile = true)
+                           _ <- store.write(AssetPath.Secret(doc.owner, key), Formats.renderSecret(next))
                          yield false
                        case None =>
                          val owners = snap.occupied.getOrElse(AssetKind.Secret -> key, Nil)
@@ -103,9 +103,8 @@ object Vault:
                                   ZIO.fail(AppError.conflict(s"${owners.map(_.label).mkString("、")} 已有名为 $key 的 secret 文件（没加载：见资源问题），先处理它"))
                                 )
                            owner = perms.fold(newOwner)(p => Owner.Agent(p.name))
-                           file  = store.root.resolve(owner.label).resolve("secrets").resolve(s"$key.toml")
                            next  = SecretFile(description.map(_.trim).getOrElse(""), fernet.encrypt(value, now), allowShell.getOrElse(true))
-                           _ <- store.write(file, Formats.renderSecret(next), privateFile = true)
+                           _ <- store.write(AssetPath.Secret(owner, key), Formats.renderSecret(next))
                          yield true
           _ <- ZIO.logInfo(s"secret $key 已${if created then "新建" else "更新"}")
         yield created

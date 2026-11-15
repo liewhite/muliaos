@@ -1,6 +1,7 @@
 package muliao.resources.tree
 
 import muliao.contract.Topic
+import muliao.exec.RealPath
 import muliao.platform.AppError
 import muliao.platform.events.ChangeBus
 import muliao.resources.access.AccessConfig
@@ -11,6 +12,21 @@ import java.nio.file.attribute.PosixFilePermissions
 
 /** 生效的权限规则：access.toml 写坏时沿用上一份有效的，`broken` 说明现在这份为什么不生效。 */
 final case class AccessState(config: AccessConfig, broken: Option[String])
+
+/** 一个路径相对资源目录在哪（按真实路径判断，符号链接指进来、指出去都按指向的地方算）。 */
+enum Location:
+  case Outside(real: RealPath)
+  case Inside(real: RealPath, at: AssetPath)
+
+/** 过了写入口校验（[[muliao.resources.guard.AssetGuard]]）的一次写，只能由它得到。 */
+sealed trait Vetted:
+  def content: String
+
+object Vetted:
+  /** 不在资源目录里：原样写 */
+  final case class Plain private[resources] (real: RealPath, content: String) extends Vetted
+  /** 资源目录里的文件：经 [[AssetStore.commit]] 原子写 */
+  final case class Asset private[resources] (real: RealPath, content: String, privateFile: Boolean) extends Vetted
 
 /** 资源目录：带指纹缓存的快照、生效的权限规则、平台自己写资源文件的入口（原子写）、变化监听。
   *
@@ -25,10 +41,14 @@ trait AssetStore:
   /** 生效的权限规则。 */
   def access: IO[AppError, AccessState]
 
-  /** 原子地写一个资源文件（先写同目录的隐藏临时文件再改名），自动建父目录；覆盖已有文件时沿用原文件的权限位，新文件 `privateFile` 时只有主人可读写。
-    * 不做内容校验：校验见 [[muliao.resources.guard.AssetGuard]]。
-    */
-  def write(path: Path, content: String, privateFile: Boolean = false): IO[AppError, Unit]
+  /** 路径在不在资源目录里、在哪个位置。 */
+  def locate(path: Path): IO[AppError, Location]
+
+  /** 平台自己写资源文件（内容由平台生成，不经写入口校验）。写法同 [[commit]]。 */
+  def write(file: ResourceFile, content: String): IO[AppError, Unit]
+
+  /** 写一个校验过的资源文件：原子写（先写同目录的隐藏临时文件再改名），自动建父目录；覆盖已有文件时沿用原文件的权限位，新的私密文件只有主人可读写。 */
+  def commit(v: Vetted.Asset): IO[AppError, Unit]
 
   /** 删除文件或整个目录（不存在不算错）。 */
   def delete(path: Path): IO[AppError, Unit]
@@ -62,7 +82,7 @@ object AssetStore:
       ZIO.attemptBlocking(f).mapError(e => AppError.internal(s"$what：${e.getMessage}", e))
 
     def ensureGlobalMemory: IO[AppError, Unit] =
-      val g = root.resolve("platform/memory/global.md")
+      val g = root.resolve(AssetPath.render(AssetPath.SharedMemory(MemoryDoc.GlobalName)))
       blocking("建全局记忆失败") {
         if !Files.exists(g) then
           Files.createDirectories(g.getParent)
@@ -92,7 +112,7 @@ object AssetStore:
     private def rememberAccess(s: Snapshot): IO[AppError, Unit] =
       s.access match
         case Some(Right(_)) =>
-          val src = root.resolve("platform/access.toml")
+          val src = root.resolve(AssetPath.render(AssetPath.AccessFile))
           blocking("保存权限规则副本失败") {
             Files.createDirectories(settings.lastGoodAccess.getParent)
             Files.copy(src, settings.lastGoodAccess, StandardCopyOption.REPLACE_EXISTING): Unit
@@ -112,7 +132,17 @@ object AssetStore:
             }.map(last => AccessState(last.getOrElse(AccessConfig.empty), Some(reason)))
       }
 
-    def write(path: Path, content: String, privateFile: Boolean): IO[AppError, Unit] =
+    def locate(path: Path): IO[AppError, Location] =
+      RealPath.resolve(root).zipWith(RealPath.resolve(path)) { (r, real) =>
+        if RealPath.within(real, r) then Location.Inside(real, AssetPath.classify(r.path.relativize(real.path))) else Location.Outside(real)
+      }
+
+    def write(file: ResourceFile, content: String): IO[AppError, Unit] =
+      writeAt(root.resolve(AssetPath.render(file)), content, file.privateFile)
+
+    def commit(v: Vetted.Asset): IO[AppError, Unit] = writeAt(v.real.path, v.content, v.privateFile)
+
+    private def writeAt(path: Path, content: String, privateFile: Boolean): IO[AppError, Unit] =
       blocking(s"写 $path 失败") {
         Files.createDirectories(path.getParent)
         val tmp = Files.createTempFile(path.getParent, s".${path.getFileName}.", ".tmp")

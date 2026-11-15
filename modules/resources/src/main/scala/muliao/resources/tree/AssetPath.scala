@@ -14,16 +14,17 @@ import java.nio.file.Path
   * <agent>/agent.toml、memory.md     agent 配置与私有记忆
   * }}}
   * `<owner>` 是 `platform` 或 agent 名。`.` 开头的文件与目录不读也不校验。
+  * 位置与路径的互换只在这里：路径 → 位置是 [[AssetPath.classify]]，资源文件 → 路径是 [[AssetPath.render]]。
   */
 enum AssetPath:
-  case AccessFile
-  case SharedMemory(name: String)
-  case PrivateMemory(agent: AgentName)
-  case AgentFile(agent: AgentName)
-  case SkillMain(owner: Owner, name: String)
-  case SkillAttachment(owner: Owner, name: String, relative: String)
-  case Mcp(owner: Owner, name: String)
-  case Secret(owner: Owner, key: String)
+  case AccessFile                                                    extends AssetPath, ParsedFile
+  case SharedMemory(name: String)                                    extends AssetPath, ParsedFile
+  case PrivateMemory(agent: AgentName)                               extends AssetPath, ParsedFile
+  case AgentFile(agent: AgentName)                                   extends AssetPath, ParsedFile
+  case SkillMain(owner: Owner, name: String)                         extends AssetPath, ParsedFile
+  case SkillAttachment(owner: Owner, name: String, relative: String) extends AssetPath, ResourceFile
+  case Mcp(owner: Owner, name: String)                               extends AssetPath, ParsedFile
+  case Secret(owner: Owner, key: String)                             extends AssetPath, ParsedFile
   /** 目录本身（agent 目录、skills 目录、某个 skill 目录等），不是资源文件。 */
   case Directory(owner: Option[Owner])
   case Hidden
@@ -49,7 +50,45 @@ enum AssetPath:
     case Secret(_, k)             => Some(AssetKind.Secret -> k)
     case _                        => None
 
+/** 资源目录里一个规定位置上的文件（[[AssetPath]] 里除目录、隐藏、放错位置以外的那些）。 */
+sealed trait ResourceFile:
+  self: AssetPath =>
+
+  /** 不该让别人读到：新建时权限只给主人。 */
+  def privateFile: Boolean = this match
+    case AssetPath.Secret(_, _) => true
+    case _                      => false
+
+/** 内容由平台解析的资源文件（skill 附件以外的），规格见 [[FileSpec]]。 */
+sealed trait ParsedFile extends ResourceFile:
+  self: AssetPath =>
+
 object AssetPath:
+
+  /** 资源文件相对资源目录根的路径：`classify(render(f)) == f`。 */
+  def render(f: ResourceFile): Path = f match
+    case AccessFile                   => Path.of(Owner.PlatformDir, "access.toml")
+    case SharedMemory(n)              => Path.of(Owner.PlatformDir, "memory", s"$n.md")
+    case PrivateMemory(a)             => Path.of(a.value, "memory.md")
+    case AgentFile(a)                 => Path.of(a.value, "agent.toml")
+    case SkillMain(o, n)              => skillDir(o, n).resolve(SkillDoc.Main)
+    case SkillAttachment(o, n, rel)   => skillDir(o, n).resolve(rel)
+    case Mcp(o, n)                    => ownerDir(o).resolve("mcp").resolve(s"$n.json")
+    case Secret(o, k)                 => ownerDir(o).resolve("secrets").resolve(s"$k.toml")
+
+  /** 一项按名字分发的资源归 `owner` 时放在哪（skill 是目录）；共享记忆只能归平台、工具不是文件，其余为 None。 */
+  def home(kind: AssetKind, name: String, owner: Owner): Option[Path] = kind match
+    case AssetKind.Skill  => Some(skillDir(owner, name))
+    case AssetKind.Mcp    => Some(render(Mcp(owner, name)))
+    case AssetKind.Secret => Some(render(Secret(owner, key = name)))
+    case AssetKind.Memory => Option.when(owner == Owner.Platform)(render(SharedMemory(name)))
+    case AssetKind.Tool   => None
+
+  /** 主人的目录（`platform` 或 agent 名）。 */
+  def ownerDir(o: Owner): Path = Path.of(o.label)
+
+  /** skill 的目录。 */
+  def skillDir(o: Owner, name: String): Path = ownerDir(o).resolve("skills").resolve(name)
 
   /** 按相对资源目录根的路径分类。 */
   def classify(relative: Path): AssetPath =

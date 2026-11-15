@@ -22,7 +22,7 @@ final case class HistoryHttp(history: History):
       found <- history.search(HistoryQuery(agent, HistoryQuery.words(q), s, u, imp, limit.getOrElse(50)))
       ns    <- history.names(found.map(_.agent))
     yield found.map(e =>
-      HistoryEntryView(e.id, e.agent, ns.getOrElse(e.agent, e.agent.value), e.day.toString, e.title, e.summary, e.refs, e.importance.level, e.session, e.createdAt)
+      HistoryEntryView(e.id, e.agent, ns(e.agent), e.day.toString, e.title, e.summary, e.refs, e.importance.level, e.session, e.createdAt)
     )
 
   def endpoints(auth: Auth): List[ApiEndpoint] =

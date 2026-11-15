@@ -31,15 +31,15 @@ enum Expectation:
   /** 整体覆盖，但本次运行没读过它：文件已存在就拒绝 */
   case NotRead
 
-/** 资源目录的写入口校验：文件工具和界面写资源文件前都先过这里。不在资源目录里的路径原样放行；
-  * 写权限本身由写沙箱与可写范围管，这里只管格式、位置、重名、记忆长度与并发覆盖。
+/** 写文件的入口校验：文件工具和界面写文件前都先过这里，得到 [[Vetted]] 才能写。不在资源目录里的路径原样放行；
+  * 写权限本身由写沙箱与可写范围管，这里只管资源文件的格式、位置、重名、记忆长度与并发覆盖。
   */
 trait AssetGuard:
   /** 文件现在的指纹（不存在为 None）。 */
   def fingerprint(path: Path): IO[AppError, Option[FileFingerprint]]
 
-  /** 校验一次写入，返回真正要写的内容（记忆会被规整空白）。不合格时说明原因和该看的说明一节。 */
-  def check(actor: Actor, path: Path, content: String, expect: Expectation): IO[AppError, String]
+  /** 校验一次写入，得到真正要写的（记忆会被规整空白）。不合格时说明原因和该看的说明一节。 */
+  def check(actor: Actor, path: Path, content: String, expect: Expectation): IO[AppError, Vetted]
 
 object AssetGuard:
   val layer: ZLayer[AssetStore & Resources & ModelCheck & ToolCatalog & Database & ResourcesSettings, Nothing, AssetGuard] =
@@ -48,6 +48,15 @@ object AssetGuard:
   /** 报错末尾指向 skill assets-files 的哪一节。 */
   private def refuse(section: String)(msg: String): AppError =
     AppError.invalid(s"$msg。没有写入，磁盘上还是原样（见 skill assets-files 的 section '$section'）")
+
+  /** 每种文件的说明在 skill assets-files 的哪一节。 */
+  private def section(f: ResourceFile): String = f match
+    case AssetPath.AccessFile                                     => "Roles and permissions"
+    case AssetPath.SharedMemory(_) | AssetPath.PrivateMemory(_)   => "Memory"
+    case AssetPath.AgentFile(_)                                   => "agent.toml"
+    case AssetPath.SkillMain(_, _) | AssetPath.SkillAttachment(_, _, _) => "Skills"
+    case AssetPath.Mcp(_, _)                                      => "MCP servers"
+    case AssetPath.Secret(_, _)                                   => "Secrets"
 
   final case class Live(
       store: AssetStore,
@@ -65,25 +74,20 @@ object AssetGuard:
 
     def fingerprint(path: Path): IO[AppError, Option[FileFingerprint]] = read(path).map(_.map(FileFingerprint.of))
 
-    def check(actor: Actor, path: Path, content: String, expect: Expectation): IO[AppError, String] =
-      for
-        root <- ZIO.attemptBlocking(store.root.toRealPath()).mapError(e => AppError.internal("资源目录不存在", e))
-        real <- muliao.exec.RealPath.resolve(path).map(_.path)
-        out <-
-          if !real.startsWith(root) then ZIO.succeed(content)
-          else
-            val where = AssetPath.classify(root.relativize(real))
-            for
-              _ <- where match
-                     case AssetPath.Directory(_) | AssetPath.Misplaced =>
-                       ZIO.fail(refuse("Layout")(s"$real 不是资源文件的规定位置。${AssetPath.layoutHint}"))
-                     case _ => ZIO.unit
-              old <- read(real)
-              _   <- concurrency(real, old, expect)
-              _   <- ownerExists(where)
-              v   <- validate(actor, real, where, content, old)
-            yield v
-      yield out
+    def check(actor: Actor, path: Path, content: String, expect: Expectation): IO[AppError, Vetted] =
+      store.locate(path).flatMap {
+        case Location.Outside(real)                 => ZIO.succeed(Vetted.Plain(real, content))
+        case Location.Inside(real, AssetPath.Hidden) => ZIO.succeed(Vetted.Asset(real, content, privateFile = false))
+        case Location.Inside(real, AssetPath.Directory(_) | AssetPath.Misplaced) =>
+          ZIO.fail(refuse("Layout")(s"${real.path} 不是资源文件的规定位置。${AssetPath.layoutHint}"))
+        case Location.Inside(real, file: ResourceFile) =>
+          for
+            old <- read(real.path)
+            _   <- concurrency(real.path, old, expect)
+            _   <- ownerExists(file)
+            v   <- validate(actor, real.path, file, content, old)
+          yield Vetted.Asset(real, v, file.privateFile)
+      }
 
     private def concurrency(path: Path, old: Option[String], expect: Expectation): IO[AppError, Unit] =
       (old, expect) match
@@ -93,8 +97,8 @@ object AssetGuard:
           ZIO.fail(AppError.conflict(s"$path 在你读过之后被改过了，重新 read_file 再写（或改用 edit_file）。没有写入"))
         case _ => ZIO.unit
 
-    private def ownerExists(where: AssetPath): IO[AppError, Unit] =
-      where.ownedBy match
+    private def ownerExists(file: AssetPath): IO[AppError, Unit] =
+      file.ownedBy match
         case Some(Owner.Agent(name)) =>
           db.read(AgentRepo.liveByKey(AgentRecord.keyOf(name.value))).flatMap {
             case Some(a) if a.name == name => ZIO.unit
@@ -111,105 +115,78 @@ object AssetGuard:
         ).unit
       }
 
-    private def validate(actor: Actor, path: Path, where: AssetPath, content: String, old: Option[String]): IO[AppError, String] =
-      where match
-        case AssetPath.Hidden | AssetPath.Directory(_) | AssetPath.Misplaced => ZIO.succeed(content) // 位置已在前面查过
-
-        case AssetPath.AccessFile =>
-          for
-            next   <- ZIO.fromEither(AccessConfig.parse(content)).mapError(refuse("Roles and permissions"))
-            before  = old.flatMap(o => AccessConfig.parse(o).toOption)
-            all    <- db.read(AgentRepo.all)
-            snap   <- store.snapshot
-            _ <- ZIO
-                   .fromEither(AccessValidation.check(before, next, all.filter(_.live).map(_.id).toSet, snap, tools.tools.map(_.name)))
-                   .mapError(refuse("Roles and permissions"))
-          yield content
-
-        case AssetPath.SharedMemory(name) =>
-          for
-            _ <- ZIO.unless(Formats.validSlug(name))(ZIO.fail(refuse("Memory")("共享记忆名只能用小写字母、数字和 -")))
-            v <- memory(content, old)
-          yield v
-
-        case AssetPath.PrivateMemory(_) => memory(content, old)
-
-        case AssetPath.AgentFile(_) =>
-          for
-            p <- ZIO.fromEither(Formats.parseAgent(content)).mapError(refuse("agent.toml"))
-            _ <- ZIO.foreachDiscard(models.check(p.model))(r => ZIO.fail(refuse("agent.toml")(s"模型 ${p.model} 不能用：$r")))
-          yield content
-
-        case AssetPath.SkillMain(owner, name) =>
-          val dir = path.getParent
-          for
-            _ <- ZIO.unless(Formats.validSlug(name))(ZIO.fail(refuse("Skills")("skill 名（目录名）只能用小写字母、数字和 -")))
-            _ <- ZIO.when(old.isEmpty)(nameTaken(AssetKind.Skill, name, owner))
-            _ <- ZIO
-                   .attemptBlocking(Formats.parseSkill(content, name, rel => Files.isRegularFile(dir.resolve(rel))))
-                   .orDie
-                   .flatMap(r => ZIO.fromEither(r).mapError(refuse("Skills")))
-          yield content
-
-        case AssetPath.SkillAttachment(_, _, _) =>
-          val main = skillDir(path, where).resolve(SkillDoc.Main)
+    private def validate(actor: Actor, path: Path, file: AssetPath & ResourceFile, content: String, old: Option[String]): IO[AppError, String] =
+      val refused = refuse(section(file))
+      file match
+        case AssetPath.SkillAttachment(o, n, _) =>
+          val main = store.root.resolve(AssetPath.render(AssetPath.SkillMain(o, n)))
           ZIO
-            .whenZIO(ZIO.attemptBlocking(!Files.isRegularFile(main)).orDie)(
-              ZIO.fail(refuse("Skills")(s"先写 ${main}，再写附件"))
-            )
+            .whenZIO(ZIO.attemptBlocking(!Files.isRegularFile(main)).orDie)(ZIO.fail(refused(s"先写 $main，再写附件")))
             .as(content)
-
-        case AssetPath.Mcp(owner, name) =>
+        case AssetPath.Secret(_, key) if old.isEmpty =>
+          ZIO.fail(refused(s"secret 文件不能手写新建：用 vault_set 存 $key 的值"))
+        case f: ParsedFile =>
           for
-            _   <- ZIO.unless(Formats.validSlug(name))(ZIO.fail(refuse("MCP servers")("MCP 名只能用小写字母、数字和 -")))
-            _   <- ZIO.when(old.isEmpty)(nameTaken(AssetKind.Mcp, name, owner))
-            cfg <- ZIO.fromEither(Formats.parseMcp(content)).mapError(refuse("MCP servers"))
-            _   <- secretRefs(actor, cfg.secretRefs)
+            _ <- f.subject match
+                   case Some((kind, name)) if old.isEmpty && kind != AssetKind.Memory => nameTaken(kind, name, f.ownedBy.getOrElse(Owner.Platform))
+                   case _                                                          => ZIO.unit
+            dir     = path.getParent
+            parsed <- ZIO
+                        .attemptBlocking(FileSpec.load(f, path, content, rel => Files.isRegularFile(dir.resolve(rel))))
+                        .orDie
+                        .flatMap(r => ZIO.fromEither(r).mapError(refused))
+            out <- extra(actor, parsed, content, old, refused)
+          yield out
+
+    /** 规格以外、要看平台现状的校验。 */
+    private def extra(actor: Actor, parsed: Parsed, content: String, old: Option[String], refused: String => AppError): IO[AppError, String] =
+      parsed match
+        case Parsed.Access(next) =>
+          for
+            live <- db.read(AgentRepo.live).map(_.map(_.id).toSet)
+            snap <- store.snapshot
+            before = old.flatMap(o => AccessConfig.parse(o).toOption)
+            _ <- ZIO.fromEither(AccessValidation.check(before, next, live, snap, tools.tools.map(_.name))).mapError(refused)
+          yield content
+        case Parsed.Memory(_) => memory(content, old, refused)
+        case Parsed.Agent(p) =>
+          ZIO.foreachDiscard(models.check(p.model))(r => ZIO.fail(refused(s"模型 ${p.model} 不能用：$r"))).as(content)
+        case Parsed.Skill(_) => ZIO.succeed(content)
+        case Parsed.Mcp(doc) => secretRefs(actor, doc.config.secretRefs, refused).as(content)
+        case Parsed.Secret(doc) =>
+          for
+            prev <- ZIO
+                      .fromOption(old.flatMap(o => Formats.parseSecret(o).toOption))
+                      .orElseFail(refused("原文件已经坏了，用 vault_set 重新存一次值"))
+            _ <- ZIO.when(doc.content.ciphertext != prev.ciphertext)(ZIO.fail(refused("只能手改 description 和 allow_shell；改值用 vault_set")))
           yield content
 
-        case AssetPath.Secret(_, key) =>
-          for
-            before <- ZIO
-                        .fromOption(old)
-                        .orElseFail(refuse("Secrets")(s"secret 文件不能手写新建：用 vault_set 存 $key 的值"))
-            prev <- ZIO.fromEither(Formats.parseSecret(before)).orElseFail(refuse("Secrets")("原文件已经坏了，用 vault_set 重新存一次值"))
-            next <- ZIO.fromEither(Formats.parseSecret(content)).mapError(refuse("Secrets"))
-            _ <- ZIO.when(next.ciphertext != prev.ciphertext)(
-                   ZIO.fail(refuse("Secrets")("只能手改 description 和 allow_shell；改值用 vault_set"))
-                 )
-          yield content
-
-    private def skillDir(path: Path, where: AssetPath): Path = where match
-      case AssetPath.SkillAttachment(_, _, rel) =>
-        (1 to rel.split('/').length).foldLeft(path)((p, _) => p.getParent)
-      case _ => path.getParent
-
-    private def memory(content: String, old: Option[String]): IO[AppError, String] =
+    private def memory(content: String, old: Option[String], refused: String => AppError): IO[AppError, String] =
       val normalized = Formats.normalizeMemory(content)
       val newLen     = Formats.memoryLength(normalized)
       val oldLen     = old.map(Formats.memoryLength).getOrElse(0)
       if newLen > settings.memoryLimit && newLen > oldLen then
         ZIO.fail(
-          refuse("Memory")(
+          refused(
             s"写成后 $newLen 字，超过上限 ${settings.memoryLimit}" +
               (if oldLen > settings.memoryLimit then s"（原来 $oldLen 字，可以分几次删短，但不能变长）" else "")
           )
         )
       else ZIO.succeed(normalized)
 
-    private def secretRefs(actor: Actor, keys: Set[String]): IO[AppError, Unit] =
+    private def secretRefs(actor: Actor, keys: Set[String], refused: String => AppError): IO[AppError, Unit] =
       ZIO.when(keys.nonEmpty) {
         for
           snap <- store.snapshot
           missing = keys.filterNot(k => snap.secret(k).isDefined)
-          _ <- ZIO.when(missing.nonEmpty)(ZIO.fail(refuse("MCP servers")(s"引用的 secret 不存在：${missing.toList.sorted.mkString("、")}")))
+          _ <- ZIO.when(missing.nonEmpty)(ZIO.fail(refused(s"引用的 secret 不存在：${missing.toList.sorted.mkString("、")}")))
           _ <- actor match
                  case Actor.User => ZIO.unit
                  case Actor.Agent(id) =>
                    resources.permissions(id).flatMap { p =>
                      val denied = keys.filterNot(k => snap.secret(k).exists(d => p.decide(Action.Use, AssetKind.Secret, k, d.owner).allowed))
                      ZIO.when(denied.nonEmpty)(
-                       ZIO.fail(refuse("MCP servers")(s"你不能用这些 secret：${denied.toList.sorted.mkString("、")}"))
+                       ZIO.fail(refused(s"你不能用这些 secret：${denied.toList.sorted.mkString("、")}"))
                      )
                    }
         yield ()

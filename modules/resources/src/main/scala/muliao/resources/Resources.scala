@@ -52,13 +52,6 @@ final case class RunResources(
     memoryLimit: Int
 )
 
-/** 写沙箱的可写范围（都是真实路径）。 */
-final case class WritableScope(writable: Chunk[RealPath], readOnly: Chunk[RealPath], hidden: Chunk[RealPath]):
-  def sandbox: Sandbox = Sandbox.Confined(writable, hidden, readOnly)
-
-  def permits(p: RealPath): Boolean =
-    !hidden.exists(RealPath.within(p, _)) && !readOnly.exists(RealPath.within(p, _)) && writable.exists(RealPath.within(p, _))
-
 /** 资源与权限的查询入口：最终权限、一次运行的资源快照、可写范围。 */
 trait Resources:
   def permissions(id: AgentId): IO[AppError, Permissions]
@@ -69,8 +62,8 @@ trait Resources:
 
   def forRun(id: AgentId): IO[AppError, RunResources]
 
-  /** agent 的命令与文件写工具的可写范围。解析真实路径限时，卡住（如等系统授权弹窗）时报错而不挂死。 */
-  def writableScope(id: AgentId): IO[AppError, WritableScope]
+  /** agent 的命令与文件写工具的可写范围（就是它的写沙箱）。解析真实路径限时，卡住（如等系统授权弹窗）时报错而不挂死。 */
+  def writableScope(id: AgentId): IO[AppError, Sandbox.Confined]
 
   /** 写不了某路径时补的一句：被什么拦、找谁授权。 */
   def explainDenied(id: AgentId, path: Path): IO[AppError, String]
@@ -168,15 +161,15 @@ object Resources:
         problem.subject.exists((k, n) => p.decide(Action.Use, k, n, problem.owner.getOrElse(Owner.Platform)).allowed) ||
         (p.isAdmin && (problem.subject.isEmpty || problem.owner.isEmpty))
 
-    def writableScope(id: AgentId): IO[AppError, WritableScope] =
+    def writableScope(id: AgentId): IO[AppError, Sandbox.Confined] =
       val compute =
         for
           a      <- agents.get(id)
           access <- store.access
           snap   <- store.snapshot
           p       = permsOf(a, access.config)
-          ownDir  = paths.assets.resolve(a.name.value)
-          resourcePaths = (a: NamedAsset) => resourcePath(snap, a.kind, a.name, a.owner).toList
+          ownDir  = paths.assets.resolve(AssetPath.ownerDir(Owner.Agent(a.name)))
+          resourcePaths = (a: NamedAsset) => AssetPath.home(a.kind, a.name, a.owner).map(paths.assets.resolve).toList
           canWrite      = (a: NamedAsset) => p.decide(Action.Write, a.kind, a.name, a.owner).allowed
           granted =
             if p.isAdmin then List(paths.assets)
@@ -188,18 +181,11 @@ object Resources:
           writable <- resolveAll(List(paths.workspace(a.id), ownDir) ++ settings.writableDirs ++ p.writablePaths ++ granted)
           readOnly <- resolveAll(p.deniedPaths ++ revoked)
           hidden   <- if p.isAdmin then ZIO.succeed(Chunk.empty) else resolveAll(paths.privatePaths)
-        yield WritableScope(writable, readOnly, hidden)
+        yield new Sandbox.Confined(writable, hidden = hidden, readOnly = readOnly)
       compute.timeoutFail(AppError.Unavailable("算可写范围超时（可能在等系统授权弹窗），稍后再试"))(ScopeTimeout)
 
     private def resolveAll(ps: List[Path]): IO[AppError, Chunk[RealPath]] =
       ZIO.foreachPar(Chunk.fromIterable(ps.distinct))(RealPath.resolve(_)).map(_.distinct)
-
-    private def resourcePath(snap: Snapshot, k: AssetKind, n: String, o: Owner): Option[Path] = k match
-      case AssetKind.Memory => snap.sharedMemory(n).map(_.file)
-      case AssetKind.Skill  => snap.skill(SkillName.wrap(n)).filter(_.owner == o).map(_.dir)
-      case AssetKind.Mcp    => snap.mcp(n).filter(_.owner == o).map(_.file)
-      case AssetKind.Secret => snap.secret(n).filter(_.owner == o).map(_.file)
-      case AssetKind.Tool   => None
 
     def admins: IO[AppError, List[AgentName]] =
       for

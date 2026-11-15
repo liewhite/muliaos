@@ -17,7 +17,7 @@ object RolesPage:
 
   def view(): HtmlElement =
     val roles      = Remote(ResourcesApi.listRoles)(())
-    val agents     = AgentsData.load().map(_.data.getOrElse(Nil))
+    val agents     = AgentsData.list
     val candidates = Rules.candidates()
     // 建好一个后换一份空表单
     val formKey = Var(0)

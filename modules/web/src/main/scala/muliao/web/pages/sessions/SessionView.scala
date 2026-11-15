@@ -100,14 +100,6 @@ object LiveReply:
 
 /** 会话页。 */
 object SessionView:
-  private def statusLabel(s: IssueStatus): String = s match
-    case IssueStatus.Backlog    => "待办"
-    case IssueStatus.InProgress => "进行中"
-    case IssueStatus.InReview   => "待审核"
-    case IssueStatus.Blocked    => "阻塞"
-    case IssueStatus.Done       => "完成"
-    case IssueStatus.Cancelled  => "取消"
-
   /** issue 会话的页头标题：指回它的 issue，显示编号、标题、当前状态。 */
   private def issueTitle(n: Long, fallback: String): HtmlElement =
     val issue = Remote(BoardApi.get)(IssueId.wrap(n))
@@ -118,7 +110,7 @@ object SessionView:
         case Load.Stale(d, _) => span(cls := "min-w-0 truncate", s"#$n ${d.summary.title}")
         case _                => span(cls := "min-w-0 truncate", fallback)
       },
-      child.maybe <-- issue.map(_.data.map(d => span(cls := "shrink-0 text-xs font-normal text-muted", statusLabel(d.summary.status)))),
+      child.maybe <-- issue.map(_.data.map(d => span(cls := "shrink-0 text-xs font-normal text-muted", d.summary.status.shown))),
       child.maybe <-- issue.map {
         case Load.Failed(m) => Some(span(cls := "shrink-0 text-xs font-normal text-danger", m))
         case _              => None

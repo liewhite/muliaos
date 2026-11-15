@@ -200,6 +200,11 @@ object Shell:
       ),
       div(
         cls := "flex min-h-0 min-w-0 flex-1 flex-col",
+        // 全站共用的 agent 列表在这里一直订阅着；没拉到时各页的 agent 名字退回编号，在这里统一提示
+        child.maybe <-- AgentsData.all.map {
+          case Load.Failed(m) => Some(div(cls := "alert alert--danger m-2 text-sm", s"agent 列表没拉到，名字先显示编号：$m"))
+          case _              => None
+        },
         div(cls := "min-h-0 flex-1", child <-- route.map(_.isDefined).distinct.map {
           case true  => content(route.map(_.getOrElse(Route.Sessions)))
           case false => div()

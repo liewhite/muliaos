@@ -90,7 +90,7 @@ private[sessions] final case class Requests(
       resources.writableScope(i.agent).either.flatMap {
         case Left(e) => ZIO.succeed(McpTools(Nil, List(s"MCP 这次没有连：算写沙箱失败（${e.message}）")))
         case Right(scope) =>
-          mcp.connectAll(specs, lookup, Launch(ws, scope.sandbox)).map(c => McpTools(c.tools.toList, c.problems.toList))
+          mcp.connectAll(specs, lookup, Launch(ws, scope)).map(c => McpTools(c.tools.toList, c.problems.toList))
       }
 
   // ---- 窗口 ----

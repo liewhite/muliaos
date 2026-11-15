@@ -7,6 +7,10 @@ import org.scalajs.dom
 /** 选项：`id` 是值，`label` 是显示的字，`description` 是小字说明，`prefix` 显示在标签前（如色点）。 */
 final case class Opt[T](id: T, label: String, description: Option[String] = None, prefix: Option[() => HtmlElement] = None)
 
+object Opt:
+  /** 枚举的选项：显示文字取自它的 [[Shown]]。 */
+  def of[T: Shown](values: List[T]): List[Opt[T]] = values.map(v => Opt(v, v.shown))
+
 /** 表单字段。表单都放在卡片或底部栏（surface 背景）上，统一用 secondary 变体（primary 的背景与 surface 同色看不出边界）。 */
 object Fields:
   private var counter = 0
@@ -144,7 +148,7 @@ object Fields:
     )
 
   /** 单选切换（列表筛选等）。`showLabel` 时显示可见标签，否则 `labelText` 只作读屏名称。 */
-  def segmented[T](labelText: String, value: Signal[T], onPick: T => Unit, options: List[(T, String)], showLabel: Boolean = false): HtmlElement =
+  def segmented[T: Shown](labelText: String, value: Signal[T], onPick: T => Unit, options: List[T], showLabel: Boolean = false): HtmlElement =
     div(
       cls := "flex flex-col gap-1",
       Option.when(showLabel)(span(cls := "text-sm font-medium", labelText)),
@@ -152,7 +156,7 @@ object Fields:
         cls := "toggle-button-group toggle-button-group--horizontal",
         role := "radiogroup",
         aria.label := labelText,
-        options.map { (id, text) =>
+        options.map { id =>
           button(
             tpe := "button",
             cls := "toggle-button toggle-button--default toggle-button--sm",
@@ -160,7 +164,7 @@ object Fields:
             aria.checked <-- value.map(v => (v == id).toString),
             dataAttr("selected") <-- value.map(v => (v == id).toString),
             onClick --> (_ => onPick(id)),
-            text
+            id.shown
           )
         }
       )

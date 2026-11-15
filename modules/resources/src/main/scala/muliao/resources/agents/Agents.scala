@@ -46,6 +46,9 @@ trait Agents:
   /** 按编号取（含已删除的，供历史显示名字）。 */
   def get(id: AgentId): IO[AppError, AgentRecord]
 
+  /** 编号对应的显示名（含已删除的）；查不到的编号（含查询失败）显示编号本身，所以对任何编号取值都有结果。 */
+  def names(ids: Iterable[AgentId]): UIO[Map[AgentId, String]]
+
   /** 按名字找现存的 agent（不分大小写）。 */
   def find(name: String): IO[AppError, Option[AgentRecord]]
 
@@ -113,13 +116,19 @@ object Agents:
   ) extends Agents:
 
     private def now = Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
-    private def dir(name: AgentName) = paths.assets.resolve(name.value)
+    private def dir(name: AgentName) = paths.assets.resolve(AssetPath.ownerDir(Owner.Agent(name)))
     private def publish = bus.publishAfterCommit(Topic.Agents)
 
-    def list: IO[AppError, List[AgentRecord]] = db.read(AgentRepo.all).map(_.filter(_.live))
+    def list: IO[AppError, List[AgentRecord]] = db.read(AgentRepo.live)
 
     def get(id: AgentId): IO[AppError, AgentRecord] =
       db.read(AgentRepo.byId(id)).someOrFail(AppError.notFound(s"没有编号为 ${id.value} 的 agent"))
+
+    def names(ids: Iterable[AgentId]): UIO[Map[AgentId, String]] =
+      db.read(AgentRepo.byIds(ids.toSet))
+        .map(_.map(a => a.id -> a.name.value).toMap)
+        .catchAll(e => ZIO.logWarning(s"查 agent 名字失败，先显示编号：${e.message}").as(Map.empty))
+        .map(_.withDefault(_.value))
 
     def find(name: String): IO[AppError, Option[AgentRecord]] =
       db.read(AgentRepo.liveByKey(AgentRecord.keyOf(name.trim))).map(_.filter(_.live))
@@ -144,7 +153,7 @@ object Agents:
         p <- ZIO
                .fromOption(snap.profiles.get(a.name))
                .orElseFail {
-                 val why = snap.problems.find(_.path == dir(a.name).resolve("agent.toml")).fold("文件不存在")(_.reason)
+                 val why = snap.problems.find(_.path == paths.assets.resolve(AssetPath.render(AssetPath.AgentFile(a.name)))).fold("文件不存在")(_.reason)
                  AppError.conflict(s"agent ${a.name.value} 的 agent.toml 加载不了：$why")
                }
       yield p
@@ -202,8 +211,8 @@ object Agents:
           id <- newId
           t  <- now
           profile = AgentProfile(req.description.trim, model, req.thinking, req.group.map(_.trim).filter(_.nonEmpty))
-          _ <- store.write(dir(name).resolve("agent.toml"), Formats.renderAgent(profile))
-          _ <- store.write(dir(name).resolve("memory.md"), "")
+          _ <- store.write(AssetPath.AgentFile(name), Formats.renderAgent(profile))
+          _ <- store.write(AssetPath.PrivateMemory(name), "")
           _ <- ZIO.attemptBlocking(Files.createDirectories(paths.workspace(id))).mapError(e => AppError.internal("建工作目录失败", e))
           record = AgentRecord(id, name, AgentRecord.keyOf(name.value), AgentState.Active, false, None, t, t)
           _ <- db.write(AgentRepo.insert(record) *> publish).tapError(_ => store.delete(dir(name)).ignoreLogged)
@@ -240,7 +249,7 @@ object Agents:
           model = p.model.map(_.trim).getOrElse(old.model)
           _   <- ZIO.when(p.model.isDefined)(checkModel(model))
           next = AgentProfile(desc, model, p.thinking.getOrElse(old.thinking), p.group.fold(old.group)(_.map(_.trim).filter(_.nonEmpty)))
-          _   <- store.write(dir(a.name).resolve("agent.toml"), Formats.renderAgent(next))
+          _   <- store.write(AssetPath.AgentFile(a.name), Formats.renderAgent(next))
         yield ()
       }.unit
 
@@ -376,9 +385,9 @@ object Agents:
                              case Decision.Allowed(Grant.ByRule(_, _)) => true
                              case _                                    => false
                          )
-        moves = snap.skills.filter(s => s.owner == owner && usedByOthers(AssetKind.Skill, s.name.value)).map(s => s.dir -> paths.assets.resolve(s"platform/skills/${s.name.value}")) ++
-                  snap.mcps.filter(m => m.owner == owner && usedByOthers(AssetKind.Mcp, m.name)).map(m => m.file -> paths.assets.resolve(s"platform/mcp/${m.name}.json")) ++
-                  snap.secrets.filter(s => s.owner == owner && usedByOthers(AssetKind.Secret, s.key)).map(s => s.file -> paths.assets.resolve(s"platform/secrets/${s.key}.toml"))
+        moves = snap.named.filter(n => n.owner == owner && usedByOthers(n.kind, n.name)).flatMap { n =>
+                  AssetPath.home(n.kind, n.name, owner).zip(AssetPath.home(n.kind, n.name, Owner.Platform)).map((f, t) => paths.assets.resolve(f) -> paths.assets.resolve(t))
+                }
         _ <- ZIO.foreachDiscard(moves) { (from, to) =>
                ZIO.whenZIO(ZIO.attemptBlocking(Files.exists(to)).orDie.negate)(
                  store.move(from, to) *> ZIO.logInfo(s"删除 agent ${a.name.value}：$from 仍有人用，转给平台")

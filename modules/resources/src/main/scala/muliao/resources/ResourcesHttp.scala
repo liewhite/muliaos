@@ -53,7 +53,7 @@ final case class ResourcesHttp(
       eff    <- resources.effective(id)
       grants  = access.config.grantsOf(id)
       profErr = Option.when(!snap.profiles.contains(a.name))(
-                  snap.problems.find(_.path == paths.assets.resolve(a.name.value).resolve("agent.toml")).fold("agent.toml 不存在")(_.reason)
+                  snap.problems.find(_.path == paths.assets.resolve(AssetPath.render(AssetPath.AgentFile(a.name)))).fold("agent.toml 不存在")(_.reason)
                 )
     yield AgentDetail(
       summary = summary(a, snap),
@@ -65,7 +65,7 @@ final case class ResourcesHttp(
       assets = assetViews(eff),
       writablePaths = eff.paths.map(_.toString),
       workspace = paths.workspace(id).toString,
-      assetsDir = paths.assets.resolve(a.name.value).toString,
+      assetsDir = paths.assets.resolve(AssetPath.ownerDir(Owner.Agent(a.name))).toString,
       problems = snap.problems.filter(_.owner.contains(Owner.Agent(a.name))).map(problemView),
       profileError = profErr,
       accessBroken = access.broken
@@ -201,9 +201,9 @@ final case class ResourcesHttp(
         AssetItem(AssetItemKind.Secret, s.key, s.owner.label, rel(s.file), usedBy(AssetKind.Secret, s.key, s.owner), Some(s.content.description), None, Some(s.content.allowShell))
       )
       val agentFiles = as.filter(a => snap.profiles.contains(a.name)).map(a =>
-        AssetItem(AssetItemKind.Agent, a.name.value, a.name.value, s"${a.name.value}/agent.toml", List(a.name), snap.profiles.get(a.name).map(_.description), None, None)
+        AssetItem(AssetItemKind.Agent, a.name.value, a.name.value, AssetPath.render(AssetPath.AgentFile(a.name)).toString, List(a.name), snap.profiles.get(a.name).map(_.description), None, None)
       )
-      val accessFile = AssetItem(AssetItemKind.Access, "access.toml", Owner.PlatformDir, "platform/access.toml", Nil, Some("角色与各 agent 的权限"), None, None)
+      val accessFile = AssetItem(AssetItemKind.Access, "access.toml", Owner.PlatformDir, AssetPath.render(AssetPath.AccessFile).toString, Nil, Some("角色与各 agent 的权限"), None, None)
       AssetIndex(paths.assets.toString, accessFile :: memories ++ skills ++ mcps ++ secrets ++ agentFiles, snap.problems.map(problemView), access.broken)
 
   /** 界面传来的相对路径：不能走出资源目录，不能碰隐藏文件。 */
@@ -226,9 +226,11 @@ final case class ResourcesHttp(
     for
       p <- resolveRel(req.path)
       expect = req.fingerprint.fold(Expectation.NotRead)(f => Expectation.ReadAs(FileFingerprint(f)))
-      content <- guard.check(Actor.User, p, req.content, expect)
-      _       <- store.write(p, content, privateFile = AssetPath.classify(paths.assets.relativize(p)).isInstanceOf[AssetPath.Secret])
-    yield AssetFile(req.path, content, Some(FileFingerprint.of(content).value))
+      vetted <- guard.check(Actor.User, p, req.content, expect)
+      _ <- vetted match
+             case v: Vetted.Asset => store.commit(v)
+             case _: Vetted.Plain => ZIO.fail(AppError.invalid(s"路径 ${req.path} 指到了资源目录外面"))
+    yield AssetFile(req.path, vetted.content, Some(FileFingerprint.of(vetted.content).value))
 
   private def skillFiles(name: SkillName): IO[AppError, SkillFiles] =
     for
@@ -256,7 +258,7 @@ final case class ResourcesHttp(
                            description = req.description.map(_.trim).getOrElse(doc.content.description),
                            allowShell = req.allowShell.getOrElse(doc.content.allowShell)
                          )
-                 _ <- store.write(doc.file, Formats.renderSecret(next), privateFile = true)
+                 _ <- store.write(AssetPath.Secret(doc.owner, key), Formats.renderSecret(next))
                yield ()
     yield ()
 
@@ -280,13 +282,8 @@ final case class ResourcesHttp(
     for
       at <- locate(kind, name)
       to <- ownerOf(req.to)
-      dir = paths.assets.resolve(to.label)
-      target <- kind match
-                  case AssetKind.Skill                   => ZIO.succeed(dir.resolve("skills").resolve(name))
-                  case AssetKind.Mcp                     => ZIO.succeed(dir.resolve("mcp").resolve(s"$name.json"))
-                  case AssetKind.Secret                  => ZIO.succeed(dir.resolve("secrets").resolve(s"$name.toml"))
-                  case AssetKind.Memory | AssetKind.Tool => ZIO.fail(AppError.invalid("共享记忆只能归平台；私有记忆跟着 agent"))
-      _ <- store.move(at.path, target).unless(to == at.owner)
+      target <- ZIO.fromOption(AssetPath.home(kind, name, to)).orElseFail(AppError.invalid("共享记忆只能归平台；私有记忆跟着 agent"))
+      _ <- store.move(at.path, paths.assets.resolve(target)).unless(to == at.owner)
     yield ()
 
   private def deleteAsset(kind: AssetKind, name: String): IO[AppError, Unit] =

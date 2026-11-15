@@ -213,16 +213,13 @@ object Sessions:
         }
         val failures = failed.flatMap(r => infos.get(r.sessionId).map(i => RunFailure(r.sessionId, i.agent, r.id, r.finishedAt.getOrElse(r.startedAt), r.error.getOrElse("（没有记下原因）"))))
         SessionActivity(active.sortBy(_.first), said.sortBy(_.at), failures.sortBy(_.at))
-    private def names(ids: List[AgentId]): UIO[Map[AgentId, String]] =
-      ZIO.foreach(ids.distinct)(id => agents.get(id).map(a => id -> a.name.value).orElseSucceed(id -> id.value)).map(_.toMap)
-
     private def summaries(rows: List[SessionRow]): IO[AppError, List[SessionSummary]] =
       for
         st     <- workStates.states(rows.map(_.id))
         unread <- hooks.unread.flatMap(_.unread(rows.map(_.id)))
-        ns     <- names(rows.map(_.agentId))
+        ns     <- agents.names(rows.map(_.agentId))
       yield rows.map(r =>
-        SessionSummary(r.id, r.agentId, ns.getOrElse(r.agentId, r.agentId.value), r.title, r.origin, r.originRef, r.parentId,
+        SessionSummary(r.id, r.agentId, ns(r.agentId), r.title, r.origin, r.originRef, r.parentId,
           st.getOrElse(r.id, WorkState.Idle), unread(r.id), r.createdAt, r.updatedAt)
       )
 
@@ -272,13 +269,13 @@ object Sessions:
     def usage(from: Long, to: Long): IO[AppError, List[UsageLine]] =
       for
         rows <- db.read(Repo.usageBetween(from, to))
-        ns   <- names(rows.map(_.agentId))
+        ns   <- agents.names(rows.map(_.agentId))
       yield
         def day(at: Long): LocalDate = Instant.ofEpochMilli(at).atZone(zone).toLocalDate
         rows
           .groupBy(r => (day(r.at), r.agentId, r.model))
           .toList
           .map { case ((d, a, m), rs) =>
-            UsageLine(d.toString, a, ns.getOrElse(a, a.value), m, rs.size.toLong, rs.map(_.input).sum, rs.map(_.output).sum, rs.map(_.cacheRead).sum, rs.map(_.cacheWrite).sum)
+            UsageLine(d.toString, a, ns(a), m, rs.size.toLong, rs.map(_.input).sum, rs.map(_.output).sum, rs.map(_.cacheRead).sum, rs.map(_.cacheWrite).sum)
           }
           .sortBy(l => (l.day, l.agentName, l.model))

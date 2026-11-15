@@ -16,18 +16,17 @@ import IssueParts.*
 
 /** /issues：看板、列表、依赖图三种视图，按状态、指派、负责项目筛选（条件在地址的查询参数里），新建 issue。 */
 object IssuesPage:
-  private enum View(val key: String, val label: String):
-    case Board extends View("board", "看板")
-    case List  extends View("list", "列表")
-    case Graph extends View("graph", "依赖图")
+  private enum View(val label: String) extends Shown.Self:
+    case Board extends View("看板")
+    case List  extends View("列表")
+    case Graph extends View("依赖图")
 
-  private val viewStore  = Stored[View]("muliao.issues.view", View.values.toList, _.key, View.Board)
-  private val scopeStore = Stored[IssueGraph.Scope]("muliao.issues.graphScope", IssueGraph.Scope.values.toList, _.key, IssueGraph.Scope.Open)
+  // 选过的视图与依赖图范围跨刷新记住
+  private val viewVar = Stored.choice("muliao.issues.view", View.values.toList, View.Board)
+  private val scope   = Stored.choice("muliao.issues.graphScope", IssueGraph.Scope.values.toList, IssueGraph.Scope.Open)
 
   def view(): HtmlElement =
-    val viewVar = Var(viewStore.load())
-    val scope   = Var(scopeStore.load())
-    val agents  = AgentsData.load().map(_.data.getOrElse(Nil))
+    val agents  = AgentsData.list
     val filters = Router.query.map(Filters.parse).distinct
     val loaded  = filters.flatMapSwitch(f => Remote(BoardApi.list)(f.query))
     // 拖拽后先在本地挪动，接口成功、重新拉到的数据落下后以服务端为准；连着拖几张时每张各占一项
@@ -55,7 +54,7 @@ object IssuesPage:
       token += 1
       val m = Move(status, js.Date.now().toLong, token, settled = false)
       moves.update(_ + (id -> m))
-      act.run(Http.call(BoardApi.update)((id, IssuePatch(status = Some(status)))), toast = Some(s"把 #${id.value} 移到「${statusLabel(status)}」")).foreach { ok =>
+      act.run(Http.call(BoardApi.update)((id, IssuePatch(status = Some(status)))), toast = Some(s"把 #${id.value} 移到「${status.shown}」")).foreach { ok =>
         // 同一张又被拖了一次：那一次还在提交，留着它的
         moves.update { all =>
           all.get(id) match
@@ -69,10 +68,10 @@ object IssuesPage:
   private def toolbar(viewVar: Var[View], scope: Var[IssueGraph.Scope], filters: Signal[Filters], agents: Signal[List[AgentSummary]]): HtmlElement =
     div(
       cls := "flex flex-col gap-3",
-      Fields.segmented("视图", viewVar.signal, (v: View) => { viewStore.save(v); viewVar.set(v) }, View.values.toList.map(v => v -> v.label)),
+      Fields.segmented("视图", viewVar.signal, viewVar.set, View.values.toList),
       child.maybe <-- viewVar.signal.map(v =>
         Option.when(v == View.Graph)(
-          Fields.segmented("依赖图范围", scope.signal, (s: IssueGraph.Scope) => { scopeStore.save(s); scope.set(s) }, IssueGraph.Scope.values.toList.map(s => s -> s.label))
+          Fields.segmented("依赖图范围", scope.signal, scope.set, IssueGraph.Scope.values.toList)
         )
       ),
       div(
@@ -112,7 +111,7 @@ object IssuesPage:
             dataAttr("selected") <-- on.map(_.toString),
             onClick(_.sample(filters)) --> (f => Router.setParam("status", Filters.statusParam(f.toggle(s)))),
             statusDot(s),
-            statusLabel(s)
+            s.shown
           )
         }
       )
@@ -165,7 +164,7 @@ object IssuesPage:
   private def chips(i: IssueSummary, agents: List[AgentSummary]): List[HtmlElement] =
     List(
       Option.when(i.priority != Priority.Unset)(
-        Ui.chip(priorityLabel(i.priority), if i.priority == Priority.Urgent then Tone.Danger else Tone.Default, soft = false)(cls := "chip--secondary")
+        Ui.chip(i.priority.shown, if i.priority == Priority.Urgent then Tone.Danger else Tone.Default, soft = false)(cls := "chip--secondary")
       ),
       i.owner.map(o => ownerChip(ownerHue(agents, Some(o)), ownerLabel(agents, Some(o), i.ownerName))),
       Some(Ui.chip(s"→ ${assigneeLabel(i)}")()),
@@ -260,7 +259,7 @@ object IssuesPage:
       sectionTag(
         dataAttr("column") := status.label,
         cls <-- overCol.map(o => "flex w-72 shrink-0 flex-col gap-2 rounded-xl p-2 " + (if o.contains(status) then "bg-surface-hover" else "bg-surface-secondary")),
-        h2(cls := "flex items-center gap-2 px-1 text-sm font-semibold", statusDot(status), statusLabel(status), span(cls := "font-normal text-muted", child.text <-- items.map(_.size.toString))),
+        h2(cls := "flex items-center gap-2 px-1 text-sm font-semibold", statusDot(status), status.shown, span(cls := "font-normal text-muted", child.text <-- items.map(_.size.toString))),
         children <-- items.combineWith(expanded.signal).map(fold).splitSeq(_.id)(sig => card(sig, status)),
         foldToggle(items.map(_.size), expanded)
       )
@@ -329,7 +328,7 @@ object IssuesPage:
           val expanded = Var(false)
           sectionTag(
             cls := "flex flex-col",
-            h2(cls := "flex items-center gap-2 py-1 text-sm font-semibold text-muted", statusDot(status), statusLabel(status), span(cls := "font-normal", child.text <-- items.map(_.size.toString))),
+            h2(cls := "flex items-center gap-2 py-1 text-sm font-semibold text-muted", statusDot(status), status.shown, span(cls := "font-normal", child.text <-- items.map(_.size.toString))),
             children <-- items.combineWith(expanded.signal).map(fold).splitSeq(_.id)(row(agents)),
             foldToggle(items.map(_.size), expanded)
           )
@@ -348,7 +347,7 @@ object IssuesPage:
           Some(ownerDot(ownerHue(as, i.owner))),
           Some(span(cls := "min-w-0 flex-1 truncate", i.title)),
           Option.when(i.stalled)(span(cls := "shrink-0 text-xs text-warning", "没人在处理")),
-          Option.when(i.priority != Priority.Unset)(span(cls := "shrink-0 text-xs text-muted", priorityLabel(i.priority))),
+          Option.when(i.priority != Priority.Unset)(span(cls := "shrink-0 text-xs text-muted", i.priority.shown)),
           Some(span(cls := "w-20 shrink-0 truncate text-right text-xs text-muted", assigneeLabel(i)))
         ).flatten
       }
@@ -437,7 +436,7 @@ object IssuesPage:
         cls := "flex items-center gap-1.5 text-xs text-muted",
         statusDot(i.status),
         span(s"#${i.id.value}"),
-        span(statusLabel(i.status)),
+        span(i.status.shown),
         Option.when(i.stalled)(span(cls := "text-warning", "没人在处理")),
         span(cls := "ml-auto truncate", s"→ ${assigneeLabel(i)}")
       )

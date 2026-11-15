@@ -116,13 +116,13 @@ object Triggers:
     private def views(ts: List[Trigger]): IO[AppError, List[TriggerView]] =
       for
         faults <- db.read(Repo.faultsOf(ts.map(_.id)))
-        names  <- ZIO.foreach(ts.map(_.agent).distinct)(a => agents.get(a).map(r => a -> r.name.value).orElseSucceed(a -> a.value)).map(_.toMap)
+        names  <- agents.names(ts.map(_.agent))
         hs     <- health.get
       yield
         val byTrigger = faults.groupBy(_.triggerId)
         ts.map { t =>
           TriggerView(
-            t.id, t.name, t.agent, names.getOrElse(t.agent, t.agent.value), t.mode.kind, t.mode.config(zone), t.prompt, t.enabled,
+            t.id, t.name, t.agent, names(t.agent), t.mode.kind, t.mode.config(zone), t.prompt, t.enabled,
             t.precheck.map(_.spec), t.nextAt.filter(_ => t.enabled), t.skipped, hs.get(t.id).flatMap(_.runningSince), t.lastSession,
             t.lastFiredAt, t.finishedAt,
             byTrigger.getOrElse(t.id, Nil).map(f => Fault(f.source, f.error, f.at).view).sortBy(_.source.ordinal),

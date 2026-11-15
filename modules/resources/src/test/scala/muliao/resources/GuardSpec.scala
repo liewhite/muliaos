@@ -3,7 +3,7 @@ package muliao.resources
 import muliao.platform.AppError
 import muliao.resources.agents.{Agents, NewAgent}
 import muliao.resources.guard.{AssetGuard, Expectation, FileFingerprint}
-import muliao.resources.tree.AssetStore
+import muliao.resources.tree.{AssetStore, Vetted}
 import muliao.resources.vault.{Actor, Vault}
 import muliao.resources.tree.Owner
 import zio.*
@@ -14,8 +14,12 @@ import java.nio.file.{Files, Path}
 object GuardSpec extends ZIOSpecDefault:
   import TestEnv.write
 
-  def guard(actor: Actor, p: Path, content: String, expect: Expectation = Expectation.Unconditional) =
+  def vet(actor: Actor, p: Path, content: String, expect: Expectation = Expectation.Unconditional) =
     ZIO.serviceWithZIO[AssetGuard](_.check(actor, p, content, expect))
+
+  /** 校验后要写的内容。 */
+  def guard(actor: Actor, p: Path, content: String, expect: Expectation = Expectation.Unconditional) =
+    vet(actor, p, content, expect).map(_.content)
 
   def reason(e: Either[AppError, ?]): String = e.left.toOption.map(_.message).getOrElse("（没被拒）")
 
@@ -25,9 +29,12 @@ object GuardSpec extends ZIOSpecDefault:
     test("资源目录以外的路径原样放行；隐藏文件不校验") {
       for
         dirs <- ZIO.service[TestEnv.Dirs]
-        a    <- guard(Actor.User, dirs.base.resolve("elsewhere/x.txt"), "随便")
-        b    <- guard(Actor.User, dirs.assets.resolve("platform/.tmp-x"), "随便")
-      yield assertTrue(a == "随便", b == "随便")
+        a    <- vet(Actor.User, dirs.base.resolve("elsewhere/x.txt"), "随便")
+        b    <- vet(Actor.User, dirs.assets.resolve("platform/.tmp-x"), "随便")
+      yield assertTrue(
+        a match { case Vetted.Plain(_, "随便") => true; case _ => false },
+        b match { case Vetted.Asset(_, "随便", false) => true; case _ => false }
+      )
     },
     test("位置不对、agent 目录不存在都拒绝，并说明规定位置；按磁盘上的真实路径判断") {
       for

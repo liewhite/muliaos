@@ -4,31 +4,20 @@ import com.raquo.laminar.api.L.*
 import muliao.contract.*
 import muliao.web.core.*
 import muliao.web.ui.*
-import org.scalajs.dom
 
 import scala.concurrent.Future
 
 import Http.ec
 import Model.*
 
-/** 浏览器里记住的小设置（跨刷新、跨页面）。 */
-object Stored:
-  def get(key: String): Option[String] = Option(dom.window.localStorage.getItem(key))
-  def set(key: String, value: String): Unit = dom.window.localStorage.setItem(key, value)
-
-  def stringVar(key: String, default: String): Var[String] =
-    val v = Var(get(key).getOrElse(default))
-    v.signal.foreach(set(key, _))(using unsafeWindowOwner)
-    v
-
 /** 会话列表（首页左列）。 */
 object SessionList:
   /** 一页的会话数（服务端上限 200）。 */
   private val PageSize = 200
 
-  // 选中的分类跨刷新记住（不放地址：宽屏分屏时右侧切会话会换掉地址）
-  private val filterKey    = "muliao.sessions.filter"
-  private val collapsedKey = "muliao.sessions.collapsed"
+  // 选中的分类与折叠的 agent 跨刷新记住（不放地址：宽屏分屏时右侧切会话会换掉地址）
+  private val filter    = Stored.choice("muliao.sessions.filter", Filter.values.toList, Filter.Chat)
+  private val collapsed = Stored.text("muliao.sessions.collapsed", "")
 
   /** 取够 `count` 条：第一页之后按游标接着取。 */
   private def fetch(filter: Filter, keyword: String, count: Int): Future[List[SessionSummary]] =
@@ -91,16 +80,13 @@ object SessionList:
     )
 
   def view(): HtmlElement =
-    val filter    = Stored.stringVar(filterKey, Filter.Chat.toString)
-    val collapsed = Stored.stringVar(collapsedKey, "")
     val text      = Var("")
     // 关键字输入停下 300ms 后才查（搜消息全文），空白等于不搜
     val keyword = text.signal.updates.debounce(300).map(_.trim).toSignal("")
     // 一次多取一页：满了就在底下给「显示更多」；换分类、换关键字从第一页取
     val count = Var(PageSize)
-    val query = filter.signal.map(Filter.parse).combineWith(keyword).distinct
-    val agents = AgentsData.load()
-    val models = agents.map(_.data.getOrElse(Nil).flatMap(a => a.model.map(m => a.id -> modelName(m))).toMap)
+    val query = filter.signal.combineWith(keyword).distinct
+    val models = AgentsData.list.map(_.flatMap(a => a.model.map(m => a.id -> modelName(m))).toMap)
     val sessions: Signal[Load[List[SessionSummary]]] =
       query.flatMapSwitch { (f, k) =>
         count.set(PageSize)
@@ -112,7 +98,7 @@ object SessionList:
       (if set(id.value) then set - id.value else set + id.value).mkString(",")
     }
     Ui.page("会话")(
-      Fields.segmented[Filter]("会话分类", filter.signal.map(Filter.parse), f => filter.set(f.toString), Filter.values.toList.map(f => f -> f.label)),
+      Fields.segmented("会话分类", filter.signal, filter.set, Filter.values.toList),
       div(
         cls := "relative",
         Icon("Search", "pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted"),

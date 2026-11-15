@@ -8,7 +8,7 @@ import muliao.web.ui.*
 import scala.scalajs.js
 
 /** 统计区间。 */
-enum Window(val label: String, val days: Int):
+enum Window(val label: String, val days: Int) extends Shown.Self:
   case Week  extends Window("近 7 天", 7)
   case Month extends Window("近 30 天", 30)
 
@@ -66,7 +66,7 @@ object UsagePage:
     val window = Var(Window.Week)
     Ui.page("用量")(
       div(
-        Fields.segmented("统计区间", window.signal, window.set, Window.values.toList.map(w => w -> w.label))
+        Fields.segmented("统计区间", window.signal, window.set, Window.values.toList)
       ),
       // 换区间重新拉一份（用量只增不改，不随主题刷新）
       child <-- window.signal.map { w =>

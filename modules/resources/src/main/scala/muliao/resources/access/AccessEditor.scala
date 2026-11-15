@@ -5,7 +5,7 @@ import muliao.platform.AppError
 import muliao.platform.db.Database
 import muliao.resources.ToolCatalog
 import muliao.resources.agents.AgentRepo
-import muliao.resources.tree.{AssetStore, Snapshot}
+import muliao.resources.tree.{AssetPath, AssetStore, Snapshot}
 import zio.*
 
 /** 规则改动的校验：只拦这次新出现的问题，已有的问题不挡路（否则一处旧问题会让整个文件改不动）。 */
@@ -58,13 +58,13 @@ object AccessEditor:
                  ZIO.fail(AppError.conflict(s"platform/access.toml 现在写坏了（$r），平台不在它上面改；先把文件修好"))
                )
           next     <- ZIO.fromEither(f(state.config)).mapError(AppError.invalid)
-          agents   <- db.read(AgentRepo.all)
-          live      = agents.filter(_.live).map(_.id).toSet
+          agents   <- db.read(AgentRepo.live)
+          live      = agents.map(_.id).toSet
           snapshot <- store.snapshot
           _ <- ZIO
                  .fromEither(AccessValidation.check(Some(state.config), next, live, snapshot, tools.tools.map(_.name)))
                  .mapError(AppError.invalid)
-          names = agents.filter(_.live).map(a => a.id -> a.name).toMap[AgentId, AgentName]
-          _    <- store.write(store.root.resolve("platform/access.toml"), AccessConfig.render(next, names.get))
+          names = agents.map(a => a.id -> a.name).toMap[AgentId, AgentName]
+          _    <- store.write(AssetPath.AccessFile, AccessConfig.render(next, names.get))
         yield next
       }

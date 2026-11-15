@@ -6,8 +6,11 @@ import muliao.web.core.*
 
 /** 多个页面共用的 agent 列表：显示名、分组、可选来派活的。 */
 object AgentsData:
-  /** 全部 agent（含归档的），随 agents 主题刷新。每次调用得到一份新的数据源，页面各自持有。 */
-  def load(): Signal[Load[List[AgentSummary]]] = Remote(ResourcesApi.listAgents)(())
+  /** 全部 agent（含归档的），全站共用一份：登录后的外壳一直订阅着（失败时由外壳在顶上提示），随接口声明的主题刷新。 */
+  val all: Signal[Load[List[AgentSummary]]] = Remote(ResourcesApi.listAgents)(())
+
+  /** 只要名字、选项时用：还没拉到或拉取失败时为空（名字退回显示编号）。 */
+  val list: Signal[List[AgentSummary]] = all.map(_.data.getOrElse(Nil))
 
   def archived(a: AgentSummary): Boolean = a.state == AgentState.Archived
 

@@ -31,6 +31,12 @@ private[resources] object AgentRepo:
 
   val all: Read[List[AgentRecord]] = Sql.run(agents.sortBy(_.createdAt)).orInternal
 
+  /** 现存的（不含已删除、正在删除的），按创建时间。 */
+  val live: Read[List[AgentRecord]] = all.map(_.filter(_.live))
+
+  def byIds(ids: Set[AgentId]): Read[List[AgentRecord]] =
+    Sql.run(agents.filter(a => liftQuery(ids).contains(a.id))).orInternal
+
   def byId(id: AgentId): Read[Option[AgentRecord]] =
     Sql.run(agents.filter(_.id == lift(id))).map(_.headOption).orInternal
 

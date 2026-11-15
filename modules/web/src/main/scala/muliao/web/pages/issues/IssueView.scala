@@ -15,7 +15,7 @@ object IssueView:
   def view(id: Long): HtmlElement =
     val issueId = IssueId.wrap(id)
     val load    = Remote(BoardApi.get)(issueId)
-    val agents  = AgentsData.load().map(_.data.getOrElse(Nil))
+    val agents  = AgentsData.list
     val editing = Var(false)
     val remove  = new Action
     def delete(): Unit =
@@ -145,7 +145,7 @@ object IssueView:
       div(
         cls := "card__content flex flex-col gap-3",
         p(cls := "text-sm font-medium", "叫停：停掉指派的 agent 处理它的会话，再改状态"),
-        Fields.segmented("叫停后改成", halt.signal, halt.set, Halt.values.toList.map(h => h -> h.label), showLabel = true),
+        Fields.segmented("叫停后改成", halt.signal, halt.set, Halt.values.toList, showLabel = true),
         Fields.area(
           "留言（记成评论并交给那个会话，让它收尾或按新方向做）",
           message,
@@ -165,7 +165,7 @@ object IssueView:
   // ---- 依赖与会话 ----
 
   private def issueLink(l: IssueLink): HtmlElement =
-    Ui.appLink(Route.Issue(l.id.value).url)(cls := "flex items-center gap-1 text-accent", title := s"${l.title}（${statusLabel(l.status)}）", statusDot(l.status), s"#${l.id.value}")
+    Ui.appLink(Route.Issue(l.id.value).url)(cls := "flex items-center gap-1 text-accent", title := s"${l.title}（${l.status.shown}）", statusDot(l.status), s"#${l.id.value}")
 
   private def links(d: Signal[IssueDetail]): HtmlElement =
     div(

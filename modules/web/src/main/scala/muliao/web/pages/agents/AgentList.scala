@@ -1,7 +1,7 @@
 package muliao.web.pages.agents
 
 import com.raquo.laminar.api.L.*
-import muliao.contract.{AgentSummary, ResourcesApi}
+import muliao.contract.AgentSummary
 import muliao.web.core.*
 import muliao.web.ui.*
 
@@ -27,8 +27,7 @@ object AgentList:
     case _           => model
 
   def view(): HtmlElement =
-    // agent 的配置是 agent.toml 文件：改配置时服务端发的是 assets 主题
-    val agents = Remote(ResourcesApi.listAgents)(())
+    val agents = AgentsData.all
     val query  = Var("")
     Ui.page(
       "Agents",

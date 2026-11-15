@@ -1,16 +1,16 @@
 package muliao.workspace
 
 import muliao.contract.AgentId
-import muliao.exec.{CommandSpec, Program, RealPath, SecretEnv}
+import muliao.exec.{CommandSpec, Program, RealPath, Sandbox, SecretEnv}
 import muliao.platform.AppError
-import muliao.resources.{ResourcePaths, Resources, WritableScope}
+import muliao.resources.{ResourcePaths, Resources}
 import muliao.resources.vault.{SecretUse, Vault}
 import zio.*
 
 import java.nio.file.{Files, Path}
 
 /** 以 agent 身份要起的一条命令：规格（工作目录、写沙箱、注入的 secret）和算出它时的可写范围。 */
-final case class AgentCommand(spec: CommandSpec, scope: WritableScope)
+final case class AgentCommand(spec: CommandSpec, scope: Sandbox.Confined)
 
 /** 以 agent 身份起命令的唯一入口：run_shell、skill_run、触发器的前置检查与常驻命令都经这里得到命令规格，
   * 保证工作目录、写沙箱与 secret 权限只有一种算法。
@@ -23,7 +23,7 @@ trait AgentExec:
   def workspace(agent: AgentId): IO[AppError, Path]
 
   /** 命令输出里有写被拦下（Operation not permitted）且路径确实不在可写范围时，补一句被什么拦、找谁授权；没有就原样返回。 */
-  def annotate(agent: AgentId, scope: WritableScope, output: String): UIO[String]
+  def annotate(agent: AgentId, scope: Sandbox.Confined, output: String): UIO[String]
 
 object AgentExec:
   val layer: URLayer[Resources & Vault & ResourcePaths, AgentExec] = ZLayer.derive[Live]
@@ -50,9 +50,9 @@ object AgentExec:
         scope  <- resources.writableScope(agent)
         values <- if secrets.isEmpty then ZIO.succeed(Map.empty[String, String]) else vault.reveal(agent, secrets.distinct, use)
         env     = Chunk.fromIterable(secrets.distinct.flatMap(k => values.get(k).map(SecretEnv(k, _))))
-      yield AgentCommand(CommandSpec(program, dir, scope.sandbox, secrets = env), scope)
+      yield AgentCommand(CommandSpec(program, dir, scope, secrets = env), scope)
 
-    def annotate(agent: AgentId, scope: WritableScope, output: String): UIO[String] =
+    def annotate(agent: AgentId, scope: Sandbox.Confined, output: String): UIO[String] =
       ZIO
         .foreach(deniedPaths(output)) { p =>
           RealPath.resolve(Path.of(p)).flatMap { real =>

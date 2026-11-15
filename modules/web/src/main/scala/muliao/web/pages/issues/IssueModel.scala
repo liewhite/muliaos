@@ -1,7 +1,6 @@
 package muliao.web.pages.issues
 
 import muliao.contract.*
-import org.scalajs.dom
 
 /** issue 看板的纯逻辑：状态与优先级的显示、筛选条件与地址的互换、按状态分列、指派选项、负责项目配色。 */
 object IssueModel:
@@ -11,14 +10,6 @@ object IssueModel:
   /** 看板的列顺序（也是列表视图的分组顺序）：受阻排在进行中和待审核之间。 */
   val Statuses: List[IssueStatus] =
     List(IssueStatus.Backlog, IssueStatus.InProgress, IssueStatus.Blocked, IssueStatus.InReview, IssueStatus.Done, IssueStatus.Cancelled)
-
-  def statusLabel(s: IssueStatus): String = s match
-    case IssueStatus.Backlog    => "Backlog"
-    case IssueStatus.InProgress => "进行中"
-    case IssueStatus.Blocked    => "受阻"
-    case IssueStatus.InReview   => "待审核"
-    case IssueStatus.Done       => "完成"
-    case IssueStatus.Cancelled  => "已取消"
 
   /** 状态圆点的颜色（Tailwind 类）。 */
   def statusColor(s: IssueStatus): String = s match
@@ -31,13 +22,6 @@ object IssueModel:
 
   /** 优先级的显示顺序。 */
   val Priorities: List[Priority] = List(Priority.Urgent, Priority.High, Priority.Medium, Priority.Low, Priority.Unset)
-
-  def priorityLabel(p: Priority): String = p match
-    case Priority.Urgent => "紧急"
-    case Priority.High   => "高"
-    case Priority.Medium => "中"
-    case Priority.Low    => "低"
-    case Priority.Unset  => "无优先级"
 
   // ---- 指派 ----
 
@@ -115,7 +99,7 @@ object IssueModel:
   def reviewable(i: IssueSummary): Boolean = i.assignee.contains(Assignee.User) && !i.status.finished
 
   /** 叫停后改成什么。改方向（回到进行中）必须留言。 */
-  enum Halt(val status: IssueStatus, val label: String):
+  enum Halt(val status: IssueStatus, val label: String) extends muliao.web.core.Shown.Self:
     case Backlog   extends Halt(IssueStatus.Backlog, "放回 Backlog")
     case Blocked   extends Halt(IssueStatus.Blocked, "受阻")
     case Cancelled extends Halt(IssueStatus.Cancelled, "已取消")
@@ -192,10 +176,3 @@ object IssueModel:
     val parts = text.split("[\\s,，]+").toList.filter(_.nonEmpty)
     val ids   = parts.map(p => p.stripPrefix("#").toLongOption.flatMap(n => IssueId.make(n).toOption))
     Option.when(ids.forall(_.isDefined))(ids.flatten)
-
-  // ---- 跨刷新记住的界面选择 ----
-
-  /** 存在 localStorage 里的一项，取值不认识（旧版本留下的、被手改坏的）时取默认。 */
-  final class Stored[T](key: String, options: List[T], show: T => String, fallback: T):
-    def load(): T             = Option(dom.window.localStorage.getItem(key)).flatMap(s => options.find(show(_) == s)).getOrElse(fallback)
-    def save(v: T): Unit      = dom.window.localStorage.setItem(key, show(v))

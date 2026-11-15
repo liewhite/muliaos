@@ -39,7 +39,7 @@ object SkillEditor:
     )
 
   private def create(): HtmlElement =
-    val agents  = AgentsData.load().map(_.data.getOrElse(Nil))
+    val agents  = AgentsData.list
     val owner   = Var(AssetUi.Platform)
     val name    = Var("")
     val content = Var(template("名字"))

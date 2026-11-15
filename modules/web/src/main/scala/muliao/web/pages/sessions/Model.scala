@@ -16,14 +16,12 @@ object Model:
     case OriginKind.Issue   => "Issue"
 
   /** 会话列表的分类：每个来源恰好属于一类；「全部」不筛。 */
-  enum Filter(val label: String, val origins: List[OriginKind]):
+  enum Filter(val label: String, val origins: List[OriginKind]) extends muliao.web.core.Shown.Self:
     case All  extends Filter("全部", Nil)
     case Chat extends Filter("对话", List(OriginKind.User, OriginKind.Thread))
     case Iss  extends Filter("issue", List(OriginKind.Issue))
     case Auto extends Filter("自动任务", List(OriginKind.Trigger))
 
-  object Filter:
-    def parse(s: String): Filter = values.find(_.toString == s).getOrElse(Chat)
 
   /** 按 agent 分组；组内保持接口顺序，组按各自第一次出现的位置排（最近活跃的 agent 在前）。 */
   final case class AgentGroup(agent: AgentId, name: String, sessions: List[SessionSummary]):

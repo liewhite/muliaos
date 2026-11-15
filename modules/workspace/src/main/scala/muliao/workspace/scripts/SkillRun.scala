@@ -53,9 +53,10 @@ object SkillRun:
                  .orElseFail(ToolFailure.Rejected(s"没有 skill ${in.skill}，或你不能用它：只能用 skill 索引里的"))
       script <- ZIO.fromEither(normalize(in.script)).mapError(ToolFailure.Rejected(_))
       mode   <- ZIO.fromEither(RunMode.of(in.background, in.timeout, in.heartbeatSeconds)).mapError(ToolFailure.Rejected(_))
-      dir    <- RealPath.resolve(entry.doc.dir).mapError(ToolFailure.fromAppError)
-      real   <- RealPath.resolve(entry.doc.dir.resolve(script)).mapError(ToolFailure.fromAppError)
-      _ <- ZIO.unless(RealPath.within(real, dir))(ZIO.fail(ToolFailure.Rejected("script 指向了 skill 目录之外")))
+      real <- RealPath
+                .under(entry.doc.dir, entry.doc.dir.resolve(script))
+                .mapError(ToolFailure.fromAppError)
+                .someOrFail(ToolFailure.Rejected("script 指向了 skill 目录之外"))
       problem <- ZIO
                    .attemptBlocking {
                      val p = real.path

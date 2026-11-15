@@ -3,9 +3,9 @@ package muliao.workspace
 import muliao.contract.{AgentId, RunId}
 import muliao.exec.RealPath
 import muliao.platform.AppError
-import muliao.resources.{Resources, WritableScope}
+import muliao.resources.Resources
 import muliao.resources.guard.{AssetGuard, Expectation, FileFingerprint}
-import muliao.resources.tree.{AssetPath, AssetStore}
+import muliao.resources.tree.{AssetStore, Vetted}
 import muliao.resources.vault.Actor
 import zio.*
 
@@ -66,16 +66,14 @@ object FileAccess:
     private def blocking[A](what: String)(f: => A): IO[AppError, A] =
       ZIO.attemptBlocking(f).mapError(e => AppError.internal(s"$what：${e.getMessage}", e))
 
-    private def assetRoot: IO[AppError, RealPath] = RealPath.resolve(assets.root)
-
-    private def readable(agent: AgentId, path: Path): IO[AppError, (RealPath, WritableScope)] =
+    private def readable(agent: AgentId, path: Path): IO[AppError, RealPath] =
       for
         scope <- resources.writableScope(agent)
         real  <- RealPath.resolve(path)
-        _ <- ZIO.when(scope.hidden.exists(RealPath.within(real, _)))(
+        _ <- ZIO.when(scope.hides(real))(
                resources.explainDenied(agent, path).flatMap(why => ZIO.fail(AppError.forbidden(s"读不了 $path：$why")))
              )
-      yield (real, scope)
+      yield real
 
     private def readBytes(real: RealPath, shown: Path): IO[AppError, Array[Byte]] =
       blocking(s"读 $shown 失败") {
@@ -86,19 +84,19 @@ object FileAccess:
         else Right(Files.readAllBytes(p))
       }.flatMap(ZIO.fromEither(_).mapError(AppError.invalid))
 
+    /** 读过的文本文件都记下指纹（只有资源文件的整体覆盖会用到；记全部省得在这里再判一次是不是资源文件）。 */
     def load(agent: AgentId, run: Option[RunId], path: Path): IO[AppError, FileContent] =
       for
-        (real, _) <- readable(agent, path)
-        bytes     <- readBytes(real, path)
-        content    = FileContent.of(bytes)
-        root      <- assetRoot
+        real   <- readable(agent, path)
+        bytes  <- readBytes(real, path)
+        content = FileContent.of(bytes)
         _ <- (run, content) match
-               case (Some(r), FileContent.Text(t)) if RealPath.within(real, root) => remember(r, real.path, FileFingerprint.of(t))
-               case _                                                             => ZIO.unit
+               case (Some(r), FileContent.Text(t)) => remember(r, real.path, FileFingerprint.of(t))
+               case _                              => ZIO.unit
       yield content
 
     def bytes(agent: AgentId, path: Path): IO[AppError, Array[Byte]] =
-      readable(agent, path).flatMap((real, _) => readBytes(real, path))
+      readable(agent, path).flatMap(readBytes(_, path))
 
     private def remember(run: RunId, path: Path, fp: FileFingerprint): UIO[Unit] =
       ledger.update { m =>
@@ -106,40 +104,28 @@ object FileAccess:
         if next.size > LedgerSize then next.drop(next.size - LedgerSize) else next
       }
 
-    /** 一个文件要怎么写：普通文件直接写，资源文件经写入口。 */
-    private enum Target:
-      case Plain(real: RealPath, content: String)
-      case Asset(real: RealPath, content: String, secret: Boolean)
-
     def store(agent: AgentId, run: RunId, files: List[FileWrite], mode: WriteMode): IO[AppError, List[String]] =
       for
         scope <- resources.writableScope(agent)
-        root  <- assetRoot
         // 先全部检查，任何一个不行都不写
-        targets <- ZIO.foreach(files) { case FileWrite(path, content) =>
-                     for
-                       real <- RealPath.resolve(path)
-                       _ <- ZIO.unless(scope.permits(real))(
-                              resources.explainDenied(agent, path).flatMap(why => ZIO.fail(AppError.forbidden(s"写不了 $path：$why")))
-                            )
-                       t <-
-                         if !RealPath.within(real, root) then ZIO.succeed(Target.Plain(real, content))
-                         else
-                           for
-                             expect <- expectation(run, real.path, mode)
-                             out    <- guard.check(Actor.Agent(agent), real.path, content, expect)
-                             secret  = AssetPath.classify(root.path.relativize(real.path)).isInstanceOf[AssetPath.Secret]
-                           yield Target.Asset(real, out, secret)
-                     yield t
-                   }
-        written <- ZIO.foreach(targets) {
-                     case Target.Plain(real, content) =>
+        vetted <- ZIO.foreach(files) { case FileWrite(path, content) =>
+                    for
+                      real <- RealPath.resolve(path)
+                      _ <- ZIO.unless(scope.permits(real))(
+                             resources.explainDenied(agent, path).flatMap(why => ZIO.fail(AppError.forbidden(s"写不了 $path：$why")))
+                           )
+                      expect <- expectation(run, real.path, mode)
+                      v      <- guard.check(Actor.Agent(agent), real.path, content, expect)
+                    yield v
+                  }
+        written <- ZIO.foreach(vetted) {
+                     case Vetted.Plain(real, content) =>
                        blocking(s"写 ${real.path} 失败") {
                          Option(real.path.getParent).foreach(Files.createDirectories(_))
                          Files.writeString(real.path, content)
                        }.as(content)
-                     case Target.Asset(real, out, secret) =>
-                       assets.write(real.path, out, privateFile = secret) *> remember(run, real.path, FileFingerprint.of(out)).as(out)
+                     case v: Vetted.Asset =>
+                       assets.commit(v) *> remember(run, v.real.path, FileFingerprint.of(v.content)).as(v.content)
                    }
       yield written
 

@@ -147,8 +147,22 @@ object ExecSpec extends ZIOSpecDefault:
       yield assertTrue(r.output.contains("ps-ok"), r.output.contains("top-ok"), !r.output.contains("Operation not permitted"))
     },
     test("沙箱规则：先禁止全部写，再放开设备文件") {
-      val p = Sandbox.profile(Chunk.empty)
+      val p = Sandbox.profile(Sandbox.Confined(Chunk.empty))
       assertTrue(p.contains("(deny file-write*)"), p.contains("/dev/null"))
+    },
+    test("写检查与沙箱规则同一优先级：私有 > 只读 > 可写，默认不可写") {
+      for
+        dir <- tempDir
+        w   <- RealPath.resolve(dir)
+        ro  <- RealPath.resolve(dir.resolve("ro"))
+        hid <- RealPath.resolve(dir.resolve("ro/hidden"))
+        out <- RealPath.resolve(dir.getParent)
+        f    = (p: java.nio.file.Path) => RealPath.resolve(p)
+        a   <- f(dir.resolve("a"))
+        b   <- f(dir.resolve("ro/b"))
+        c   <- f(dir.resolve("ro/hidden/c"))
+        box  = new Sandbox.Confined(Chunk(w), hidden = Chunk(hid), readOnly = Chunk(ro))
+      yield assertTrue(box.permits(a), !box.permits(b), !box.permits(c), box.hides(c), !box.hides(b), !box.permits(out))
     },
     test("scope 结束时还在跑的命令整组结束") {
       for

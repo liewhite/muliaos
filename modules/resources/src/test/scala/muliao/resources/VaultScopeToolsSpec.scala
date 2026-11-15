@@ -119,7 +119,7 @@ object VaultScopeToolsSpec extends ZIOSpecDefault:
                    s"echo 1 > '${dirs.assets}/platform/memory/global.md' || echo GLOBAL_BLOCKED",
                    s"cat '${dirs.privateFile}' || echo PRIVATE_BLOCKED"
                  ).mkString("; ")
-        r     <- Exec.run(CommandSpec(Program.Shell(script), ws, sc.sandbox), 20.seconds)
+        r     <- Exec.run(CommandSpec(Program.Shell(script), ws, sc), 20.seconds)
         why   <- res.explainDenied(a.id, dirs.assets.resolve("bob/skills/bobs/x"))
         why2  <- res.explainDenied(a.id, dirs.base.resolve("elsewhere"))
         bobsR <- RealPath.resolve(dirs.assets.resolve("bob/skills/bobs/x"))
@@ -147,7 +147,7 @@ object VaultScopeToolsSpec extends ZIOSpecDefault:
                    s"echo 1 > '${dirs.assets}/bob/skills/locked/x' || echo LOCKED_BLOCKED",
                    s"cat '${dirs.privateFile}' && echo PRIVATE_READ"
                  ).mkString("; ")
-        r <- Exec.run(CommandSpec(Program.Shell(script), dirs.base, sc.sandbox), 20.seconds)
+        r <- Exec.run(CommandSpec(Program.Shell(script), dirs.base, sc), 20.seconds)
       yield assertTrue(List("BOB_OK", "GLOBAL_OK", "LOCKED_BLOCKED", "PRIVATE_READ").forall(r.output.contains))
     } @@ TestAspect.withLiveClock,
     test("一次运行的资源：记忆、skill 索引、MCP、secret、相关的问题；给模型的段落逐字节稳定") {

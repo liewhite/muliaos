@@ -87,12 +87,8 @@ object Board:
       }
       (fromIssues ++ fromEvents).toSet
 
-    /** agent 编号到显示名（删除了的也有名字；查不到用编号）。 */
-    private def names(ids: Set[AgentId]): UIO[Map[AgentId, String]] =
-      ZIO.foreach(ids.toList)(id => agents.get(id).map(a => id -> a.name.value).orElseSucceed(id -> id.value)).map(_.toMap)
-
     private def render(issues: List[Issue], events: List[IssueEvent]): UIO[Render] =
-      names(agentsIn(issues, events)).map(ns => Render(id => ns.getOrElse(id, id.value), zone))
+      agents.names(agentsIn(issues, events)).map(ns => Render(ns, zone))
 
     // ---- 校验 ----
 
@@ -199,11 +195,11 @@ object Board:
           status = i.status,
           priority = i.priority,
           owner = i.owner,
-          ownerName = i.owner.map(o => ns.getOrElse(o, o.value)),
+          ownerName = i.owner.map(o => ns(o)),
           assignee = i.assignee,
           assigneeName = i.assignee.map {
             case Assignee.User     => Assignee.UserKey
-            case Assignee.Agent(a) => ns.getOrElse(a, a.value)
+            case Assignee.Agent(a) => ns(a)
           },
           assigneeState = state,
           stalled = Rules.stalled(i, waiting, state),
@@ -218,7 +214,7 @@ object Board:
         all <- db.read(Repo.all)
         st   = all.map(i => i.id -> i.status).toMap
         sel  = all.filter(f.accepts)
-        ns  <- names(agentsIn(sel, Nil))
+        ns  <- agents.names(agentsIn(sel, Nil))
         out <- summaries(sel, st.get, ns)
       yield out
 
@@ -228,11 +224,11 @@ object Board:
         ups   <- db.read(Repo.links(issue.dependsOn))
         blk   <- db.read(Repo.links(downs))
         st     = ups.map(l => l.id -> l.status).toMap
-        ns    <- names(agentsIn(List(issue), events))
-        r      = Render(a => ns.getOrElse(a, a.value), zone)
+        ns    <- agents.names(agentsIn(List(issue), events))
+        r      = Render(ns, zone)
         sum   <- summaries(List(issue), st.get, ns).map(_.head)
         links <- sessions.issueSessions(List(id))
-        lns   <- names(links.map(_.agent).toSet)
+        lns   <- agents.names(links.map(_.agent).toSet)
         sts   <- sessions.states(links.map(_.session))
       yield
         IssueDetail(
@@ -246,7 +242,7 @@ object Board:
             val (text, body) = r.activity(e.activity)
             IssueEventView(e.id, e.at, r.actor(e.actor), e.actor.where, text, body)
           },
-          sessions = links.map(l => IssueSessionView(l.agent, lns.getOrElse(l.agent, l.agent.value), l.session, sts.getOrElse(l.session, WorkState.Idle)))
+          sessions = links.map(l => IssueSessionView(l.agent, lns(l.agent), l.session, sts.getOrElse(l.session, WorkState.Idle)))
         )
 
     def activity(agent: Option[AgentId], from: Long, to: Long): IO[AppError, List[IssueActivity]] =

@@ -78,7 +78,7 @@
 - **出站 HTTP**：一律经 `OutboundHttp`（系统代理及其例外列表、统一 User-Agent、状态码与连接错误分类），不直接用 zio-http 客户端。`send`/`open` 只把 2xx 当成功；要按对方契约自己解读状态码（跟随跳转、区分错误体）用 `exchange`。
 - **接口**：在 contract 里基于 `Api.base`/`Api.secure` 声明，服务端用 `Endpoints.secured(auth)` / `.public` 接上逻辑，交给 `HttpServer.serve` 的 `domainEndpoints`。
 - **工具**：`Tool[Ctx, In](名字, 说明, Access, Scheduling, Display)((in, ctx) => ...)`，参数类型 `In` 派生 zio-schema，字段说明用 `@description`，敏感字段标 `@sensitive`。
-- **命令**：`Exec.run(spec, timeout)` / `Exec.start(spec)`；走标准输入输出对话的（本地 MCP server）用 `Exec.attach(spec)`；沙箱 `Sandbox.Confined(可写, 私有)` 只收 `RealPath`（`RealPath.resolve` 解析出的真实路径），可写范围由调用方按权限算好。
+- **命令**：`Exec.run(spec, timeout)` / `Exec.start(spec)`；走标准输入输出对话的（本地 MCP server）用 `Exec.attach(spec)`；沙箱 `Sandbox.Confined(可写, 私有, 只读)` 只收 `RealPath`（`RealPath.resolve` 解析出的真实路径），可写范围由调用方按权限算好；平台自己判断能不能写用同一份规则的 `permits`。「解析真实路径后是否在某根目录下」一律用 `RealPath.under(根, 路径)`。
 - **可选配置段**：配了才有的功能（网页工具、语音转写）用 `ConfigFile.optionalSection`，文件里没有这一段得到 `None`。
 
 ## 模型接入与外部服务（models 模块）
@@ -91,6 +91,7 @@
 ## 资源、agent 与权限（resources，#866）
 - 资源目录的文件格式与布局与现有 `~/.muliao/assets` 兼容（agent 目录名就是 agent 名；`platform/access.toml` 里 `[agents.<编号>]`；secret 是 Fernet 密文，主密钥在配置 `[vault] key`）。SKILL.md 的 frontmatter 用 snakeyaml-engine 解析。
 - agent 的身份（编号、名字、归档、默认、改名/删除进度）在库里（表 `agent`），可编辑配置在 `agent.toml`。改名先记库再挪目录，删除先标「正在删」再清理；两者中途重启由 `Agents.resumePending` 接着做（组装入口起动时调用）。
+- 资源文件的位置与路径只在 `AssetPath` 互换：`classify`（路径 → 位置）、`render`（资源文件 → 路径，测试保证往返一致）、`home`（某资源归某主人时放在哪）；不手拼 `skills/`、`secrets/` 这类路径。每种文件的规格（名字、内容解析）只在 `FileSpec.load`，扫描与写入口共用。
 - 资源目录每 2 秒按指纹（路径、大小、纳秒修改时间、inode）轮询，变了才重新解析并广播主题 `assets`；平台自己写文件后立即刷新。
 - access.toml 写坏时沿用上一份有效的（副本在数据目录 `resources/access.last-good.toml`，重启后仍有效），平台经 `AccessEditor` 改它会被拒绝直到修好；平台写回 access.toml 时按固定格式重排（角色、agent 按名字排序，`[agents.<编号>] # 名字`），手写的注释不保留。
 - 组装时要提供：`ModelCheck`（模型领域：默认模型、模型写法能不能跑）、`ToolCatalog`（全部内置工具的名字与类别，从各工具的 `spec` 汇总）、`ResourcePaths.privatePaths`（配置文件、备份、推送私钥）、各领域的 `AgentHook`（忙碌判断与删除清理，登记到 `AgentHooks`）。
@@ -99,6 +100,7 @@
 ## 会话领域的接法（#868，给下游领域）
 - **给 agent 的工具**：`Tool[RunContext, In]`（`muliao.sessions.RunContext`：agent、会话、运行、调用编号、来源、工作目录、本次运行的资源快照、用户在不在等），组装时 `SessionHooks.addTools` 接进去；`Sessions.start` 要在全部工具接好之后调用（启动续跑要用）。工具名同时汇进资源领域的 `ToolCatalog`。
 - **投信**：一律经 `Sessions.deliver(Address, Letter)`：触发器用 `Address.Fresh(agent, Origin.Trigger(名), 标题)`，看板用 `Address.IssueOf(agent, issue, 标题)`（每个 issue + agent 一个会话），事件用 `Source.Event(种类)`；投不进以 `AppError` 说明原因。「回答交给谁」由信里的 `replyTo` 定（用户在等写 `ReplyTo.User`）。
+- **agent 显示名**：`Agents.names(编号)` 一次查出（含已删除的，查不到显示编号）；不逐个 `get`。
 - **工作状态**：`Sessions.states(ids)` 是全系统唯一的判断（running / waiting / idle），看板停滞、触发器防重叠、界面都用它。
 - **会话等的后台任务**：开始时 `Sessions.openJobWait(会话, 任务号, 说明, 心跳)`，结束时 `closeJobWait(任务号, Some(事件信))`；`SessionHooks.setJobs` 接上 `JobControl`（心跳检查里的一句现状、会话被停止时结束任务）。等待项是 ADT `WaitRef = Job | Wake | Delegation`，唤醒与委派由会话领域自己处理。
 - **状态与种类**：跨领域、存库、走接口的状态与种类都是 `Labeled` 枚举（contract 的 `Labels` 给出解析、JSON、tapir 编解码，`Sql` 自动按 `label` 存取，工具参数用 `LabeledArg.schema`），不写字符串比较；带分支字段的接口数据（时间线条目、回复段、实时事件、挂起说明、等待项）是 JSON 里 `kind` 为分支名的 ADT。
@@ -116,7 +118,7 @@
 ## 工作区领域的接法（#869，给下游领域与组装入口）
 - **组装**：`Workspace.layer`（要 `PageSigner.fromSecret(server.cookieSecret)`）起全部服务，并把 8 个工具、skill 脚本的批准执行者 `skill_run`、异步工作种类 `job`、agent 忙碌判断与删除清理登记到上游；工具名与类别 `Workspace.toolInfos` 汇进资源领域的 `ToolCatalog`。启动顺序：`Sessions.start` 之后调 `Jobs.recover`（上次没收尾的后台任务标为被中断、不盲杀，补交结局）。接口 `WorkspaceHttp.endpoints(auth)`，其中页面文件 `/site/<agent>/<page>/<签名>/<文件>` 不要登录，带隔离响应头（CSP sandbox、nosniff、允许跨源读取）。
 - **以 agent 身份起命令**：一律经 `AgentExec.command(agent, program, secrets, SecretUse)` 得到 `CommandSpec`（工作目录、写沙箱、secret 注入），再 `Exec.run/start`；输出可经 `annotate` 补写沙箱拦截说明。触发器的前置检查与常驻命令用它，不自己算可写范围。
-- **文件读写**：`FileAccess` 按可写范围检查（平台私有文件对非 admin 读写都不行），资源目录里的文件经 `AssetGuard` + `AssetStore.write`；`WriteMode.Overwrite` 要求本次运行读过（读过的指纹按运行记在内存里），`Patch` 不要求。`AssetStore.write` 覆盖已有文件时沿用原权限位（skill 脚本不丢可执行位）。
+- **文件读写**：`FileAccess` 按可写范围检查（平台私有文件对非 admin 读写都不行），每次写先经 `AssetGuard.check` 得到 `Vetted`（只有它能造）：`Plain` 是资源目录外的文件、照写，`Asset` 交给 `AssetStore.commit`；平台自己生成的资源文件用 `AssetStore.write(资源文件, 内容)`。读过的文本文件都记指纹；`WriteMode.Overwrite` 要求本次运行读过（读过的指纹按运行记在内存里），`Patch` 不要求。`AssetStore` 写文件覆盖已有文件时沿用原权限位（skill 脚本不丢可执行位）。
 - **后台任务**：输出在工作目录 `jobs/<编号>.log`；关停时结束并标被中断，结局下次启动补交（表 `job` 的 `reported`）。
 
 ## 看板（board，#871）

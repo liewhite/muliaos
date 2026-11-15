@@ -45,12 +45,7 @@ object Browse:
     private def inside(root: Path, rel: String): IO[AppError, RealPath] =
       val p = Path.of(rel)
       if p.isAbsolute then ZIO.fail(outside)
-      else
-        for
-          r    <- RealPath.resolve(root)
-          real <- RealPath.resolve(root.resolve(p).normalize)
-          _    <- ZIO.unless(RealPath.within(real, r))(ZIO.fail(outside))
-        yield real
+      else RealPath.under(root, root.resolve(p).normalize).someOrFail(outside)
 
     def listDir(agent: AgentId, path: Option[String]): IO[AppError, DirListing] =
       val rel = path.map(_.stripPrefix("/")).getOrElse("")

@@ -105,14 +105,14 @@ object AgentPicker:
 /** 新会话页：选 agent（地址 `?agent=` 或默认 agent）、写消息、附件、语音，开始后跳到会话页。 */
 object NewSessionPage:
   def view(): HtmlElement =
-    val agents  = AgentsData.load()
+    val agents  = AgentsData.all
     val chosen  = Var(Router.now.params.get("agent").flatMap(a => AgentId.make(a).toOption))
     val prompt  = Var("")
     val uploads = new Uploads
     val action  = new Action
     // 新会话还要选 agent：转写结果先填进输入框，由用户点「开始」
     val voice   = new Voice(text => prompt.update(p => Model.appendTranscript(p, text)))
-    val list    = agents.map(_.data.getOrElse(Nil))
+    val list    = AgentsData.list
     val agent   = chosen.signal.combineWith(list).map((c, as) => c.orElse(as.find(_.isDefault).map(_.id)))
     val canStart = agent.combineWith(prompt.signal, uploads.ids, uploads.blocking).map((a, p, ids, b) => a.isDefined && (p.trim.nonEmpty || ids.nonEmpty) && !b)
     val canNow = Var(false)

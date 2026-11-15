@@ -87,20 +87,8 @@ object Scanner:
       case _: CharacterCodingException => Left("不是 UTF-8 文本")
       case e: java.io.IOException      => Left(s"读不了：${e.getMessage}")
 
-  /** 解析成功的按名字分发的资源。 */
-  private enum Loaded:
-    case Memory(doc: MemoryDoc)
-    case Skill(doc: SkillDoc)
-    case Mcp(doc: McpDoc)
-    case Secret(doc: SecretDoc)
-
-  private sealed trait Candidate:
-    def kind: AssetKind
-    def name: String
-    def owner: Owner
-    def path: Path
-  private final case class Ok(kind: AssetKind, name: String, owner: Owner, path: Path, value: Loaded) extends Candidate
-  private final case class Bad(kind: AssetKind, name: String, owner: Owner, path: Path, reason: String) extends Candidate
+  /** 磁盘上出现的一个按名字分发的资源（解析成功或失败）。 */
+  private final case class Candidate(kind: AssetKind, name: String, owner: Owner, path: Path, parsed: Either[String, Parsed])
 
   def scan(root: Path): Snapshot =
     val fp      = fingerprint(root)
@@ -120,25 +108,22 @@ object Scanner:
     val problems = List.newBuilder[Problem]
     def problem(p: Path, reason: String, ap: AssetPath) = problems += Problem(p, reason, ap.ownedBy, ap.subject)
 
-    // access.toml
-    val access = classes.collectFirst { case (p, AssetPath.AccessFile) => readText(p).flatMap(AccessConfig.parse) }
-    access.foreach(_.left.foreach(r => problem(root.resolve("platform/access.toml"), r, AssetPath.AccessFile)))
-
-    // agent.toml 与私有记忆
-    val profiles = classes.flatMap {
-      case (p, ap @ AssetPath.AgentFile(a)) =>
-        readText(p).flatMap(Formats.parseAgent) match
-          case Right(prof) => Some(a -> prof)
-          case Left(r)     => problem(p, r, ap); None
-      case _ => None
-    }.toMap
-    val privateMemories = classes.flatMap {
-      case (p, ap @ AssetPath.PrivateMemory(a)) =>
-        readText(p) match
-          case Right(t) => Some(MemoryDoc(MemoryScope.Private(a), p, t))
-          case Left(r)  => problem(p, r, ap); None
-      case _ => None
+    // 逐个按规格解析（skill 附件不解析）
+    val parsed = classes.collect { case (p, f: ParsedFile) =>
+      (p, f, readText(p).flatMap(FileSpec.load(f, p, _, rel => Files.isRegularFile(p.getParent.resolve(rel)))))
     }
+
+    // 不按名字分发的：access.toml、agent.toml、私有记忆
+    parsed.foreach {
+      case (p, f, Left(r)) if f.subject.isEmpty => problem(p, r, f)
+      case _                                    => ()
+    }
+    val access = parsed.collectFirst {
+      case (_, AssetPath.AccessFile, Left(r))   => Left(r)
+      case (_, _, Right(Parsed.Access(config))) => Right(config)
+    }
+    val profiles = parsed.collect { case (_, AssetPath.AgentFile(a), Right(Parsed.Agent(prof))) => a -> prof }.toMap
+    val privateMemories = parsed.collect { case (_, _, Right(Parsed.Memory(d @ MemoryDoc(MemoryScope.Private(_), _, _)))) => d }
 
     // 按名字分发的资源：先逐个解析，再处理同名冲突
     val skillDirs = classes.collect { case (_, AssetPath.SkillMain(o, n)) => (o, n) }.toSet
@@ -147,53 +132,31 @@ object Scanner:
     }.groupBy { case (_, ap) => ap.ownedBy -> ap.subject }.values.map(_.head)
     orphanAttachments.foreach { (p, ap) => problem(p.getParent, s"skill 目录里没有 ${SkillDoc.Main}", ap) }
 
-    val candidates: List[Candidate] = classes.flatMap {
-      case (p, AssetPath.SharedMemory(n)) =>
-        Some(
-          if !Formats.validSlug(n) then Bad(AssetKind.Memory, n, Owner.Platform, p, "共享记忆名只能用小写字母、数字和 -")
-          else readText(p).fold(Bad(AssetKind.Memory, n, Owner.Platform, p, _), t => Ok(AssetKind.Memory, n, Owner.Platform, p, Loaded.Memory(MemoryDoc(MemoryScope.Shared(n), p, t))))
-        )
-      case (p, AssetPath.SkillMain(o, n)) =>
-        val dir = p.getParent
-        Some(
-          if !Formats.validSlug(n) then Bad(AssetKind.Skill, n, o, p, "skill 名（目录名）只能用小写字母、数字和 -")
-          else
-            readText(p).flatMap(t => Formats.parseSkill(t, n, rel => Files.isRegularFile(dir.resolve(rel)))) match
-              case Right(m) => Ok(AssetKind.Skill, n, o, p, Loaded.Skill(SkillDoc(SkillName.wrap(n), o, dir, m.description, m.approval)))
-              case Left(r)  => Bad(AssetKind.Skill, n, o, p, r)
-        )
-      case (p, AssetPath.Mcp(o, n)) =>
-        Some(
-          if !Formats.validSlug(n) then Bad(AssetKind.Mcp, n, o, p, "MCP 名只能用小写字母、数字和 -")
-          else readText(p).flatMap(Formats.parseMcp).fold(Bad(AssetKind.Mcp, n, o, p, _), c => Ok(AssetKind.Mcp, n, o, p, Loaded.Mcp(McpDoc(n, o, p, c))))
-        )
-      case (p, AssetPath.Secret(o, k)) =>
-        Some(
-          if !Formats.validSecretKey(k) then Bad(AssetKind.Secret, k, o, p, "secret 名只能用大写字母、数字和下划线，字母开头")
-          else readText(p).flatMap(Formats.parseSecret).fold(Bad(AssetKind.Secret, k, o, p, _), s => Ok(AssetKind.Secret, k, o, p, Loaded.Secret(SecretDoc(k, o, p, s))))
-        )
-      case _ => None
+    val candidates = parsed.flatMap { (p, f, r) =>
+      (f.subject, f.ownedBy) match
+        case (Some((kind, name)), Some(owner)) => Some(Candidate(kind, name, owner, p, r))
+        case _                                 => None
     }
 
     val occupied = candidates.groupMap(c => (c.kind, c.name))(_.owner).view.mapValues(_.distinct).toMap
 
-    val loaded: List[Loaded] = candidates
+    val loaded: List[Parsed] = candidates
       .groupBy(c => (c.kind, c.name))
       .toList
       .sortBy(_._1._2)
       .flatMap { case ((kind, name), cs) =>
-        cs.collect { case b: Bad => b }.foreach(b => problems += Problem(b.path, b.reason, Some(b.owner), Some(kind -> name)))
+        cs.foreach(c => c.parsed.left.foreach(r => problems += Problem(c.path, r, Some(c.owner), Some(kind -> name))))
         val (platform, agents) = cs.partition(_.owner == Owner.Platform)
         val agentOwners        = agents.map(_.owner.label).distinct.sorted
         if platform.nonEmpty then
           agents.foreach(a => problems += Problem(a.path, s"平台已有同名的 ${kind.label} $name，这份不加载", Some(a.owner), Some(kind -> name)))
-          platform.collect { case o: Ok => o.value }
+          platform.flatMap(_.parsed.toOption)
         else if agentOwners.size > 1 then
           agents.foreach(a =>
             problems += Problem(a.path, s"${agentOwners.mkString("、")} 都有名为 $name 的 ${kind.label}，都不加载", Some(a.owner), Some(kind -> name))
           )
           Nil
-        else agents.collect { case o: Ok => o.value }
+        else agents.flatMap(_.parsed.toOption)
       }
 
     val misplaced = classes.collect { case (p, AssetPath.Misplaced) => p }
@@ -205,10 +168,10 @@ object Scanner:
       access = access,
       agentDirs = agentDirs,
       profiles = profiles,
-      memories = loaded.collect { case Loaded.Memory(d) => d } ++ privateMemories,
-      skills = loaded.collect { case Loaded.Skill(d) => d },
-      mcps = loaded.collect { case Loaded.Mcp(d) => d },
-      secrets = loaded.collect { case Loaded.Secret(d) => d },
+      memories = loaded.collect { case Parsed.Memory(d) => d } ++ privateMemories,
+      skills = loaded.collect { case Parsed.Skill(d) => d },
+      mcps = loaded.collect { case Parsed.Mcp(d) => d },
+      secrets = loaded.collect { case Parsed.Secret(d) => d },
       problems = problems.result().sortBy(_.path.toString),
       occupied = occupied
     )

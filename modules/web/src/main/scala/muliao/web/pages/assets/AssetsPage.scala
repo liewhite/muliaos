@@ -29,7 +29,7 @@ object AssetsPage:
 
   def view(): HtmlElement =
     val index  = Remote(ResourcesApi.listAssets)(())
-    val agents = AgentsData.load().map(_.data.getOrElse(Nil))
+    val agents = AgentsData.list
     val tab    = Router.query.map(q => KindTab.of(q.get("kind"))).distinct
     val owner  = Router.query.map(_.get("owner").filter(_ != "all")).distinct
     Ui.page("AI 资产")(
@@ -137,7 +137,7 @@ object McpTab:
       Json.Obj(fields*).toJsonPretty + "\n"
     }
 
-  enum Transport(val id: String, val label: String):
+  enum Transport(val id: String, val label: String) extends Shown.Self:
     case Stdio extends Transport("stdio", "stdio（本地命令）")
     case HttpT extends Transport("http", "HTTP / SSE")
 
@@ -190,7 +190,7 @@ object McpTab:
       p(cls := "text-sm text-muted", "也可以直接在对话里把 MCP 信息告诉 agent，让它在自己的资源目录里写 mcp/<名字>.json。"),
       Fields.text("名称", text(_.name, (m, s) => m.copy(name = s)), hint = Some("工具名会以「名称_」为前缀"), mono = true),
       AssetUi.ownerSelect(v.signal.map(_.owner), o => v.update(_.copy(owner = o)), agents),
-      Fields.segmented[Transport]("传输", v.signal.map(_.transport), t => v.update(_.copy(transport = t)), Transport.values.toList.map(t => t -> t.label), showLabel = true),
+      Fields.segmented[Transport]("传输", v.signal.map(_.transport), t => v.update(_.copy(transport = t)), Transport.values.toList, showLabel = true),
       child <-- v.signal.map(_.transport).distinct.map {
         case Transport.Stdio =>
           div(
@@ -329,7 +329,7 @@ object SecretTab:
           Ui.iconBtn("KeyRound", s"改 $key 的值")(onClick --> (_ => setting.update(!_))),
           AssetsPage.deleteButton(s, "引用它的 MCP 与命令会失败。", act)
         ),
-        AssetUi.access(s, AgentsData.load().map(_.data.getOrElse(Nil))),
+        AssetUi.access(s, AgentsData.list),
         child.maybe <-- setting.signal.map(on =>
           Option.when(on)(
             div(

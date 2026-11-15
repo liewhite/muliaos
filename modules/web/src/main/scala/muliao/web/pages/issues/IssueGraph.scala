@@ -12,9 +12,9 @@ object IssueGraph:
   val NodeHeight = 72
 
   /** 图里显示哪些：Open＝至少有一个没结束的依赖链；All＝全部有依赖关系的。 */
-  enum Scope(val key: String, val label: String):
-    case Open extends Scope("open", "有未完成的依赖链")
-    case All  extends Scope("all", "全部依赖链")
+  enum Scope(val label: String) extends muliao.web.core.Shown.Self:
+    case Open extends Scope("有未完成的依赖链")
+    case All  extends Scope("全部依赖链")
 
   final case class Point(x: Double, y: Double)
   final case class Node(issue: IssueSummary, x: Double, y: Double)

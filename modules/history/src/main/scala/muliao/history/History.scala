@@ -87,5 +87,4 @@ object History:
         tl   <- sessions.timeline(info.id)
       yield SessionRead(info, Reading.items(tl))
 
-    def names(ids: Iterable[AgentId]): UIO[Map[AgentId, String]] =
-      ZIO.foreach(ids.toList.distinct)(id => agents.get(id).map(a => id -> a.name.value).orElseSucceed(id -> id.value)).map(_.toMap)
+    def names(ids: Iterable[AgentId]): UIO[Map[AgentId, String]] = agents.names(ids)

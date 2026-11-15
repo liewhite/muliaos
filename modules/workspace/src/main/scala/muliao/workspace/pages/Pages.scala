@@ -117,9 +117,7 @@ object Pages:
       else
         val root = siteDir(paths, agent).resolve(page)
         for
-          rootReal <- RealPath.resolve(root)
-          real     <- RealPath.resolve(segs.foldLeft(root)(_.resolve(_)))
-          _        <- ZIO.unless(RealPath.within(real, rootReal))(ZIO.fail(missing))
+          real  <- RealPath.under(root, segs.foldLeft(root)(_.resolve(_))).someOrFail(missing)
           bytes <- ZIO
                      .attemptBlocking(Option.when(Files.isRegularFile(real.path))(Files.readAllBytes(real.path)))
                      .mapError(e => AppError.internal("读页面文件失败", e))

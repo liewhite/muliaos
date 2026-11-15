@@ -19,6 +19,25 @@ object ScannerSpec extends ZIOSpecDefault:
   val skill = "---\nname: %s\ndescription: 什么时候用\n---\n正文\n"
 
   def spec = suite("资源目录扫描")(
+    test("资源文件的位置与路径互换：classify(render(f)) == f") {
+      val alice = Owner.Agent(AgentName.wrap("alice"))
+      val files: List[AssetPath & ResourceFile] = List(
+        AssetPath.AccessFile,
+        AssetPath.SharedMemory("global"),
+        AssetPath.PrivateMemory(AgentName.wrap("alice")),
+        AssetPath.AgentFile(AgentName.wrap("alice")),
+        AssetPath.SkillMain(Owner.Platform, "deploy"),
+        AssetPath.SkillMain(alice, "deploy"),
+        AssetPath.SkillAttachment(alice, "deploy", "scripts/run.sh"),
+        AssetPath.Mcp(alice, "github"),
+        AssetPath.Secret(Owner.Platform, "API_KEY")
+      )
+      assertTrue(
+        files.forall(f => AssetPath.classify(AssetPath.render(f)) == f),
+        AssetPath.home(AssetKind.Memory, "x", alice).isEmpty,
+        AssetPath.home(AssetKind.Skill, "deploy", alice).contains(Path.of("alice/skills/deploy"))
+      )
+    },
     test("各种资源正常加载：记忆、skill（多行 description、审批脚本）、MCP、secret、agent.toml") {
       val root = tree(
         "platform/memory/global.md" -> "全局",
@@ -127,7 +146,7 @@ object ScannerSpec extends ZIOSpecDefault:
       for
         dirs  <- ZIO.service[TestEnv.Dirs]
         store <- ZIO.service[AssetStore]
-        file   = dirs.assets.resolve("platform/access.toml")
+        file   = AssetPath.AccessFile
         _     <- store.write(file, ok)
         s1    <- store.access
         _     <- store.write(file, "[roles.r\n")
