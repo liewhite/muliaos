@@ -19,7 +19,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
   def asks(n: Int): URIO[Grants, List[SecretAsk]] =
     ZIO.serviceWithZIO[Grants](_.view.map(_._1)).repeatUntil(_.size == n)
 
-  def answer(id: Long, d: AskDecision) = ZIO.serviceWithZIO[Grants](_.answer(id, d))
+  def answer(id: String, d: AskDecision) = ZIO.serviceWithZIO[Grants](_.answer(id, d))
 
   def in(session: String, what: String) = AskPurpose(Some(SessionId.wrap(session)), what)
 
@@ -97,7 +97,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         late  <- answer(w1.head.id, AskDecision.Once("迟了")).either
       yield assertTrue(
         reason(shell).contains("不能注入自写命令"),
-        w2.map(x => (x.agent, x.key, x.purpose, x.box)) == List((a.id, "PK_TOKEN", in("s1", "cmd1"), box), (a.id, "PK_TOKEN", in("s2", "cmd2"), box)),
+        w2.map(x => (x.agent, x.key, x.purpose, x.box)).toSet == Set((a.id, "PK_TOKEN", in("s1", "cmd1"), box), (a.id, "PK_TOKEN", in("s2", "cmd2"), box)),
         note == Asked(Slot(a.id, "PK_TOKEN"), in("s1", "cmd1")),
         r2 == Map("PK_TOKEN" -> "v-once"),
         w1.map(_.purpose.what) == List("cmd1"),

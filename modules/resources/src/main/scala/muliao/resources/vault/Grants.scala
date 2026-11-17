@@ -23,7 +23,7 @@ trait Grants:
   def view: UIO[(List[SecretAsk], List[SecretGrant])]
 
   /** 答复一个请求；它已经没了（调用已结束或已答复）报 NotFound。 */
-  def answer(id: Long, decision: AskDecision): IO[AppError, Unit]
+  def answer(id: String, decision: AskDecision): IO[AppError, Unit]
 
   /** 收回一段时间的授权。 */
   def revoke(slot: Slot): UIO[Unit]
@@ -36,7 +36,7 @@ object Grants:
     ZLayer {
       for
         bus   <- ZIO.service[ChangeBus]
-        state <- Ref.make(State(Map.empty, Map.empty, 0L))
+        state <- Ref.make(State(Map.empty, Map.empty))
         hub   <- Hub.sliding[Asked](256)
       yield Live(bus, state, hub)
     }
@@ -51,7 +51,7 @@ object Grants:
   /** 一段时间的授权，到 `until`（epoch 毫秒）为止。 */
   private final case class Granted(plain: Plain, until: Long)
 
-  private final case class State(asks: Map[Long, Waiting], grants: Map[Slot, Granted], lastId: Long):
+  private final case class State(asks: Map[String, Waiting], grants: Map[Slot, Granted]):
     /** 去掉到期的授权：每次读写状态时顺手做，明文不留到下次之后（不另起定时器）。 */
     def at(t: Long): State = copy(grants = grants.filter((_, g) => g.until > t))
 
@@ -68,24 +68,23 @@ object Grants:
         .map(_.value)
 
     /** 有生效的授权就拿到明文；否则登记一个请求。 */
-    private def register(slot: Slot, purpose: AskPurpose, box: PasskeyBox): UIO[Either[Plain, (Long, Promise[AppError, Plain])]] =
+    private def register(slot: Slot, purpose: AskPurpose, box: PasskeyBox): UIO[Either[Plain, (String, Promise[AppError, Plain])]] =
       for
         t     <- now
         reply <- Promise.make[AppError, Plain]
+        id    <- Random.nextUUID.map(_.toString) // 全局唯一：界面按它复用卡片，重启后不能撞上旧的
         got <- state.modify { s0 =>
                  val s = s0.at(t)
                  s.grants.get(slot) match
                    case Some(g) => (Left(g.plain), s)
-                   case None =>
-                     val id = s.lastId + 1
-                     (Right(id -> reply), s.copy(asks = s.asks.updated(id, Waiting(slot, reply, purpose, box, t)), lastId = id))
+                   case None    => (Right(id -> reply), s.copy(asks = s.asks.updated(id, Waiting(slot, reply, purpose, box, t))))
                }
       yield got
 
     /** 调用结束（拿到、被拒绝或被中断）：撤下它的请求。 */
-    private def withdraw(got: Either[Plain, (Long, Promise[AppError, Plain])]): UIO[Unit] =
+    private def withdraw(got: Either[Plain, (String, Promise[AppError, Plain])]): UIO[Unit] =
       ZIO.foreachDiscard(got.toOption) { (id, _) =>
-        state.modify(s => (s.asks.contains(id), s.copy(asks = s.asks - id))).flatMap(bus.publish(Topic.Vault).when(_))
+        state.update(s => s.copy(asks = s.asks - id)) *> bus.publish(Topic.Vault)
       }
 
     def view: UIO[(List[SecretAsk], List[SecretGrant])] =
@@ -93,11 +92,11 @@ object Grants:
         t <- now
         s <- state.updateAndGet(_.at(t))
       yield
-        val asks   = s.asks.toList.sortBy(_._1).map((id, w) => SecretAsk(id, w.slot.agent, w.slot.key, w.purpose, w.since, w.box))
+        val asks   = s.asks.toList.sortBy((_, w) => w.since).map((id, w) => SecretAsk(id, w.slot.agent, w.slot.key, w.purpose, w.since, w.box))
         val grants = s.grants.toList.sortBy((k, _) => (k.agent.value, k.key)).map((k, g) => SecretGrant(k.agent, k.key, g.until))
         (asks, grants)
 
-    def answer(id: Long, decision: AskDecision): IO[AppError, Unit] =
+    def answer(id: String, decision: AskDecision): IO[AppError, Unit] =
       for
         t <- now
         settled <- state.modify { s0 =>
@@ -113,7 +112,7 @@ object Grants:
                              // 授权覆盖这个 agent 这个 secret 的全部请求
                              val p            = Plain(v)
                              val (mine, rest) = s.asks.partition((_, x) => x.slot == w.slot)
-                             (Some(mine.values.toList.map(_.reply -> Exit.succeed(p))), State(rest, s.grants.updated(w.slot, Granted(p, t + minutes.toLong * 60_000)), s.lastId))
+                             (Some(mine.values.toList.map(_.reply -> Exit.succeed(p))), State(rest, s.grants.updated(w.slot, Granted(p, t + minutes.toLong * 60_000))))
                    }
         replies <- ZIO.fromOption(settled).orElseFail(AppError.notFound("这个请求已经没有了（调用已结束或已答复）"))
         _       <- ZIO.foreachDiscard(replies)((r, e) => r.done(e))
