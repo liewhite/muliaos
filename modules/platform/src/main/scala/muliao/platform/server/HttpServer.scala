@@ -99,6 +99,10 @@ object HttpServer:
   def openApi(endpoints: List[AnyEndpoint], version: String): String =
     OpenAPIDocsInterpreter().toOpenAPI(endpoints, "muliao", version).asJson.printWith(Printer.spaces2.copy(dropNullValues = true))
 
+  /** 请求体上限。zio-http 默认只收约 100KB，附件上传（截图、语音、文档）会被 413 拒收；请求体整个读进内存，
+    * 所以仍留一个远大于日常附件的值，只防误拖进超大文件把内存撑爆，不是业务限制。 */
+  private val MaxRequestBytes: Int = 256 * 1024 * 1024
+
   /** 起服务，直到 scope 结束。`domain` 是各领域的接口；返回实际监听的端口（配置 0 时随机）。 */
   def serve(
       settings: ServerSettings,
@@ -115,6 +119,7 @@ object HttpServer:
     val routes   = ZioHttpInterpreter(serverOptions).toHttp(all)
     val config   = Server.Config.default
       .binding(settings.host, settings.port)
+      .disableRequestStreaming(MaxRequestBytes)
       .responseCompression(Server.Config.ResponseCompressionConfig.default)
     for
       started <- Promise.make[Nothing, Int]

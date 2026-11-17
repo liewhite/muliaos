@@ -46,7 +46,16 @@ object Http:
 
   /** 调一个要登录的接口。cookie 由浏览器自己带，安全输入给 None。 */
   def call[I, O](e: Endpoint[Option[String], I, ApiError, O, Any])(in: I): Future[O] =
-    finish(interpreter.toSecureRequest(e, base).apply(None).apply(in).send(backend).map(_.body))
+    finish(interpreter.toSecureRequest(e, base).apply(None).apply(in).send(backend).map { resp =>
+      resp.body match
+        case DecodeResult.Value(v)     => v
+        case _: DecodeResult.Failure => throw FailureException(unreadable(resp.code.code))
+    })
+
+  /** 回应不是接口声明里的形状（通常是 HTTP 层自己回的状态码，没有统一错误体）：按状态码给一句人话。 */
+  private def unreadable(status: Int): Failure = Failure.Transport(status match
+    case 413 => "内容太大，服务端拒收（HTTP 413）"
+    case _ => s"服务端的回应看不懂（HTTP $status）")
 
   /** 只看状态码的 POST：登录、退出登录。它们的回应是 Set-Cookie，浏览器不让脚本读这个头，按接口声明解码必然失败，所以不走 tapir 客户端。 */
   def postStatus(path: String, json: Option[String]): Future[Unit] =
@@ -57,26 +66,24 @@ object Http:
       init.body = body
       init.headers = js.Dictionary("Content-Type" -> "application/json")
     }
-    val sent = dom.fetch(path, init).toFuture.flatMap { resp =>
-      if resp.ok then Future.successful(DecodeResult.Value(Right(())))
+    val sent: Future[Either[ApiError, Unit]] = dom.fetch(path, init).toFuture.flatMap { resp =>
+      if resp.ok then Future.successful(Right(()))
       else
         resp.text().toFuture.map { body =>
           import zio.json.*
           body.fromJson[ApiError] match
-            case Right(e) => DecodeResult.Value(Left(e))
-            case Left(_)  => DecodeResult.Value(Left(ApiError(ErrorKind.Internal, s"HTTP ${resp.status}")))
+            case Right(e) => Left(e)
+            case Left(_)  => throw FailureException(unreadable(resp.status))
         }
     }
     finish(sent)
 
-  private def finish[O](f: Future[DecodeResult[Either[ApiError, O]]]): Future[O] =
+  private def finish[O](f: Future[Either[ApiError, O]]): Future[O] =
     f.transform {
-      case scala.util.Success(DecodeResult.Value(Right(o))) => scala.util.Success(o)
-      case scala.util.Success(DecodeResult.Value(Left(e))) =>
+      case scala.util.Success(Right(o)) => scala.util.Success(o)
+      case scala.util.Success(Left(e)) =>
         if e.kind == ErrorKind.Unauthorized then unauthorized.emit(())
         scala.util.Failure(FailureException(Failure.Api(e)))
-      case scala.util.Success(other: DecodeResult.Failure) =>
-        scala.util.Failure(FailureException(Failure.Transport(s"服务端的回应看不懂：$other")))
       case scala.util.Failure(e: FailureException) => scala.util.Failure(e)
       case scala.util.Failure(e) =>
         scala.util.Failure(FailureException(Failure.Transport(s"连不上服务端：${Option(e.getMessage).getOrElse(e.toString)}")))

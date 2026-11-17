@@ -153,6 +153,23 @@ object HttpServerSpec extends ZIOSpecDefault:
         )
       }
     },
+    test("附件级的请求体（5MB）收下（zio-http 默认只收约 100KB）") {
+      import sttp.tapir.ztapir.{byteArrayBody, stringBody, stringToPath, RichZEndpoint}
+      val size  = muliao.contract.Api.base.post.in("size").in(byteArrayBody).out(stringBody)
+      val route = Route.unsecured(size.zServerLogic[Any](b => ZIO.succeed(b.length.toString)))
+      def post(base: String, n: Int) =
+        call(Request.post(URL.decode(base + "/api/size").toOption.get, Body.fromArray(new Array[Byte](n))))
+      ZIO.scoped {
+        for
+          a    <- auth()
+          bus  <- ChangeBus.layer.build.map(_.get[ChangeBus])
+          port <- HttpServer.serve(settings, a, bus, List(route), "test")
+          base  = s"http://127.0.0.1:$port"
+          big  <- post(base, 5 * 1024 * 1024)
+          got  <- ZIO.foreach(big.toOption)(_.body.asString).orDie
+        yield assertTrue(got.contains((5 * 1024 * 1024).toString))
+      }
+    },
     test("接口描述包含平台接口") {
       val doc = HttpServer.openApi(List(Endpoints.stream(muliao.contract.Api.changes), HttpServer.openApiEndpoint) ++ muliao.contract.AuthApi.all, "t")
       assertTrue(doc.contains("/api/auth/login"), doc.contains("/api/events"), doc.contains("ApiError"))
