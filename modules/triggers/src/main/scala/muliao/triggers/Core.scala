@@ -177,7 +177,7 @@ private[triggers] final case class Core(
     t.precheck match
       case None => start(t, event, None, checkedAt = None)
       case Some(p) =>
-        Checks.run(exec, t.agent, p, cause.eventLines, settings.precheckTimeout).flatMap {
+        Checks.run(exec, t.agent, t.name, p, cause.eventLines, settings.precheckTimeout).flatMap {
           case Left(err) =>
             recordFault(t, FaultSource.Precheck, err).when(cause.recordsFault).as(Fired.NotDone(s"前置检查失败：$err"))
           case Right(out) =>

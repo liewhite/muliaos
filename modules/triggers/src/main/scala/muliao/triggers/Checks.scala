@@ -1,9 +1,10 @@
 package muliao.triggers
 
-import muliao.contract.{AgentId, FireWhen, SecretUse}
+import muliao.contract.{AgentId, AskPurpose, FireWhen, TriggerName}
 import muliao.exec.{Exec, Line, Program, Stderr}
 import muliao.platform.AppError
 import muliao.resources.AgentExec
+import muliao.resources.vault.SecretUse
 import zio.*
 
 /** 前置检查跑出来的结论。 */
@@ -35,9 +36,9 @@ object Checks:
   /** 以 agent 身份跑检查命令：`bash` 开 pipefail（否则 `curl … | jq` 里 curl 失败会变成静默的「没事」），`stdin` 每项一行喂给它。
     * 退出码 0 得到标准输出；非 0、超时或起不来得到失败说明（Left）。
     */
-  def run(exec: AgentExec, agent: AgentId, p: Precheck, stdin: List[String], timeout: Duration): IO[AppError, Either[String, String]] =
+  def run(exec: AgentExec, agent: AgentId, trigger: TriggerName, p: Precheck, stdin: List[String], timeout: Duration): IO[AppError, Either[String, String]] =
     val program = Program.Shell("set -o pipefail\n" + p.command)
-    exec.command(agent, program, p.secrets, SecretUse.Shell, None).either.flatMap {
+    exec.command(agent, program, p.secrets, SecretUse.Shell, AskPurpose(None, s"触发器 ${trigger.value} 的前置检查：\n${p.command}")).either.flatMap {
       case Left(e) => ZIO.succeed(Left(s"起不来：${e.message}"))
       case Right(cmd) =>
         Ref

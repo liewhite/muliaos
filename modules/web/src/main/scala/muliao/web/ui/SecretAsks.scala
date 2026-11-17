@@ -13,9 +13,9 @@ object SecretAsks:
   /** 「一段时间」的几档（分钟）。 */
   private val Spans = List(60 -> "1 小时", 8 * 60 -> "8 小时", 24 * 60 -> "24 小时")
 
-  /** 一串请求：按 (agent, secret, 时间) 保留元素，别的请求进来刷新时，正在做的授权不被打断。 */
+  /** 一串请求：按编号保留元素，别的请求进来刷新时，正在做的授权不被打断。 */
   def list(asks: Signal[List[SecretAsk]], agents: Signal[List[AgentSummary]]): HtmlElement =
-    div(cls := "flex flex-col gap-2", children <-- asks.splitSeq(a => (a.agent, a.key, a.since))(s => card(s.now(), agents)))
+    div(cls := "flex flex-col gap-2", children <-- asks.splitSeq(_.id)(s => card(s.now(), agents)))
 
   /** 这个会话里在等的请求。 */
   def forSession(id: SessionId): HtmlElement =
@@ -25,7 +25,7 @@ object SecretAsks:
   def card(a: SecretAsk, agents: Signal[List[AgentSummary]]): HtmlElement =
     val act = new Action
     def answer(d: String => AskDecision): Unit =
-      act.fire(Passkey.open(a.key, a.box).flatMap(v => Http.call(VaultApi.answerAsk)(AskAnswer(a.agent, a.key, d(v)))))
+      act.fire(Passkey.open(a.key, a.box).flatMap(v => Http.call(VaultApi.answerAsk)(AskAnswer(a.id, d(v)))))
     div(
       cls := "flex flex-col gap-2 self-stretch rounded-xl border border-warning/40 bg-surface p-3 shadow-sm",
       div(
@@ -33,7 +33,7 @@ object SecretAsks:
         Icon("KeyRound", "size-4 shrink-0 text-warning"),
         child.text <-- agents.map(as => s"${AgentsData.label(as, a.agent)} 要用 passkey secret"),
         code(cls := "font-mono", a.key),
-        span(cls := "text-muted", s"跑${a.use.shown}（${Ui.relativeTime(a.since)}）")
+        span(cls := "text-muted", Ui.relativeTime(a.since))
       ),
       pre(cls := Ui.CodeBlock + " max-h-60 overflow-auto", a.purpose.what),
       act.errorView(),
@@ -41,9 +41,9 @@ object SecretAsks:
         cls := "flex flex-wrap justify-end gap-2",
         Ui.btn(Variant.Secondary, Size.Sm, disabledIf = act.busy.signal)(
           "拒绝",
-          onClick --> (_ => act.fire(Http.call(VaultApi.answerAsk)(AskAnswer(a.agent, a.key, AskDecision.Deny))))
+          onClick --> (_ => act.fire(Http.call(VaultApi.answerAsk)(AskAnswer(a.id, AskDecision.Deny))))
         ),
-        Spans.map((m, label) => Ui.btn(Variant.Secondary, Size.Sm, disabledIf = act.busy.signal)(s"允许 $label", onClick --> (_ => answer(AskDecision.For(_, m))))),
+        Spans.map((m, label) => Ui.btn(Variant.Secondary, Size.Sm, disabledIf = act.busy.signal)(title := "这个 agent 用这个 secret 在这段时间内不再问，正在等的一并放行", s"允许 $label", onClick --> (_ => answer(AskDecision.For(_, m))))),
         Ui.btn(Variant.Primary, Size.Sm, pending = act.busy.signal)("允许一次", onClick --> (_ => answer(AskDecision.Once(_))))
       )
     )

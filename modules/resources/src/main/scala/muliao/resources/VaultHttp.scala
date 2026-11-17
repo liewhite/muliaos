@@ -21,6 +21,6 @@ final case class VaultHttp(grants: Grants, store: AssetStore):
   def routes: List[Route] =
     List(
       VaultApi.vaultState.secured(_ => state),
-      VaultApi.answerAsk.secured(a => grants.answer(Slot(a.agent, a.key), a.decision)),
+      VaultApi.answerAsk.secured(a => grants.answer(a.id, a.decision)),
       VaultApi.revokeGrant.secured(r => grants.revoke(Slot(r.agent, r.key)))
     )

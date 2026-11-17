@@ -1,8 +1,9 @@
 package muliao.workspace.scripts
 
 import muliao.exec.{Program, RealPath}
+import muliao.contract.SkillName
 import muliao.resources.SkillEntry
-import muliao.contract.{SecretUse, SkillName}
+import muliao.resources.vault.SecretUse
 import muliao.sessions.{Approvable, Pause, RunContext}
 import muliao.toolkit.*
 import muliao.workspace.tools.{CommandRunner, RunMode}

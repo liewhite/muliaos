@@ -1,9 +1,10 @@
 package muliao.workspace.tools
 
-import muliao.contract.{JobId, SecretUse}
+import muliao.contract.{AskPurpose, JobId}
 import muliao.exec.{Ending, Exec, Program}
 import muliao.platform.AppError
 import muliao.resources.AgentExec
+import muliao.resources.vault.SecretUse
 import muliao.sessions.RunContext
 import muliao.toolkit.*
 import muliao.workspace.jobs.{JobOwner, Jobs}
@@ -33,7 +34,7 @@ final class CommandRunner(exec: AgentExec, jobs: Jobs):
 
   def run(ctx: RunContext, program: Program, secrets: List[String], use: SecretUse, mode: RunMode, label: String): IO[AppError, String] =
     for
-      cmd <- exec.command(ctx.agent, program, secrets, use, Some(ctx.session))
+      cmd <- exec.command(ctx.agent, program, secrets, use, AskPurpose(Some(ctx.session), AgentExec.describe(program)))
       out <- mode match
                case RunMode.Foreground(timeout) =>
                  Exec.run(cmd.spec, timeout).flatMap { f =>

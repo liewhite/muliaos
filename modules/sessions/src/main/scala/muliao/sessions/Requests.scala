@@ -6,7 +6,7 @@ import muliao.models.mcp.{Launch, McpConnector, McpServerSpec, SecretLookup}
 import muliao.platform.{AppError, Retry}
 import muliao.platform.db.Tx
 import muliao.resources.{ResourcePaths, Resources, RunResources}
-import muliao.resources.vault.Vault
+import muliao.resources.vault.{SecretUse, Vault}
 import muliao.sessions.store.*
 import muliao.toolkit.{Tool, ToolSpec}
 import zio.*

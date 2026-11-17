@@ -1,6 +1,6 @@
 package muliao.resources
 
-import muliao.contract.{AgentId, CallId, SecretUse, SessionId}
+import muliao.contract.{AgentId, CallId, SessionId}
 import muliao.exec.{CommandSpec, Exec, Program, RealPath}
 import muliao.resources.agents.{AgentPatch, Agents, NewAgent}
 import muliao.resources.tools.AgentTools

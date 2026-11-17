@@ -1,6 +1,6 @@
 package muliao.resources.vault
 
-import muliao.contract.{AgentId, AskPurpose, AssetKind, SecretUse, SecretValue}
+import muliao.contract.{AgentId, AskPurpose, AssetKind, SecretValue}
 import muliao.platform.AppError
 import muliao.resources.VaultSettings
 import muliao.resources.access.{Action, Decision, Permissions}
@@ -12,6 +12,10 @@ import zio.*
 enum Actor:
   case Agent(id: AgentId)
   case User
+
+/** secret 用在哪：自写命令（run_shell、触发器检查与常驻命令）、skill 脚本、MCP 配置。 */
+enum SecretUse:
+  case Shell, Script, Mcp
 
 /** secret 的加密保存与解密使用。值只在这里出现：不进日志、不进错误信息。
   * 两种锁法（[[SecretLock]]）：服务端主密钥的用时直接解；passkey 的用时经 [[Grants]] 等用户在界面上解开。
@@ -141,11 +145,11 @@ object Vault:
                   yield doc
                 }
         // 权限都过了才开始解：passkey 的几个同时等用户授权，一个被拒绝就不再等其余的
-        pairs <- ZIO.foreachPar(docs)(doc => open(agent, doc, use, purpose).map(doc.key -> _))
+        pairs <- ZIO.foreachPar(docs)(doc => open(agent, doc, purpose).map(doc.key -> _))
       yield pairs.toMap
 
-    private def open(agent: AgentId, doc: SecretDoc, use: SecretUse, purpose: AskPurpose): IO[AppError, String] =
+    private def open(agent: AgentId, doc: SecretDoc, purpose: AskPurpose): IO[AppError, String] =
       doc.content.lock match
         case SecretLock.Server(token) =>
           ZIO.fromEither(fernet.decrypt(token)).mapError(r => AppError.invalid(s"secret ${doc.key} 解不开（$r），请重新存一次它的值"))
-        case SecretLock.Passkey(box) => grants.obtain(Slot(agent, doc.key), use, purpose, box)
+        case SecretLock.Passkey(box) => grants.obtain(Slot(agent, doc.key), purpose, box)

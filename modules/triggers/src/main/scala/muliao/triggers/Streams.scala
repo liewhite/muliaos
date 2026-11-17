@@ -1,8 +1,9 @@
 package muliao.triggers
 
-import muliao.contract.{AgentId, FaultSource, SecretUse, TriggerId, TriggerName}
+import muliao.contract.{AgentId, AskPurpose, FaultSource, TriggerId, TriggerName}
 import muliao.exec.{Exec, Line, Program, Stderr}
 import muliao.platform.AppError
+import muliao.resources.vault.SecretUse
 import zio.*
 
 import java.nio.charset.StandardCharsets
@@ -56,7 +57,7 @@ private[triggers] final case class Streams(core: Core, scope: Scope, hosted: Ref
     val log = paths.workspace(key.agent).resolve(Streams.logName(key.name))
     val attempt: IO[AppError, Int] = ZIO.scoped(
       for
-        cmd  <- exec.command(key.agent, Program.Shell(key.mode.command), key.mode.secrets, SecretUse.Shell, None)
+        cmd  <- exec.command(key.agent, Program.Shell(key.mode.command), key.mode.secrets, SecretUse.Shell, AskPurpose(None, s"触发器 ${key.name.value} 的常驻命令：\n${key.mode.command}"))
         at   <- now
         _    <- fails.get.flatMap(n => health.update(_.updated(id, Health(Some(at), n))))
         _    <- (Clock.sleep(tuning.stableAfter) *> stable(id, key, fails)).forkScoped
