@@ -48,8 +48,8 @@ object Http:
   def call[I, O](e: Endpoint[Option[String], I, ApiError, O, Any])(in: I): Future[O] =
     finish(interpreter.toSecureRequest(e, base).apply(None).apply(in).send(backend).map { resp =>
       resp.body match
-        case DecodeResult.Value(v)     => v
-        case _: DecodeResult.Failure => throw FailureException(unreadable(resp.code.code))
+        case DecodeResult.Value(v)     => v.left.map(Failure.Api(_))
+        case _: DecodeResult.Failure => Left(unreadable(resp.code.code))
     })
 
   /** 回应不是接口声明里的形状（通常是 HTTP 层自己回的状态码，没有统一错误体）：按状态码给一句人话。 */
@@ -66,25 +66,24 @@ object Http:
       init.body = body
       init.headers = js.Dictionary("Content-Type" -> "application/json")
     }
-    val sent: Future[Either[ApiError, Unit]] = dom.fetch(path, init).toFuture.flatMap { resp =>
+    val sent: Future[Either[Failure, Unit]] = dom.fetch(path, init).toFuture.flatMap { resp =>
       if resp.ok then Future.successful(Right(()))
       else
         resp.text().toFuture.map { body =>
           import zio.json.*
-          body.fromJson[ApiError] match
-            case Right(e) => Left(e)
-            case Left(_)  => throw FailureException(unreadable(resp.status))
+          Left(body.fromJson[ApiError].fold(_ => unreadable(resp.status), Failure.Api(_)))
         }
     }
     finish(sent)
 
-  private def finish[O](f: Future[Either[ApiError, O]]): Future[O] =
+  private def finish[O](f: Future[Either[Failure, O]]): Future[O] =
     f.transform {
       case scala.util.Success(Right(o)) => scala.util.Success(o)
-      case scala.util.Success(Left(e)) =>
-        if e.kind == ErrorKind.Unauthorized then unauthorized.emit(())
-        scala.util.Failure(FailureException(Failure.Api(e)))
-      case scala.util.Failure(e: FailureException) => scala.util.Failure(e)
+      case scala.util.Success(Left(failure)) =>
+        failure match
+          case Failure.Api(e) if e.kind == ErrorKind.Unauthorized => unauthorized.emit(())
+          case _                                                   => ()
+        scala.util.Failure(FailureException(failure))
       case scala.util.Failure(e) =>
         scala.util.Failure(FailureException(Failure.Transport(s"连不上服务端：${Option(e.getMessage).getOrElse(e.toString)}")))
     }
