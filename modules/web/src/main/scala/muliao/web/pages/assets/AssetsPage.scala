@@ -267,7 +267,7 @@ object SecretTab:
         code(cls := "font-mono", "run_shell(secrets=[KEY])"),
         " 注入同名环境变量；不允许 shell 的只能用 ",
         code(cls := "font-mono", "skill_run(secrets=[KEY])"),
-        " 经 skill 里的脚本注入。值只能设，不能看。passkey 加密的只有你的 passkey 能解开，agent 每次要用都在这里等你授权（一次或一段时间）。"
+        " 经 skill 里的脚本注入。值只能设，不能看。passkey 加密的只有你的 passkey 能解开，agent 每次要用都等你授权（一次或一段时间）：在它的会话里批准，触发器这类没有会话的在下面批准。"
       ),
       Grants.view(vault, agents),
       Ui.collapsibleForm("新建或改值")(form(list, agents, creds)),
@@ -366,51 +366,18 @@ object SecretTab:
       )
     )
 
-  /** 等授权的请求与生效中的授权：允许时浏览器用 passkey 解开，把明文交回服务端（只在内存里）。 */
+  /** 等授权的请求（全部会话的，含触发器这类没有会话的）与生效中的授权。 */
   object Grants:
-    /** 「一段时间」的几档（分钟）。 */
-    private val Spans = List(60 -> "1 小时", 8 * 60 -> "8 小时", 24 * 60 -> "24 小时")
-
     def view(state: Signal[Load[VaultState]], agents: Signal[List[AgentSummary]]): HtmlElement =
       div(
         cls := "flex flex-col gap-2",
         Ui.loading(state) { st =>
           div(
             cls := "flex flex-col gap-2",
-            // 按 (agent, secret) 保留元素：别的请求进来刷新时，正在做的授权不被打断
-            children <-- st.map(_.asks).splitSeq(a => (a.agent, a.key, a.since))(s => ask(s.now(), agents)),
+            SecretAsks.list(st.map(_.asks), agents),
             children <-- st.map(_.grants).splitSeq(g => (g.agent, g.key, g.until))(s => grant(s.now(), agents))
           )
         }
-      )
-
-    private def ask(a: SecretAsk, agents: Signal[List[AgentSummary]]): HtmlElement =
-      val act = new Action
-      def answer(d: String => AskDecision): Unit =
-        act.fire(Passkey.open(a.key, a.box).flatMap(v => Http.call(VaultApi.answerAsk)(AskAnswer(a.agent, a.key, d(v)))))
-      div(
-        cls := "alert alert--warning",
-        role := "alert",
-        div(cls := "alert__indicator", Icon("KeyRound", "size-5")),
-        div(
-          cls := "alert__content flex flex-col gap-2",
-          div(
-            cls := "alert__title",
-            child.text <-- agents.map(as => s"${AgentsData.label(as, a.agent)} 要用 "),
-            code(cls := "font-mono", a.key),
-            s"（${a.use.shown}，${Ui.relativeTime(a.since)}）"
-          ),
-          div(
-            cls := "flex flex-row flex-wrap gap-2",
-            Ui.btn(Variant.Primary, Size.Sm, pending = act.busy.signal)("允许一次", onClick --> (_ => answer(AskDecision.Once(_)))),
-            Spans.map((m, label) => Ui.btn(Variant.Secondary, Size.Sm, disabledIf = act.busy.signal)(s"允许 $label", onClick --> (_ => answer(AskDecision.For(_, m))))),
-            Ui.btn(Variant.DangerSoft, Size.Sm, disabledIf = act.busy.signal)(
-              "拒绝",
-              onClick --> (_ => act.fire(Http.call(VaultApi.answerAsk)(AskAnswer(a.agent, a.key, AskDecision.Deny))))
-            )
-          ),
-          act.errorView()
-        )
       )
 
     private def grant(g: SecretGrant, agents: Signal[List[AgentSummary]]): HtmlElement =

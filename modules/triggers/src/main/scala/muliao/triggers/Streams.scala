@@ -56,7 +56,7 @@ private[triggers] final case class Streams(core: Core, scope: Scope, hosted: Ref
     val log = paths.workspace(key.agent).resolve(Streams.logName(key.name))
     val attempt: IO[AppError, Int] = ZIO.scoped(
       for
-        cmd  <- exec.command(key.agent, Program.Shell(key.mode.command), key.mode.secrets, SecretUse.Shell)
+        cmd  <- exec.command(key.agent, Program.Shell(key.mode.command), key.mode.secrets, SecretUse.Shell, None)
         at   <- now
         _    <- fails.get.flatMap(n => health.update(_.updated(id, Health(Some(at), n))))
         _    <- (Clock.sleep(tuning.stableAfter) *> stable(id, key, fails)).forkScoped

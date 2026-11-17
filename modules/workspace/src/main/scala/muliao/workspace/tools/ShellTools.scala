@@ -33,7 +33,7 @@ final class CommandRunner(exec: AgentExec, jobs: Jobs):
 
   def run(ctx: RunContext, program: Program, secrets: List[String], use: SecretUse, mode: RunMode, label: String): IO[AppError, String] =
     for
-      cmd <- exec.command(ctx.agent, program, secrets, use)
+      cmd <- exec.command(ctx.agent, program, secrets, use, Some(ctx.session))
       out <- mode match
                case RunMode.Foreground(timeout) =>
                  Exec.run(cmd.spec, timeout).flatMap { f =>

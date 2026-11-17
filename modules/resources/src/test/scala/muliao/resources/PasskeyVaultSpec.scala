@@ -51,7 +51,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         e1    <- vault.set(Actor.Agent(a.id), "PK_TOKEN", SecretValue.Plain("降级"), None, None, Owner.Platform).either
         e2    <- vault.set(Actor.Agent(a.id), "OTHER", SecretValue.Passkey(box), None, None, Owner.Platform).either
         n     <- vault.set(Actor.User, "PK_TOKEN", SecretValue.Plain("用户改回普通的"), None, None, Owner.Platform)
-        v     <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script)
+        v     <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试"))
       yield assertTrue(
         raw.contains("[passkey]"),
         raw.contains("allow_shell = false"),
@@ -65,25 +65,25 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
       for
         (a, b, vault) <- setup
         sub   <- ZIO.serviceWithZIO[Grants](_.asked)
-        shell <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Shell).either
-        f1    <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script).fork
+        shell <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Shell, muliao.contract.AskPurpose(None, "测试")).either
+        f1    <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试")).fork
         w1    <- asks(1)
         note  <- sub.take
         _     <- answer(a.id, "PK_TOKEN", AskDecision.Once("v-once"))
         r1    <- f1.join
-        f2    <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script).fork
+        f2    <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试")).fork
         _     <- asks(1)
         _     <- answer(a.id, "PK_TOKEN", AskDecision.For("v-hour", 60))
         r2    <- f2.join
-        r3    <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Mcp)
+        r3    <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Mcp, muliao.contract.AskPurpose(None, "测试"))
         g1    <- ZIO.serviceWithZIO[Grants](_.view.map(_._2))
-        fb    <- vault.reveal(b.id, List("PK_TOKEN"), SecretUse.Script).fork
+        fb    <- vault.reveal(b.id, List("PK_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试")).fork
         wb    <- asks(1)
         _     <- answer(b.id, "PK_TOKEN", AskDecision.Deny)
         rb    <- fb.join.either
         _     <- ZIO.serviceWithZIO[Grants](_.revoke(Slot(a.id, "PK_TOKEN")))
         g2    <- ZIO.serviceWithZIO[Grants](_.view.map(_._2))
-        f4    <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script).fork
+        f4    <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试")).fork
         w4    <- asks(1)
         _     <- f4.interrupt
         w5    <- asks(1)
@@ -92,8 +92,8 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         late  <- answer(a.id, "PK_TOKEN", AskDecision.Once("迟了")).either
       yield assertTrue(
         reason(shell).contains("不能注入自写命令"),
-        w1.map(x => (x.agent, x.key, x.use, x.box)) == List((a.id, "PK_TOKEN", SecretUse.Script, box)),
-        note == Asked(Slot(a.id, "PK_TOKEN"), SecretUse.Script),
+        w1.map(x => (x.agent, x.key, x.use, x.purpose.what, x.box)) == List((a.id, "PK_TOKEN", SecretUse.Script, "测试", box)),
+        note == Asked(Slot(a.id, "PK_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试")),
         r1 == Map("PK_TOKEN" -> "v-once"),
         r2 == Map("PK_TOKEN" -> "v-hour"),
         r3 == Map("PK_TOKEN" -> "v-hour"),
@@ -110,16 +110,16 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
     test("几个调用同时等同一个：一次答复都拿到；到期后再问") {
       for
         (a, _, vault) <- setup
-        f1 <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script).fork
+        f1 <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试")).fork
         _  <- asks(1)
-        f2 <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script).fork
+        f2 <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试")).fork
         _  <- ZIO.yieldNow.repeatN(50)
         w  <- asks(1)
         _  <- answer(a.id, "PK_TOKEN", AskDecision.For("v", 30))
         r1 <- f1.join
         r2 <- f2.join
         // 授权按测试时钟（从 0 起）到 30 分钟；换成真实时钟就早过期了（拨测试时钟会让 AssetStore 的轮询空转太多次）
-        f3 <- ZIO.withClock(Clock.ClockLive)(vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script)).fork
+        f3 <- ZIO.withClock(Clock.ClockLive)(vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试"))).fork
         w3 <- ZIO.withClock(Clock.ClockLive)(asks(1))
         _  <- f3.interrupt
       yield assertTrue(w.size == 1, r1 == r2, r1 == Map("PK_TOKEN" -> "v"), w3.size == 1)

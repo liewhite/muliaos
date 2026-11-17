@@ -9,7 +9,7 @@ import zio.*
 final case class Slot(agent: AgentId, key: String)
 
 /** 有 agent 开始等某个 passkey secret 的授权（同一个 agent、同一个 secret 已在等的不再发）。 */
-final case class Asked(slot: Slot, use: SecretUse)
+final case class Asked(slot: Slot, use: SecretUse, purpose: AskPurpose)
 
 /** passkey secret 的授权：服务端解不开这类 secret，要用时等用户在界面上用 passkey 解开交回明文。
   * 同一 (agent, secret) 的调用合成一个请求；「一次」只交给答复时在等的调用，「一段时间」到期前同一 agent 再用不再问（到期的在下次读写状态时删掉）。
@@ -17,7 +17,7 @@ final case class Asked(slot: Slot, use: SecretUse)
   */
 trait Grants:
   /** 取明文：有生效的授权直接给；否则登记（或加入）等授权的请求，等到用户答复。 */
-  def obtain(slot: Slot, use: SecretUse, box: PasskeyBox): IO[AppError, String]
+  def obtain(slot: Slot, use: SecretUse, purpose: AskPurpose, box: PasskeyBox): IO[AppError, String]
 
   /** 等授权的请求与生效中的授权（不含明文）。 */
   def view: UIO[(List[SecretAsk], List[SecretGrant])]
@@ -48,14 +48,14 @@ object Grants:
   /** 一个 (agent, secret) 现在的状态。 */
   private enum Entry:
     /** 有调用在等这个答复 */
-    case Waiting(reply: Promise[AppError, Plain], use: SecretUse, box: PasskeyBox, since: Long)
+    case Waiting(reply: Promise[AppError, Plain], use: SecretUse, purpose: AskPurpose, box: PasskeyBox, since: Long)
     /** 一段时间的授权，到 `until`（epoch 毫秒）为止 */
     case Granted(plain: Plain, until: Long)
 
   private final case class Live(bus: ChangeBus, state: Ref[Map[Slot, Entry]], hub: Hub[Asked]) extends Grants:
     private val now = Clock.currentTime(java.util.concurrent.TimeUnit.MILLISECONDS)
 
-    def obtain(slot: Slot, use: SecretUse, box: PasskeyBox): IO[AppError, String] =
+    def obtain(slot: Slot, use: SecretUse, purpose: AskPurpose, box: PasskeyBox): IO[AppError, String] =
       for
         t     <- now
         fresh <- Promise.make[AppError, Plain]
@@ -64,12 +64,12 @@ object Grants:
                    m.get(slot) match
                      case Some(Entry.Granted(p, _)) => (Right(p), m)
                      case Some(w: Entry.Waiting)    => (Left(w.reply), m)
-                     case None                      => (Left(fresh), m.updated(slot, Entry.Waiting(fresh, use, box, t)))
+                     case None                      => (Left(fresh), m.updated(slot, Entry.Waiting(fresh, use, purpose, box, t)))
                  }
         plain <- found match
                    case Right(p) => ZIO.succeed(p)
                    case Left(reply) =>
-                     (bus.publish(Topic.Vault) *> hub.publish(Asked(slot, use))).when(reply eq fresh) *> reply.await
+                     (bus.publish(Topic.Vault) *> hub.publish(Asked(slot, use, purpose))).when(reply eq fresh) *> reply.await
       yield plain.value
 
     def view: UIO[(List[SecretAsk], List[SecretGrant])] =
@@ -78,7 +78,7 @@ object Grants:
         m <- state.updateAndGet(live(_, t))
       yield
         val sorted = m.toList.sortBy((s, _) => (s.agent.value, s.key))
-        val asks   = sorted.collect { case (s, w: Entry.Waiting) => SecretAsk(s.agent, s.key, w.use, w.since, w.box) }
+        val asks   = sorted.collect { case (s, w: Entry.Waiting) => SecretAsk(s.agent, s.key, w.use, w.purpose, w.since, w.box) }
         val grants = sorted.collect { case (s, Entry.Granted(_, until)) => SecretGrant(s.agent, s.key, until) }
         (asks.sortBy(_.since), grants)
 

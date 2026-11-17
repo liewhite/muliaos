@@ -37,7 +37,7 @@ object Checks:
     */
   def run(exec: AgentExec, agent: AgentId, p: Precheck, stdin: List[String], timeout: Duration): IO[AppError, Either[String, String]] =
     val program = Program.Shell("set -o pipefail\n" + p.command)
-    exec.command(agent, program, p.secrets, SecretUse.Shell).either.flatMap {
+    exec.command(agent, program, p.secrets, SecretUse.Shell, None).either.flatMap {
       case Left(e) => ZIO.succeed(Left(s"起不来：${e.message}"))
       case Right(cmd) =>
         Ref

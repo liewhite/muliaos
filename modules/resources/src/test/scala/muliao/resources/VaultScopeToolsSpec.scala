@@ -56,17 +56,17 @@ object VaultScopeToolsSpec extends ZIOSpecDefault:
         file   = dirs.assets.resolve("alice/secrets/ALICE_TOKEN.toml")
         raw   <- ZIO.succeed(Files.readString(file))
         perm  <- ZIO.succeed(Files.getPosixFilePermissions(file).toString)
-        s1    <- vault.reveal(a.id, List("ALICE_TOKEN"), SecretUse.Script)
-        e1    <- vault.reveal(a.id, List("ALICE_TOKEN"), SecretUse.Shell).either
-        e2    <- vault.reveal(b.id, List("ALICE_TOKEN"), SecretUse.Script).either
+        s1    <- vault.reveal(a.id, List("ALICE_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试"))
+        e1    <- vault.reveal(a.id, List("ALICE_TOKEN"), SecretUse.Shell, muliao.contract.AskPurpose(None, "测试")).either
+        e2    <- vault.reveal(b.id, List("ALICE_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试")).either
         e3    <- vault.set(Actor.Agent(b.id), "ALICE_TOKEN", muliao.contract.SecretValue.Plain("hack"), None, None, Owner.Platform).either
         _     <- agents.flatMap(_.update(b.id, AgentPatch(allow = Some(List("use:secret:ALICE_*")))))
-        s2    <- vault.reveal(b.id, List("ALICE_TOKEN"), SecretUse.Mcp)
+        s2    <- vault.reveal(b.id, List("ALICE_TOKEN"), SecretUse.Mcp, muliao.contract.AskPurpose(None, "测试"))
         n2    <- vault.set(Actor.Agent(a.id), "ALICE_TOKEN", muliao.contract.SecretValue.Plain("v2"), Some(""), None, Owner.Platform)
-        s3    <- vault.reveal(a.id, List("ALICE_TOKEN"), SecretUse.Script)
+        s3    <- vault.reveal(a.id, List("ALICE_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试"))
         raw2  <- ZIO.succeed(Files.readString(file))
         e4    <- vault.set(Actor.Agent(a.id), "bad-key", muliao.contract.SecretValue.Plain("v"), None, None, Owner.Platform).either
-        e5    <- vault.reveal(a.id, List("NOPE"), SecretUse.Script).either
+        e5    <- vault.reveal(a.id, List("NOPE"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试")).either
       yield assertTrue(
         n1,
         !raw.contains("明文 v1"),
@@ -196,8 +196,8 @@ object VaultScopeToolsSpec extends ZIOSpecDefault:
         vs     = tools("vault_set").spec
         args   = """{"key":"MY_TOKEN","value":"top-secret","allow_shell":false}""".fromJson[Json].toOption.get
         out   <- tools("vault_set").invoke(args, Ctx(b.id))
-        got   <- vault.reveal(b.id, List("MY_TOKEN"), SecretUse.Script)
-        sh    <- vault.reveal(b.id, List("MY_TOKEN"), SecretUse.Shell).either
+        got   <- vault.reveal(b.id, List("MY_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试"))
+        sh    <- vault.reveal(b.id, List("MY_TOKEN"), SecretUse.Shell, muliao.contract.AskPurpose(None, "测试")).either
         ga    <- tools("get_agent").invoke(Json.Obj("agent" -> Json.Str("BOB")), Ctx(a.id))
         la    <- tools("list_agents").invoke(Json.Obj(), Ctx(a.id))
         self  <- tools("delete_agent").invoke(Json.Obj("agent" -> Json.Str("alice")), Ctx(a.id)).either

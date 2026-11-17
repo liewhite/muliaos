@@ -42,8 +42,11 @@ object SecretValue:
     given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
     Schema.derived
 
+/** 要 secret 做什么：哪个会话（触发器等没有会话的为空）、拿去跑什么（命令全文、skill 脚本与参数、要连的 MCP）。给用户判断批不批。 */
+final case class AskPurpose(session: Option[SessionId], what: String) derives JsonCodec, Schema
+
 /** 某 agent 要用某个 passkey secret，正等用户授权。`box` 给浏览器解密用。 */
-final case class SecretAsk(agent: AgentId, key: String, use: SecretUse, since: Long, box: PasskeyBox) derives JsonCodec, Schema
+final case class SecretAsk(agent: AgentId, key: String, use: SecretUse, purpose: AskPurpose, since: Long, box: PasskeyBox) derives JsonCodec, Schema
 
 /** 一段时间的授权：到 `until`（epoch 毫秒）为止这个 agent 用这个 secret 不再问。 */
 final case class SecretGrant(agent: AgentId, key: String, until: Long) derives JsonCodec, Schema

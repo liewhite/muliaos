@@ -1,6 +1,6 @@
 package muliao.resources.vault
 
-import muliao.contract.{AgentId, AssetKind, SecretUse, SecretValue}
+import muliao.contract.{AgentId, AskPurpose, AssetKind, SecretUse, SecretValue}
 import muliao.platform.AppError
 import muliao.resources.VaultSettings
 import muliao.resources.access.{Action, Decision, Permissions}
@@ -30,9 +30,9 @@ trait Vault:
   ): IO[AppError, Boolean]
 
   /** 解出某 agent 能用的一组 secret。不能用的、`allow_shell = false` 却要注入自写命令的、解不开的都报错并点名是哪个 key。
-    * 其中 passkey 加密的没有生效的授权时，等用户授权（几个同时等），被拒绝报错。
+    * 其中 passkey 加密的没有生效的授权时，等用户授权（几个同时等），被拒绝报错；`purpose` 给用户看拿去做什么、在哪个会话里批。
     */
-  def reveal(agent: AgentId, keys: List[String], use: SecretUse): IO[AppError, Map[String, String]]
+  def reveal(agent: AgentId, keys: List[String], use: SecretUse, purpose: AskPurpose): IO[AppError, Map[String, String]]
 
 object Vault:
   val layer: ZLayer[VaultSettings & AssetStore & Agents & Grants, AppError, Vault] =
@@ -123,7 +123,7 @@ object Vault:
           if text.isEmpty then ZIO.fail(AppError.invalid("secret 的值不能为空")) else ZIO.succeed(SecretLock.Server(fernet.encrypt(text, now)))
         case (_, _, SecretValue.Passkey(box)) => ZIO.succeed(SecretLock.Passkey(box))
 
-    def reveal(agent: AgentId, keys: List[String], use: SecretUse): IO[AppError, Map[String, String]] =
+    def reveal(agent: AgentId, keys: List[String], use: SecretUse, purpose: AskPurpose): IO[AppError, Map[String, String]] =
       for
         perms <- permissions(agent)
         snap  <- store.snapshot
@@ -141,11 +141,11 @@ object Vault:
                   yield doc
                 }
         // 权限都过了才开始解：passkey 的几个同时等用户授权，一个被拒绝就不再等其余的
-        pairs <- ZIO.foreachPar(docs)(doc => open(agent, doc, use).map(doc.key -> _))
+        pairs <- ZIO.foreachPar(docs)(doc => open(agent, doc, use, purpose).map(doc.key -> _))
       yield pairs.toMap
 
-    private def open(agent: AgentId, doc: SecretDoc, use: SecretUse): IO[AppError, String] =
+    private def open(agent: AgentId, doc: SecretDoc, use: SecretUse, purpose: AskPurpose): IO[AppError, String] =
       doc.content.lock match
         case SecretLock.Server(token) =>
           ZIO.fromEither(fernet.decrypt(token)).mapError(r => AppError.invalid(s"secret ${doc.key} 解不开（$r），请重新存一次它的值"))
-        case SecretLock.Passkey(box) => grants.obtain(Slot(agent, doc.key), use, box)
+        case SecretLock.Passkey(box) => grants.obtain(Slot(agent, doc.key), use, purpose, box)

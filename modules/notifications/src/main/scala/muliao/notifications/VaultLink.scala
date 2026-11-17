@@ -4,13 +4,17 @@ import muliao.resources.agents.Agents
 import muliao.resources.vault.{Asked, Grants}
 import zio.*
 
-/** 有 agent 开始等 passkey secret 的授权时通知用户（#915），点开是 Secret 页上的待授权列表。 */
+/** 有 agent 开始等 passkey secret 的授权时通知用户（#915）：点开是那个会话（在那里看到要跑什么并批准）；没有会话的（触发器）去 Secret 页。 */
 object VaultLink:
-  /** 授权页的前端路由（AI 资产的 Secret 标签）。 */
+  /** 没有会话时的授权页（AI 资产的 Secret 标签）。 */
   val Page = "/ai-assets?kind=secret"
 
+  /** 要拿去做什么只取第一行、截短（全文在会话或 Secret 页上）。 */
   def notice(agent: String, a: Asked): Notice =
-    Notice(s"$agent 要用 secret ${a.slot.key}", s"用在${a.use.shown}，等你用 passkey 授权（一次或一段时间）或拒绝。", Target.Page(Page))
+    val first = a.purpose.what.linesIterator.map(_.trim).find(_.nonEmpty).getOrElse("")
+    val what  = if first.length > 120 then first.take(120) + "…" else first
+    val where = a.purpose.session.fold("在 Secret 页")(_ => "点开在会话里")
+    Notice(s"$agent 要用 secret ${a.slot.key}", s"要拿它跑（${a.use.shown}）：$what。${where}用 passkey 批准（一次或一段时间）或拒绝。", a.purpose.session.fold(Target.Page(Page))(Target.Session(_)))
 
   /** 在调用方的 scope 里订阅并转发：返回时已订上。 */
   def start(grants: Grants, agents: Agents, n: Notifications): URIO[Scope, Unit] =

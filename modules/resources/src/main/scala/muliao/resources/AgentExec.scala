@@ -1,6 +1,6 @@
 package muliao.resources
 
-import muliao.contract.{AgentId, SecretUse}
+import muliao.contract.{AgentId, AskPurpose, SecretUse, SessionId}
 import muliao.exec.{CommandSpec, Program, RealPath, Sandbox, SecretEnv}
 import muliao.platform.AppError
 import muliao.resources.vault.Vault
@@ -15,8 +15,10 @@ final case class AgentCommand(spec: CommandSpec, scope: Sandbox.Confined)
   * 保证工作目录、写沙箱与 secret 权限只有一种算法。
   */
 trait AgentExec:
-  /** 算出命令规格：在 agent 的工作目录执行（不存在就建），写沙箱是它的可写范围，`secrets` 按用途检查权限后作为环境变量注入。 */
-  def command(agent: AgentId, program: Program, secrets: List[String], use: SecretUse): IO[AppError, AgentCommand]
+  /** 算出命令规格：在 agent 的工作目录执行（不存在就建），写沙箱是它的可写范围，`secrets` 按用途检查权限后作为环境变量注入。
+    * `session`：在哪个会话里跑（触发器为空）；passkey secret 等授权时，用户在那个会话里看到要跑的命令并批准。
+    */
+  def command(agent: AgentId, program: Program, secrets: List[String], use: SecretUse, session: Option[SessionId]): IO[AppError, AgentCommand]
 
   /** 命令输出里有写被拦下（Operation not permitted）且路径确实不在可写范围时，补一句被什么拦、找谁授权；没有就原样返回。 */
   def annotate(agent: AgentId, scope: Sandbox.Confined, output: String): UIO[String]
@@ -28,6 +30,11 @@ object AgentExec:
   private val Denied = """(/[^\s:'"]+)['"]?:? Operation not permitted""".r
 
   /** 输出里被拒绝写的路径（去重，最多几个）。 */
+  /** 给用户看的命令：脚本原文，或程序与参数。 */
+  def describe(p: Program): String = p match
+    case Program.Shell(script)    => script
+    case Program.Argv(prog, args) => (prog +: args).mkString(" ")
+
   def deniedPaths(output: String): List[String] = Denied.findAllMatchIn(output).map(_.group(1)).toList.distinct.take(5)
 
   /** 带 setuid 位的文件：macOS 不让沙箱里的进程执行它，报的也是 Operation not permitted。 */
@@ -36,11 +43,11 @@ object AgentExec:
 
   final case class Live(resources: Resources, vault: Vault, paths: ResourcePaths) extends AgentExec:
 
-    def command(agent: AgentId, program: Program, secrets: List[String], use: SecretUse): IO[AppError, AgentCommand] =
+    def command(agent: AgentId, program: Program, secrets: List[String], use: SecretUse, session: Option[SessionId]): IO[AppError, AgentCommand] =
       for
         dir    <- paths.ensureWorkspace(agent)
         scope  <- resources.writableScope(agent)
-        values <- if secrets.isEmpty then ZIO.succeed(Map.empty[String, String]) else vault.reveal(agent, secrets.distinct, use)
+        values <- if secrets.isEmpty then ZIO.succeed(Map.empty[String, String]) else vault.reveal(agent, secrets.distinct, use, AskPurpose(session, AgentExec.describe(program)))
         env     = Chunk.fromIterable(secrets.distinct.flatMap(k => values.get(k).map(SecretEnv(k, _))))
       yield AgentCommand(CommandSpec(program, dir, scope, secrets = env), scope)
 

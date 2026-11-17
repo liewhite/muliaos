@@ -319,6 +319,8 @@ object SessionView:
           },
           div(cls := "flex flex-col gap-3", children <-- d.map(_.queued).splitSeq(_.id)(q => transcript.queued(q.now()))),
           child.maybe <-- d.map(_.run).distinct.map(r => runStatus(r, () => action.run(Http.call(SessionsApi.retry)(id)): Unit)),
+          // 正在跑的命令要用 passkey secret，在这里批准（#915）
+          SecretAsks.forSession(id),
           Waits.panel(d, action)
         )
       }

@@ -77,9 +77,10 @@ private[sessions] final case class Requests(
     val specs = Chunk.fromIterable(r.mcps.filter(_.config.enabled).map(m => McpServerSpec(m.name, m.config.transport)))
     if specs.isEmpty then ZIO.succeed(McpTools(Nil, Nil))
     else
+      val purpose = AskPurpose(Some(i.id), s"连接 MCP：${specs.map(_.name).mkString("、")}（本次运行开头）")
       val lookup = new SecretLookup:
         def reveal(key: String): IO[AppError, String] =
-          vault.reveal(i.agent, List(key), SecretUse.Mcp).flatMap(m => ZIO.fromOption(m.get(key)).orElseFail(AppError.invalid(s"取不到 secret $key")))
+          vault.reveal(i.agent, List(key), SecretUse.Mcp, purpose).flatMap(m => ZIO.fromOption(m.get(key)).orElseFail(AppError.invalid(s"取不到 secret $key")))
       resources.writableScope(i.agent).either.flatMap {
         case Left(e) => ZIO.succeed(McpTools(Nil, List(s"MCP 这次没有连：算写沙箱失败（${e.message}）")))
         case Right(scope) =>
