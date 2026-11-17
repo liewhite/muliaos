@@ -379,7 +379,7 @@ object SecretTab:
             cls := "flex flex-col gap-2",
             // 按 (agent, secret) 保留元素：别的请求进来刷新时，正在做的授权不被打断
             children <-- st.map(_.asks).splitSeq(a => (a.agent, a.key, a.since))(s => ask(s.now(), agents)),
-            children <-- st.map(_.grants.filter(_.until > scala.scalajs.js.Date.now())).splitSeq(g => (g.agent, g.key, g.until))(s => grant(s.now(), agents))
+            children <-- st.map(_.grants).splitSeq(g => (g.agent, g.key, g.until))(s => grant(s.now(), agents))
           )
         }
       )
