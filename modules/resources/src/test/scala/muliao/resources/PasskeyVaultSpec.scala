@@ -50,7 +50,6 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         raw   <- ZIO.succeed(Files.readString(dirs.assets.resolve("alice/secrets/PK_TOKEN.toml")))
         e1    <- vault.set(Actor.Agent(a.id), "PK_TOKEN", SecretValue.Plain("降级"), None, None, Owner.Platform).either
         e2    <- vault.set(Actor.Agent(a.id), "OTHER", SecretValue.Passkey(box), None, None, Owner.Platform).either
-        e3    <- vault.set(Actor.User, "BAD", SecretValue.Passkey(box.copy(iv = "")), None, None, Owner.Platform).either
         n     <- vault.set(Actor.User, "PK_TOKEN", SecretValue.Plain("用户改回普通的"), None, None, Owner.Platform)
         v     <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script)
       yield assertTrue(
@@ -58,12 +57,11 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         raw.contains("allow_shell = false"),
         reason(e1).contains("只能由用户在界面上改值"),
         reason(e2).contains("只能由用户在界面上设值"),
-        reason(e3).contains("缺字段"),
         !n,
         v == Map("PK_TOKEN" -> "用户改回普通的")
       )
     },
-    test("没授权时等用户：一次只给这次；一段时间内不再问、收回后再问；按 agent 隔离；权限与 allow_shell 先查") {
+    test("没授权时等用户：一次只给这次；一段时间内不再问、收回后再问；按 agent 隔离；调用被停请求留着；权限与 allow_shell 先查") {
       for
         (a, b, vault) <- setup
         sub   <- ZIO.serviceWithZIO[Grants](_.asked)
@@ -88,7 +86,9 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         f4    <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script).fork
         w4    <- asks(1)
         _     <- f4.interrupt
-        w5    <- asks(0)
+        w5    <- asks(1)
+        _     <- answer(a.id, "PK_TOKEN", AskDecision.Once("没人取"))
+        w6    <- asks(0)
         late  <- answer(a.id, "PK_TOKEN", AskDecision.Once("迟了")).either
       yield assertTrue(
         reason(shell).contains("不能注入自写命令"),
@@ -102,7 +102,8 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         reason(rb).contains("拒绝"),
         g2.isEmpty,
         w4.size == 1,
-        w5.isEmpty,
+        w5.size == 1, // 等的调用被停不撤请求，答复后明文没人取就丢掉
+        w6.isEmpty,
         reason(late).contains("已经没有了")
       )
     },

@@ -1,6 +1,5 @@
 package muliao.notifications
 
-import muliao.contract.SecretUse
 import muliao.resources.agents.Agents
 import muliao.resources.vault.{Asked, Grants}
 import zio.*
@@ -11,11 +10,7 @@ object VaultLink:
   val Page = "/ai-assets?kind=secret"
 
   def notice(agent: String, a: Asked): Notice =
-    val where = a.use match
-      case SecretUse.Shell  => "命令"
-      case SecretUse.Script => "skill 脚本"
-      case SecretUse.Mcp    => "MCP 连接"
-    Notice(s"$agent 要用 secret ${a.slot.key}", s"用在$where，等你用 passkey 授权（一次或一段时间）或拒绝。", Target.Page(Page))
+    Notice(s"$agent 要用 secret ${a.slot.key}", s"用在${a.use.shown}，等你用 passkey 授权（一次或一段时间）或拒绝。", Target.Page(Page))
 
   /** 在调用方的 scope 里订阅并转发：返回时已订上。 */
   def start(grants: Grants, agents: Agents, n: Notifications): URIO[Scope, Unit] =

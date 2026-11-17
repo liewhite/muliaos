@@ -243,17 +243,21 @@ object McpTab:
 object SecretTab:
   import scala.concurrent.Future
 
-  final case class SecretForm(key: String, value: String, description: String, allowShell: Option[Boolean], owner: String, passkey: Boolean)
+  /** `passkey`、`allowShell` 没动过时：已有的保持原样、新建的取默认（只改值时不把加密方式和限制悄悄改掉）。 */
+  final case class SecretForm(key: String, value: String, description: String, allowShell: Option[Boolean], owner: String, passkey: Option[Boolean])
 
-  private def emptyForm(owner: String) = SecretForm("", "", "", None, owner, passkey = false)
+  private def emptyForm(owner: String) = SecretForm("", "", "", None, owner, None)
 
-  /** 新值：passkey 的先在浏览器里用已用过的那把 passkey（没有就新建）加密。 */
-  private def valueOf(key: String, text: String, passkey: Boolean): Future[SecretValue] =
+  /** 新值：passkey 的在浏览器里用已用过的那把 passkey（没有就新建）加密。`creds` 是页面上已拉到的，点击后不再发请求（Safari 要求 WebAuthn 由点击直接触发）。 */
+  private def valueOf(key: String, text: String, passkey: Boolean, creds: List[PasskeyCredential]): Future[SecretValue] =
     if !passkey then Future.successful(SecretValue.Plain(text))
-    else Http.call(VaultApi.vaultState)(()).flatMap(st => Passkey.seal(key, text, st.credentials)).map(SecretValue.Passkey(_))
+    else Passkey.seal(key, text, creds).map(SecretValue.Passkey(_))
 
   def view(list: Signal[List[AssetItem]], agents: Signal[List[AgentSummary]]): HtmlElement =
+    val vault = Remote(VaultApi.vaultState)(())
+    val creds = Var(List.empty[PasskeyCredential])
     div(
+      vault.map(_.data.map(_.credentials)) --> (_.foreach(creds.set)),
       cls := "flex flex-col gap-3",
       p(
         cls := "text-sm text-muted",
@@ -265,27 +269,30 @@ object SecretTab:
         code(cls := "font-mono", "skill_run(secrets=[KEY])"),
         " 经 skill 里的脚本注入。值只能设，不能看。passkey 加密的只有你的 passkey 能解开，agent 每次要用都在这里等你授权（一次或一段时间）。"
       ),
-      Grants.view(agents),
-      Ui.collapsibleForm("新建或改值")(form(list, agents)),
-      AssetsPage.listOf(list, "没有 secret")(item(_))
+      Grants.view(vault, agents),
+      Ui.collapsibleForm("新建或改值")(form(list, agents, creds)),
+      AssetsPage.listOf(list, "没有 secret")(item(_, creds))
     )
 
-  private def form(list: Signal[List[AssetItem]], agents: Signal[List[AgentSummary]]): Modifier[HtmlElement] =
+  private def form(list: Signal[List[AssetItem]], agents: Signal[List[AgentSummary]], creds: Var[List[PasskeyCredential]]): Modifier[HtmlElement] =
     val v        = Var(emptyForm(AssetUi.Platform))
     val act      = new Action
     val existing = v.signal.map(_.key.trim).combineWith(list).map((k, l) => l.find(_.name == k))
     def text(get: SecretForm => String, set: (SecretForm, String) => SecretForm) = v.zoom(get)(set)
+    val passkeyOn = v.signal.combineWith(existing).map((f, e) => f.passkey.orElse(e.flatMap(_.passkey)).getOrElse(false))
+    val passkeyNow = Var(false)
     def save(): Unit =
       val f   = v.now()
       val key = f.key.trim
       act
         .run(
-          valueOf(key, f.value, f.passkey).flatMap(value =>
+          valueOf(key, f.value, passkeyNow.now(), creds.now()).flatMap(value =>
             Http.call(ResourcesApi.putSecret)((key, SecretWrite(Some(value), Option(f.description.trim).filter(_.nonEmpty), f.allowShell, Some(f.owner))))
           )
         )
         .foreach(ok => if ok then { Toast.success(s"已保存 $key"); v.set(emptyForm(f.owner)) })
     Seq(
+      passkeyOn --> passkeyNow,
       Fields.text("Key", text(_.key, (f, s) => f.copy(key = s)), hint = Some("已有的同名 secret 改值与说明，归属不变"), placeholderText = "SLACK_TOKEN", mono = true),
       Fields.text("值", text(_.value, (f, s) => f.copy(value = s)), inputType = "password"),
       Fields.text("说明", text(_.description, (f, s) => f.copy(description = s))),
@@ -298,12 +305,12 @@ object SecretTab:
       ),
       div(
         cls := "flex flex-row items-center gap-2 text-sm",
-        Fields.switch("passkey 加密", v.signal.map(_.passkey), on => v.update(_.copy(passkey = on)), disabledIf = Val(!Passkey.available)),
+        Fields.switch("passkey 加密", passkeyOn, on => v.update(_.copy(passkey = Some(on))), disabledIf = Val(!Passkey.available)),
         span("passkey 加密"),
         span(
           cls := "text-xs text-muted",
           if Passkey.available then "只有你的 passkey 能解开，agent 每次用都要你授权；服务端只存密文"
-          else "要在 HTTPS 地址（如 https://muliao.leeliewhite.com）打开才能用"
+          else "要在 HTTPS 的域名地址（如 https://muliao.leeliewhite.com）打开才能用"
         )
       ),
       child.maybe <-- existing.map(_.isEmpty).distinct.map(isNew => Option.when(isNew)(AssetUi.ownerSelect(v.signal.map(_.owner), o => v.update(_.copy(owner = o)), agents))),
@@ -311,7 +318,7 @@ object SecretTab:
       div(AssetUi.submit("保存", act.busy.signal, v.signal.map(f => f.key.trim.nonEmpty && f.value.nonEmpty))(onClick --> (_ => save())))
     )
 
-  private def item(s: StrictSignal[AssetItem]): HtmlElement =
+  private def item(s: StrictSignal[AssetItem], creds: Var[List[PasskeyCredential]]): HtmlElement =
     val act      = new Action
     val setting  = Var(false)
     val newValue = Var("")
@@ -350,7 +357,7 @@ object SecretTab:
               div(cls := "flex-1", Fields.text("新的值", newValue, inputType = "password", autoFocusOn = true)),
               AssetUi.submit("保存", act.busy.signal, newValue.signal.map(_.nonEmpty))(
                 // 沿用原来的锁法：passkey 加密的仍用 passkey 加密
-                onClick --> (_ => put(valueOf(key, newValue.now(), s.now().passkey.contains(true)).map(v => SecretWrite(value = Some(v))), "已改值"))
+                onClick --> (_ => put(valueOf(key, newValue.now(), s.now().passkey.contains(true), creds.now()).map(v => SecretWrite(value = Some(v))), "已改值"))
               )
             )
           )
@@ -364,13 +371,7 @@ object SecretTab:
     /** 「一段时间」的几档（分钟）。 */
     private val Spans = List(60 -> "1 小时", 8 * 60 -> "8 小时", 24 * 60 -> "24 小时")
 
-    private def useLabel(u: SecretUse): String = u match
-      case SecretUse.Shell  => "命令"
-      case SecretUse.Script => "skill 脚本"
-      case SecretUse.Mcp    => "MCP 连接"
-
-    def view(agents: Signal[List[AgentSummary]]): HtmlElement =
-      val state = Remote(VaultApi.vaultState)(())
+    def view(state: Signal[Load[VaultState]], agents: Signal[List[AgentSummary]]): HtmlElement =
       div(
         cls := "flex flex-col gap-2",
         Ui.loading(state) { st =>
@@ -378,7 +379,7 @@ object SecretTab:
             cls := "flex flex-col gap-2",
             // 按 (agent, secret) 保留元素：别的请求进来刷新时，正在做的授权不被打断
             children <-- st.map(_.asks).splitSeq(a => (a.agent, a.key, a.since))(s => ask(s.now(), agents)),
-            children <-- st.map(_.grants).splitSeq(g => (g.agent, g.key, g.until))(s => grant(s.now(), agents))
+            children <-- st.map(_.grants.filter(_.until > scala.scalajs.js.Date.now())).splitSeq(g => (g.agent, g.key, g.until))(s => grant(s.now(), agents))
           )
         }
       )
@@ -397,7 +398,7 @@ object SecretTab:
             cls := "alert__title",
             child.text <-- agents.map(as => s"${AgentsData.label(as, a.agent)} 要用 "),
             code(cls := "font-mono", a.key),
-            s"（${useLabel(a.use)}，${Ui.relativeTime(a.since)}）"
+            s"（${a.use.shown}，${Ui.relativeTime(a.since)}）"
           ),
           div(
             cls := "flex flex-row flex-wrap gap-2",

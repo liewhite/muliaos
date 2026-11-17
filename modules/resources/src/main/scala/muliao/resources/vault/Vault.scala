@@ -121,9 +121,7 @@ object Vault:
           ZIO.fail(AppError.forbidden("passkey 加密的 secret 只能由用户在界面上设值"))
         case (_, _, SecretValue.Plain(text)) =>
           if text.isEmpty then ZIO.fail(AppError.invalid("secret 的值不能为空")) else ZIO.succeed(SecretLock.Server(fernet.encrypt(text, now)))
-        case (_, _, SecretValue.Passkey(box)) =>
-          if List(box.rp, box.credential, box.iv, box.ciphertext).exists(_.isEmpty) then ZIO.fail(AppError.invalid("passkey 密文缺字段"))
-          else ZIO.succeed(SecretLock.Passkey(box))
+        case (_, _, SecretValue.Passkey(box)) => ZIO.succeed(SecretLock.Passkey(box))
 
     def reveal(agent: AgentId, keys: List[String], use: SecretUse): IO[AppError, Map[String, String]] =
       for
@@ -142,7 +140,7 @@ object Vault:
                          )
                   yield doc
                 }
-        // 权限都过了才开始解：passkey 的几个同时等用户授权，一个被拒绝其余随之撤下
+        // 权限都过了才开始解：passkey 的几个同时等用户授权，一个被拒绝就不再等其余的
         pairs <- ZIO.foreachPar(docs)(doc => open(agent, doc, use).map(doc.key -> _))
       yield pairs.toMap
 

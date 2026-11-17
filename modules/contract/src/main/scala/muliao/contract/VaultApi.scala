@@ -13,6 +13,12 @@ enum SecretUse(val label: String) extends Labeled:
   case Script extends SecretUse("script")
   case Mcp    extends SecretUse("mcp")
 
+  /** 给用户看的说法。 */
+  def shown: String = this match
+    case Shell  => "命令"
+    case Script => "skill 脚本"
+    case Mcp    => "MCP 连接"
+
 object SecretUse extends Labels[SecretUse]("secret 用途", SecretUse.values)
 
 /** passkey 加密的 secret 的密文：只有浏览器用那把 passkey（WebAuthn PRF 扩展）导出的密钥能解开，服务端只存不解。
@@ -76,7 +82,7 @@ object VaultApi:
 
   val answerAsk =
     vault.post.in("answer").in(jsonBody[AskAnswer]).out(statusCode(StatusCode.NoContent)).name("answerAsk")
-      .description("答复一个等授权的请求：浏览器解开的明文用一次或一段时间，或拒绝。请求已经没了（agent 那边中断了）回 NotFound。")
+      .description("答复一个等授权的请求：浏览器解开的明文用一次或一段时间，或拒绝。请求已答复过回 NotFound。")
 
   val revokeGrant =
     vault.post.in("revoke").in(jsonBody[GrantRevoke]).out(statusCode(StatusCode.NoContent)).name("revokeGrant")
