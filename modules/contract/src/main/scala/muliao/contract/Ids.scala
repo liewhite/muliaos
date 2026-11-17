@@ -13,6 +13,10 @@ type AgentName = AgentName.Type
 object SessionId extends StringId
 type SessionId = SessionId.Type
 
+/** passkey secret 的一个授权请求（UUID，不随重启重复）。 */
+object AskId extends StringId
+type AskId = AskId.Type
+
 /** 会话里的一次运行。 */
 object RunId extends LongId
 type RunId = RunId.Type

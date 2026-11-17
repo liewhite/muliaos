@@ -19,7 +19,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
   def asks(n: Int): URIO[Grants, List[SecretAsk]] =
     ZIO.serviceWithZIO[Grants](_.view.map(_._1)).repeatUntil(_.size == n)
 
-  def answer(id: String, d: AskDecision) = ZIO.serviceWithZIO[Grants](_.answer(id, d))
+  def answer(id: AskId, d: AskDecision) = ZIO.serviceWithZIO[Grants](_.answer(id, d))
 
   def in(session: String, what: String) = AskPurpose(Some(SessionId.wrap(session)), what)
 

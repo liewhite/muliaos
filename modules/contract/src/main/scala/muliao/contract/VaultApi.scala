@@ -32,7 +32,7 @@ object SecretValue:
 final case class AskPurpose(session: Option[SessionId], what: String) derives JsonCodec, Schema
 
 /** 一次调用要用某个 passkey secret，正等用户授权（每次调用各自一个，`id` 全局唯一、不随重启重复，用来答复）。`box` 给浏览器解密用。 */
-final case class SecretAsk(id: String, agent: AgentId, key: String, purpose: AskPurpose, since: Long, box: PasskeyBox) derives JsonCodec, Schema
+final case class SecretAsk(id: AskId, agent: AgentId, key: String, purpose: AskPurpose, since: Long, box: PasskeyBox) derives JsonCodec, Schema
 
 /** 一段时间的授权：到 `until`（epoch 毫秒）为止这个 agent 用这个 secret 不再问。 */
 final case class SecretGrant(agent: AgentId, key: String, until: Long) derives JsonCodec, Schema
@@ -59,7 +59,7 @@ object AskDecision:
     given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
     Schema.derived
 
-final case class AskAnswer(id: String, decision: AskDecision) derives JsonCodec, Schema
+final case class AskAnswer(id: AskId, decision: AskDecision) derives JsonCodec, Schema
 
 final case class GrantRevoke(agent: AgentId, key: String) derives JsonCodec, Schema
 

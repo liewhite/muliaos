@@ -23,7 +23,7 @@ trait Grants:
   def view: UIO[(List[SecretAsk], List[SecretGrant])]
 
   /** 答复一个请求；它已经没了（调用已结束或已答复）报 NotFound。 */
-  def answer(id: String, decision: AskDecision): IO[AppError, Unit]
+  def answer(id: AskId, decision: AskDecision): IO[AppError, Unit]
 
   /** 收回一段时间的授权。 */
   def revoke(slot: Slot): UIO[Unit]
@@ -51,7 +51,7 @@ object Grants:
   /** 一段时间的授权，到 `until`（epoch 毫秒）为止。 */
   private final case class Granted(plain: Plain, until: Long)
 
-  private final case class State(asks: Map[String, Waiting], grants: Map[Slot, Granted]):
+  private final case class State(asks: Map[AskId, Waiting], grants: Map[Slot, Granted]):
     /** 去掉到期的授权：每次读写状态时顺手做，明文不留到下次之后（不另起定时器）。 */
     def at(t: Long): State = copy(grants = grants.filter((_, g) => g.until > t))
 
@@ -68,11 +68,11 @@ object Grants:
         .map(_.value)
 
     /** 有生效的授权就拿到明文；否则登记一个请求。 */
-    private def register(slot: Slot, purpose: AskPurpose, box: PasskeyBox): UIO[Either[Plain, (String, Promise[AppError, Plain])]] =
+    private def register(slot: Slot, purpose: AskPurpose, box: PasskeyBox): UIO[Either[Plain, (AskId, Promise[AppError, Plain])]] =
       for
         t     <- now
         reply <- Promise.make[AppError, Plain]
-        id    <- Random.nextUUID.map(_.toString) // 全局唯一：界面按它复用卡片，重启后不能撞上旧的
+        id    <- Random.nextUUID.map(u => AskId.wrap(u.toString)) // 全局唯一：界面按它复用卡片，重启后不能撞上旧的
         got <- state.modify { s0 =>
                  val s = s0.at(t)
                  s.grants.get(slot) match
@@ -82,7 +82,7 @@ object Grants:
       yield got
 
     /** 调用结束（拿到、被拒绝或被中断）：撤下它的请求。 */
-    private def withdraw(got: Either[Plain, (String, Promise[AppError, Plain])]): UIO[Unit] =
+    private def withdraw(got: Either[Plain, (AskId, Promise[AppError, Plain])]): UIO[Unit] =
       ZIO.foreachDiscard(got.toOption) { (id, _) =>
         state.update(s => s.copy(asks = s.asks - id)) *> bus.publish(Topic.Vault)
       }
@@ -92,11 +92,11 @@ object Grants:
         t <- now
         s <- state.updateAndGet(_.at(t))
       yield
-        val asks   = s.asks.toList.sortBy((_, w) => w.since).map((id, w) => SecretAsk(id, w.slot.agent, w.slot.key, w.purpose, w.since, w.box))
+        val asks   = s.asks.toList.sortBy((id, w) => (w.since, id.value)).map((id, w) => SecretAsk(id, w.slot.agent, w.slot.key, w.purpose, w.since, w.box))
         val grants = s.grants.toList.sortBy((k, _) => (k.agent.value, k.key)).map((k, g) => SecretGrant(k.agent, k.key, g.until))
         (asks, grants)
 
-    def answer(id: String, decision: AskDecision): IO[AppError, Unit] =
+    def answer(id: AskId, decision: AskDecision): IO[AppError, Unit] =
       for
         t <- now
         settled <- state.modify { s0 =>
