@@ -47,6 +47,7 @@ object TestEnv:
       AccessEditor.layer,
       Agents.layer,
       Resources.layer,
+      muliao.resources.vault.Grants.layer,
       Vault.layer,
       AssetGuard.layer,
       ZLayer.succeed[Models](models),

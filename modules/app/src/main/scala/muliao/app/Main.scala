@@ -1,6 +1,6 @@
 package muliao.app
 
-import muliao.contract.{Api, AuthApi, BoardApi, HistoryApi, ModelsApi, NotificationsApi, ResourcesApi, SessionsApi, TriggersApi, WorkspaceApi}
+import muliao.contract.{Api, AuthApi, BoardApi, HistoryApi, ModelsApi, NotificationsApi, ResourcesApi, SessionsApi, TriggersApi, VaultApi, WorkspaceApi}
 import muliao.platform.{AppError, InstanceLock}
 import muliao.platform.log.Logging
 import muliao.platform.server.{Endpoints, HttpServer}
@@ -22,7 +22,7 @@ object Main extends ZIOAppDefault:
 
   /** 全部接口声明（导出接口描述用）。 */
   val contractEndpoints =
-    AuthApi.all ++ ResourcesApi.all ++ ModelsApi.all ++ SessionsApi.all ++ WorkspaceApi.all ++ NotificationsApi.all ++ BoardApi.all ++
+    AuthApi.all ++ ResourcesApi.all ++ VaultApi.all ++ ModelsApi.all ++ SessionsApi.all ++ WorkspaceApi.all ++ NotificationsApi.all ++ BoardApi.all ++
       TriggersApi.all ++ HistoryApi.all ++ List(Endpoints.stream(Api.changes), Endpoints.stream(SessionsApi.live), HttpServer.openApiEndpoint)
 
   def run: ZIO[ZIOAppArgs, Any, Any] =

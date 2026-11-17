@@ -1,9 +1,9 @@
 package muliao.resources
 
-import muliao.contract.AgentId
+import muliao.contract.{AgentId, SecretUse}
 import muliao.exec.{CommandSpec, Program, RealPath, Sandbox, SecretEnv}
 import muliao.platform.AppError
-import muliao.resources.vault.{SecretUse, Vault}
+import muliao.resources.vault.Vault
 import zio.*
 
 import java.nio.file.{Files, Path}

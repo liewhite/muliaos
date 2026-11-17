@@ -62,6 +62,7 @@ object TestEnv:
       AccessEditor.layer,
       Agents.layer,
       Resources.layer,
+      muliao.resources.vault.Grants.layer,
       Vault.layer,
       ZLayer.succeed[Models](models),
       ZLayer.succeed(S.noMcp),

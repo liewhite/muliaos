@@ -1,10 +1,9 @@
 package muliao.triggers
 
-import muliao.contract.{AgentId, FireWhen}
+import muliao.contract.{AgentId, FireWhen, SecretUse}
 import muliao.exec.{Exec, Line, Program, Stderr}
 import muliao.platform.AppError
 import muliao.resources.AgentExec
-import muliao.resources.vault.SecretUse
 import zio.*
 
 /** 前置检查跑出来的结论。 */

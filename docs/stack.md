@@ -90,6 +90,7 @@
 ## 资源、agent 与权限（resources，#866）
 - 资源目录的文件格式与布局与现有 `~/.muliao/assets` 兼容（agent 目录名就是 agent 名；`platform/access.toml` 里 `[agents.<编号>]`；secret 是 Fernet 密文，主密钥在配置 `[vault] key`）。SKILL.md 的 frontmatter 用 snakeyaml-engine 解析。
 - agent 的身份（编号、名字、归档、默认、改名/删除进度）在库里（表 `agent`），可编辑配置在 `agent.toml`。改名先记库再挪目录，删除先标「正在删」再清理；两者中途重启由 `Agents.start(各领域的 AgentHook)` 接着做（组装入口在 `Sessions.start` 之后调用；归档、删除在它之前会等它）。
+- **passkey secret**（#915）：secret 文件要么是 `ciphertext`（Fernet，服务端主密钥），要么是 `[passkey]` 表（`rp`、`credential`、`iv`、`ciphertext`：浏览器用 WebAuthn PRF 从 passkey 导出密钥、AES-GCM 加密，附加数据是 secret 名），读成 `SecretLock = Server | Passkey`；与 `allow_shell` 互不相干。只有用户能设、改 passkey 的值（界面里加密好再交 `SecretValue.Passkey`），agent 的 `vault_set` 与手改文件都改不动。`Vault.reveal` 是唯一入口：passkey 的经 `Grants.obtain` 等用户授权——同一 (agent, secret) 的调用合成一个请求，用户在界面（AI 资产 Secret 页）用 passkey 解开交回明文：「一次」只交给当时在等的调用，「一段时间」到期前不再问（到期的在下次读写状态时删掉）；拒绝报错；等着的调用被中断就退出，没人等了请求撤下。授权全在内存，按 agent 隔离，重启清空。新请求经 `Grants.asked` 由通知领域的 `VaultLink` 推送给用户（组装时在 `Sessions.start` 之前订上）。等待不设时限：触发器的前置检查会被它的时限打断记成脚本故障（用户定：这类 secret 不该用在没人在场的地方）。接口 `VaultApi`（`VaultHttp`），主题 `vault`。
 - 资源文件的位置与路径只在 `AssetPath` 互换：`classify`（路径 → 位置）、`render`（资源文件 → 路径，测试保证往返一致）、`home`（某资源归某主人时放在哪）；不手拼 `skills/`、`secrets/` 这类路径。每种文件的规格（名字、内容解析）只在 `FileSpec.load`，扫描与写入口共用。
 - 资源目录每 2 秒按指纹（路径、大小、纳秒修改时间、inode）轮询，变了才重新解析并广播主题 `assets`；平台自己写文件后立即刷新。
 - access.toml 写坏时沿用上一份有效的（副本在数据目录 `resources/access.last-good.toml`，重启后仍有效），平台经 `AccessEditor` 改它会被拒绝直到修好；平台写回 access.toml 时按固定格式重排（角色、agent 按名字排序，`[agents.<编号>] # 名字`），手写的注释不保留。

@@ -41,6 +41,8 @@ enum Topic(val label: String) extends Labeled:
   case Notifications extends Topic("notifications")
   case History       extends Topic("history")
   case Jobs          extends Topic("jobs")
+  /** passkey secret 的授权请求与授权（只在内存里） */
+  case Vault         extends Topic("vault")
 
 object Topic extends Labels[Topic]("主题", Topic.values):
   /** 接口属性：这个读接口的数据跟着哪些主题变。 */

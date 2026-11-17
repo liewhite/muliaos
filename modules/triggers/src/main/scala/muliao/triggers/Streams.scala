@@ -1,9 +1,8 @@
 package muliao.triggers
 
-import muliao.contract.{AgentId, FaultSource, TriggerId, TriggerName}
+import muliao.contract.{AgentId, FaultSource, SecretUse, TriggerId, TriggerName}
 import muliao.exec.{Exec, Line, Program, Stderr}
 import muliao.platform.AppError
-import muliao.resources.vault.SecretUse
 import zio.*
 
 import java.nio.charset.StandardCharsets

@@ -158,7 +158,9 @@ object AssetGuard:
             prev <- ZIO
                       .fromOption(old.flatMap(o => Formats.parseSecret(o).toOption))
                       .orElseFail(refused("原文件已经坏了，用 vault_set 重新存一次值"))
-            _ <- ZIO.when(doc.content.ciphertext != prev.ciphertext)(ZIO.fail(refused("只能手改 description 和 allow_shell；改值用 vault_set")))
+            _ <- ZIO.when(doc.content.lock != prev.lock)(
+                   ZIO.fail(refused("只能手改 description 和 allow_shell；改值用 vault_set（passkey 加密的只能由用户在界面上改）"))
+                 )
           yield content
 
     private def memory(content: String, old: Option[String], refused: String => AppError): IO[AppError, String] =

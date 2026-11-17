@@ -1,10 +1,9 @@
 package muliao.workspace.tools
 
-import muliao.contract.JobId
+import muliao.contract.{JobId, SecretUse}
 import muliao.exec.{Ending, Exec, Program}
 import muliao.platform.AppError
 import muliao.resources.AgentExec
-import muliao.resources.vault.SecretUse
 import muliao.sessions.RunContext
 import muliao.toolkit.*
 import muliao.workspace.jobs.{JobOwner, Jobs}

@@ -158,7 +158,9 @@ final case class AssetItem(
     usedBy: List[AgentName],
     description: Option[String],
     enabled: Option[Boolean],
-    allowShell: Option[Boolean]
+    allowShell: Option[Boolean],
+    /** secret：是否 passkey 加密（每次用都要用户授权） */
+    passkey: Option[Boolean] = None
 ) derives JsonCodec, Schema
 
 final case class AssetIndex(root: String, items: List[AssetItem], problems: List[ProblemView], accessBroken: Option[String]) derives JsonCodec, Schema
@@ -170,8 +172,8 @@ final case class AssetFileWrite(path: String, content: String, fingerprint: Opti
 
 final case class SkillFiles(name: SkillName, owner: String, files: List[String]) derives JsonCodec, Schema
 
-/** 设 secret（值只能设不能看）。`owner` 只在新建时有用，缺省归平台。 */
-final case class SecretWrite(value: Option[String] = None, description: Option[String] = None, allowShell: Option[Boolean] = None, owner: Option[String] = None)
+/** 设 secret（值只能设不能看）。`value` 没给只改说明与 allow_shell；`owner` 只在新建时有用，缺省归平台。 */
+final case class SecretWrite(value: Option[SecretValue] = None, description: Option[String] = None, allowShell: Option[Boolean] = None, owner: Option[String] = None)
     derives JsonCodec, Schema
 
 final case class AssetTransfer(to: String) derives JsonCodec, Schema

@@ -120,7 +120,7 @@ object HttpSpec extends ZIOSpecDefault:
           w1   <- c.call("PUT", "/api/assets/file", Some(AssetFileWrite("alice/memory.md", "记一条  \n\n\n", Some(fp)).toJson))
           w2   <- c.call("PUT", "/api/assets/file", Some(AssetFileWrite("alice/memory.md", "再记", Some(fp)).toJson))
           esc  <- c.call("GET", "/api/assets/file?path=../data/config.toml")
-          sec  <- c.call("PUT", "/api/assets/secrets/API_TOKEN", Some("""{"value":"s3cret","description":"测试","owner":"alice"}"""))
+          sec  <- c.call("PUT", "/api/assets/secrets/API_TOKEN", Some("""{"value":{"kind":"Plain","text":"s3cret"},"description":"测试","owner":"alice"}"""))
           sec2 <- c.call("PUT", "/api/assets/secrets/API_TOKEN", Some("""{"allowShell":false}"""))
           files <- c.call("GET", "/api/assets/skills/tool-a/files")
           tr   <- c.call("POST", "/api/assets/skill/tool-a/transfer", Some("""{"to":"platform"}"""))

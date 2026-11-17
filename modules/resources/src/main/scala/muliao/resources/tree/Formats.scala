@@ -148,22 +148,48 @@ object Formats:
 
   // ---- secret ----
 
-  private val secretKeys = Set("description", "ciphertext", "allow_shell")
+  private val secretKeys  = Set("description", "ciphertext", "passkey", "allow_shell")
+  private val passkeyKeys = Set("rp", "credential", "iv", "ciphertext")
 
+  /** 服务端加密的写 `ciphertext`（Fernet 密文）；passkey 加密的写 `[passkey]` 表（rp、credential、iv、ciphertext），两者恰好一个。 */
   def parseSecret(text: String): Either[String, SecretFile] =
     for
       t     <- TomlFile.parse(text).map(TomlFile.fields)
       _     <- t.only(secretKeys)
       desc  <- t.string("description")
-      ct    <- t.requiredString("ciphertext")
+      ct    <- t.string("ciphertext")
+      pk    <- t.table("passkey")
+      lock  <- (ct, pk) match
+                 case (Some(token), None) => Right(SecretLock.Server(token))
+                 case (None, Some(p))     => passkeyBox(p).map(SecretLock.Passkey(_))
+                 case (Some(_), Some(_))  => Left("ciphertext 与 [passkey] 只能有一个")
+                 case (None, None)        => Left("缺少 ciphertext（或 [passkey]）")
       shell <- t.bool("allow_shell")
-    yield SecretFile(desc.getOrElse(""), ct, shell.getOrElse(true))
+    yield SecretFile(desc.getOrElse(""), lock, shell.getOrElse(true))
+
+  private def passkeyBox(p: TomlFile.Fields): Either[String, muliao.contract.PasskeyBox] =
+    for
+      _    <- p.only(passkeyKeys)
+      rp   <- p.requiredString("rp")
+      cred <- p.requiredString("credential")
+      iv   <- p.requiredString("iv")
+      ct   <- p.requiredString("ciphertext")
+    yield muliao.contract.PasskeyBox(rp, cred, iv, ct)
 
   def renderSecret(s: SecretFile): String =
-    val lines = List(
-      s"description = ${TomlFile.str(s.description)}",
-      s"ciphertext = ${TomlFile.str(s.ciphertext)}"
-    ) ++ Option.when(!s.allowShell)("allow_shell = false")
+    val desc  = s"description = ${TomlFile.str(s.description)}"
+    val shell = Option.when(!s.allowShell)("allow_shell = false").toList
+    val lines = s.lock match
+      case SecretLock.Server(token) => List(desc, s"ciphertext = ${TomlFile.str(token)}") ++ shell
+      case SecretLock.Passkey(b) =>
+        List(desc) ++ shell ++ List(
+          "",
+          "[passkey]",
+          s"rp = ${TomlFile.str(b.rp)}",
+          s"credential = ${TomlFile.str(b.credential)}",
+          s"iv = ${TomlFile.str(b.iv)}",
+          s"ciphertext = ${TomlFile.str(b.ciphertext)}"
+        )
     lines.mkString("", "\n", "\n")
 
   /** secret 名：大写字母开头，大写字母、数字、下划线。 */

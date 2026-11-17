@@ -7,7 +7,7 @@ import muliao.models.llm.{ModelSettings, Models}
 import muliao.models.mcp.McpConnector
 import muliao.models.speech.{TranscriptionSettings, Transcriber}
 import muliao.models.web.{Web, WebSettings, WebTools}
-import muliao.notifications.{Notifications, NotificationsHttp, SessionLink}
+import muliao.notifications.{Notifications, NotificationsHttp, SessionLink, VaultLink}
 import muliao.platform.{AppError, GeneralSettings}
 import muliao.platform.db.Database
 import muliao.platform.events.ChangeBus
@@ -19,7 +19,7 @@ import muliao.resources.agents.Agents
 import muliao.resources.guard.AssetGuard
 import muliao.resources.tools.AgentTools
 import muliao.resources.tree.AssetStore
-import muliao.resources.vault.Vault
+import muliao.resources.vault.{Grants, Vault}
 import muliao.sessions.*
 import muliao.toolkit.ToolSpec
 import muliao.triggers.{Triggers, TriggersHttp}
@@ -61,7 +61,7 @@ object Assembly:
   /** 配了才有的外部服务。 */
   final case class Optional(web: Option[Web], transcriber: Option[Transcriber])
 
-  type Services = Database & ChangeBus & Auth & ToolCatalog & AssetStore & AccessEditor & AssetGuard & ModelCheck & Agents & Resources & Vault &
+  type Services = Database & ChangeBus & Auth & ToolCatalog & AssetStore & AccessEditor & AssetGuard & ModelCheck & Agents & Resources & Grants & Vault &
     ResourcePaths & AgentExec & Models & Optional & Files & Sessions & SessionConsole & Workspace.Services & Notifications & Board & History & Triggers &
     ServerSettings & GeneralSettings
 
@@ -84,6 +84,7 @@ object Assembly:
       AccessEditor.layer,
       Agents.layer,
       Resources.layer,
+      Grants.layer,
       Vault.layer,
       AssetGuard.layer,
       AgentExec.layer,
@@ -134,6 +135,8 @@ object Assembly:
       jobs     <- Workspace.jobControl
       unread   <- SessionLink.unread
       sessions <- ZIO.service[Sessions]
+      env      <- ZIO.environment[Services]
+      _        <- VaultLink.start(env.get[Grants], env.get[Agents], env.get[Notifications]) // 续跑的运行可能马上就要等授权，先订上
       _        <- sessions.start(SessionPorts(contribs, jobs, unread))
       _        <- ZIO.serviceWithZIO[Agents](_.start(sessions.agentHook :: contribs.flatMap(_.agentHook)))
       _        <- ZIO.serviceWithZIO[Jobs](_.recover)
@@ -156,6 +159,7 @@ object Assembly:
       env.get[Agents], env.get[Resources], env.get[AssetStore], env.get[AssetGuard], env.get[Vault], env.get[AccessEditor], env.get[ModelCheck],
       env.get[ToolCatalog], env.get[ResourcePaths]
     ).routes ++
+      VaultHttp(env.get[Grants], env.get[AssetStore]).routes ++
       ModelsHttp.routes(env.get[Models], opt.transcriber) ++
       SessionsHttp(env.get[Sessions], env.get[SessionConsole], env.get[Files], env.get[Agents]).routes ++
       WorkspaceHttp(env.get[Browse], env.get[Jobs], env.get[Pages], env.get[ScriptGrants]).routes ++

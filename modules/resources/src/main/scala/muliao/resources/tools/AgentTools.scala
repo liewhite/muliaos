@@ -185,7 +185,7 @@ object AgentTools:
 
     val vaultSet = VaultSetDef { (in, ctx) =>
       vault
-        .set(Actor.Agent(ctx.agent), in.key, in.value, Some(in.description), in.allowShell, Owner.Platform)
+        .set(Actor.Agent(ctx.agent), in.key, muliao.contract.SecretValue.Plain(in.value), Some(in.description), in.allowShell, Owner.Platform)
         .map(created => ToolOutcome.text(if created then s"已新建 secret ${in.key}。" else s"已更新 secret ${in.key}。"))
         .mapError(fail)
     }

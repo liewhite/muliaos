@@ -51,7 +51,7 @@ object TestEnv:
       busy = agent => busyFor.get.map(_.get(agent))
     )
 
-  type Env = Dirs & Database & ChangeBus & AssetStore & Agents & Resources & AssetGuard & Vault & FakeHook &
+  type Env = Dirs & Database & ChangeBus & AssetStore & Agents & Resources & AssetGuard & Vault & muliao.resources.vault.Grants & FakeHook &
     ResourcePaths & ResourcesSettings & AccessEditor
 
   def prepared(setup: Dirs => Unit): ZLayer[Any, AppError, Env] =
@@ -88,6 +88,7 @@ object TestEnv:
       Agents.layer.tap(a => ZIO.serviceWithZIO[FakeHook](h => a.get.start(List(h.hook)))),
       Resources.layer,
       AssetGuard.layer,
+      muliao.resources.vault.Grants.layer,
       Vault.layer
     )
 

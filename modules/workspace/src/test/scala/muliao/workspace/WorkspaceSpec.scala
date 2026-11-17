@@ -203,7 +203,7 @@ object WorkspaceSpec extends ZIOSpecDefault:
         out <- withEnv(d, m) {
                  for
                    alice <- S.agent("alice")
-                   _     <- ZIO.serviceWithZIO[Vault](_.set(Actor.User, "TOKEN", "sekret-123", Some("测试"), None, Owner.Agent(AgentName.wrap("alice"))))
+                   _     <- ZIO.serviceWithZIO[Vault](_.set(Actor.User, "TOKEN", muliao.contract.SecretValue.Plain("sekret-123"), Some("测试"), None, Owner.Agent(AgentName.wrap("alice"))))
                    ctx   <- context(alice)
                    sec   <- call("run_shell", args("command" -> str("echo token=$TOKEN"), "timeout" -> Json.Num(20), "secrets" -> Json.Arr(str("TOKEN"))), ctx)
                    no    <- call("run_shell", args("command" -> str("echo hi")), ctx)
