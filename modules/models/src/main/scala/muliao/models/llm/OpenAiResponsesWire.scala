@@ -10,7 +10,7 @@ import java.util.Base64
 
 /** OpenAI Responses 协议（https://platform.openai.com/docs/api-reference/responses），也用于兼容它的网关。
   *
-  *   - 不发 `reasoning`：推理模型按自己的默认力度想，它回的推理项读流时丢掉，不存也不回传；
+  *   - 不发 `reasoning`：推理模型按自己的默认力度想；它回的推理项不报告，整项（含加密内容）攒成 [[ReplyPart.Reasoning]]，后续请求原样回传；
   *   - 输出项的编号、`phase` 放在各段的 [[Seal]] 里，回传时原样带上；只有收完的项才有 Seal。
   */
 object OpenAiResponsesWire extends Wire:
@@ -41,7 +41,9 @@ object OpenAiResponsesWire extends Wire:
       "tools"             -> Option.when(tools.nonEmpty)(arr(tools)),
       "max_output_tokens" -> maxTokens.map(m => n(m.toLong)),
       // 没有它时连续两步常落到不同的缓存上，前缀不变也命中不了
-      "prompt_cache_key"  -> req.cacheKey.map(s)
+      "prompt_cache_key"  -> req.cacheKey.map(s),
+      // 推理项要带上加密内容才能在后续请求里原样回传；不推理的模型和网关忽略它
+      "include"           -> Some(arr(List(s("reasoning.encrypted_content"))))
     )
 
   private def dataUrl(media: String, data: Chunk[Byte]): String =
@@ -83,6 +85,8 @@ object OpenAiResponsesWire extends Wire:
             "content" -> arr(List(obj("type" -> s("output_text"), "text" -> s(t), "annotations" -> arr(Nil)))))
         case None => obj("role" -> s("assistant"), "content" -> s(t))
       Chunk.single(meta.map(_.at("phase")).filterNot(_.isNull).fold(item)(item.withField("phase", _)))
+    case ReplyPart.Reasoning(Seal(Protocol.OpenAiResponses, item)) => Chunk.single(item)
+    case _: ReplyPart.Reasoning                                    => Chunk.empty // 别家协议的思考不发
     case ReplyPart.ToolCall(id, name, args, seal) =>
       val item = obj("type" -> s("function_call"), "call_id" -> s(id), "name" -> s(name), "arguments" -> s(args))
       Chunk.single(ours(seal).flatMap(_.at("id").str).fold(item)(i => item.withField("id", s(i))))
@@ -90,7 +94,8 @@ object OpenAiResponsesWire extends Wire:
 
   // ---- 读流 ----
 
-  final case class State(emitted: Emitted, index: Map[Long, Int], model: String, id: Option[String])
+  /** `index`：输出项序号 → 它在我们这边的去处 */
+  final case class State(emitted: Emitted, index: Map[Long, Slot], model: String, id: Option[String])
 
   def initial: State = State(Emitted.from(ReplyBuilder.empty), Map.empty, "", None)
 
@@ -105,8 +110,8 @@ object OpenAiResponsesWire extends Wire:
   private def texts(list: Json, only: Option[String]): Chunk[String] =
     list.arr.filter(c => only.forall(t => c.at("type").str.contains(t))).flatMap(_.at("text").str)
 
-  /** 一个输出项对应的段；推理项没有对应的段。`done`：这是结束时的完整项，只有它带 Seal。 */
-  private def partOf(item: Json, done: Boolean): Either[AppError, Option[ReplyPart]] =
+  /** 一个要报告的输出项对应的段。`done`：这是结束时的完整项，只有它带 Seal。 */
+  private def partOf(item: Json, done: Boolean): Either[AppError, ReplyPart] =
     val id = item.at("id").str.map(i => "id" -> s(i)).toList
     def seal(extra: List[(String, Json)]): Option[Seal] =
       val fields = id ++ extra
@@ -114,20 +119,23 @@ object OpenAiResponsesWire extends Wire:
     item.at("type").strOr() match
       case "message" =>
         val phase = Option(item.at("phase")).filterNot(_.isNull).map("phase" -> _).toList
-        Right(Some(ReplyPart.Text(texts(item.at("content"), None).mkString, seal(phase)))) // 正文与拒答都当文字
-      case "reasoning" => Right(None)
+        Right(ReplyPart.Text(texts(item.at("content"), None).mkString, seal(phase))) // 正文与拒答都当文字
       case "function_call" =>
-        Right(Some(ReplyPart.ToolCall(item.at("call_id").strOr(), item.at("name").strOr(), item.at("arguments").strOr(), seal(Nil))))
+        Right(ReplyPart.ToolCall(item.at("call_id").strOr(), item.at("name").strOr(), item.at("arguments").strOr(), seal(Nil)))
       case other => Left(Wire.outOfProtocol(s"不支持的输出项类型 $other"))
 
   def step(st: State, e: SseEvent): Either[AppError, (State, Chunk[ReplyEvent])] =
     val fresh = st.copy(emitted = st.emitted.copy(events = Chunk.empty))
     parse(e.data).left.map(why => Wire.outOfProtocol(s"事件不是 JSON（$why）")).flatMap { v =>
-      def at: Either[AppError, Int] =
-        val n = v.at("output_index").long.getOrElse(0L)
-        fresh.index.get(n).toRight(Wire.outOfProtocol(s"第 $n 个输出项没开始就有事件"))
+      val n = v.at("output_index").long.getOrElse(0L)
+      def slot: Either[AppError, Slot] = fresh.index.get(n).toRight(Wire.outOfProtocol(s"第 $n 个输出项没开始就有事件"))
       def emit(ev: ReplyEvent) = fresh.emitted.emit(ev).map(em => done(fresh.copy(emitted = em)))
-      def grow(g: Growth, t: String) = if t.isEmpty then ok(fresh) else at.flatMap(i => emit(ReplyEvent.Grew(i, g, t)))
+      def grow(g: Growth, t: String) =
+        if t.isEmpty then ok(fresh)
+        else slot.flatMap {
+          case Slot.Shown(i)   => emit(ReplyEvent.Grew(i, g, t))
+          case _: Slot.Held    => Left(Wire.outOfProtocol(s"第 $n 个输出项是推理，却来了 $g 增量"))
+        }
       val delta = v.at("delta").strOr()
       v.at("type").strOr() match
         case "response.output_text.delta" | "response.refusal.delta"                    => grow(Growth.Text, delta)
@@ -137,22 +145,25 @@ object OpenAiResponsesWire extends Wire:
           ok(fresh.copy(model = r.at("model").strOr(), id = r.at("id").str))
         case "response.output_item.added" =>
           val ours = fresh.emitted.parts.size
-          partOf(v.at("item"), done = false).flatMap {
-            case Some(p) =>
-              fresh.emitted.emit(ReplyEvent.Started(ours, p))
-                .map(em => done(fresh.copy(emitted = em, index = fresh.index + (v.at("output_index").long.getOrElse(0L) -> ours))))
-            case None => ok(fresh)
-          }
+          val item = v.at("item")
+          item.at("type").strOr() match
+            case "reasoning" => ok(fresh.copy(index = fresh.index + (n -> Slot.Held(ours, item))))
+            case _ =>
+              partOf(item, done = false).flatMap(p =>
+                fresh.emitted.emit(ReplyEvent.Started(ours, p)).map(em => done(fresh.copy(emitted = em, index = fresh.index + (n -> Slot.Shown(ours)))))
+              )
         case "response.output_item.done" =>
-          partOf(v.at("item"), done = true).flatMap {
-            case Some(part) => at.flatMap(i => if fresh.emitted.parts(i) == part then ok(fresh) else emit(ReplyEvent.Replaced(i, part)))
-            case None       => ok(fresh)
+          slot.flatMap {
+            // 完整的推理项（含加密内容）替换开始时的那一份
+            case Slot.Held(pos, _) => ok(fresh.copy(index = fresh.index + (n -> Slot.Held(pos, v.at("item")))))
+            case Slot.Shown(i) =>
+              partOf(v.at("item"), done = true).flatMap(part => if fresh.emitted.parts(i) == part then ok(fresh) else emit(ReplyEvent.Replaced(i, part)))
           }
         case "response.completed" | "response.incomplete" =>
           val r = v.at("response")
           val u = r.at("usage")
           val reply = Reply(
-            fresh.emitted.parts,
+            Slot.interleave(fresh.emitted.parts, fresh.index, protocol),
             protocol,
             fresh.model,
             fresh.id,

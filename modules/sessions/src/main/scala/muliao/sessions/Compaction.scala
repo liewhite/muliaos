@@ -99,6 +99,7 @@ private[sessions] object Compaction:
     case EntryBody.Reply(parts, _, _, _, _) =>
       val own = parts.map {
         case ReplyPart.Text(t, _)          => t.length.toLong
+        case _: ReplyPart.Reasoning        => 0L // 加密的，不计
         case ReplyPart.ToolCall(_, n, a, _) => (n.length + a.length).toLong
       }.sum
       own + calls.flatMap(_.status.outcome.toList).flatMap(_.content).collect { case StoredPart.Text(t) => t.length.toLong }.sum

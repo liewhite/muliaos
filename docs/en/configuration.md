@@ -77,8 +77,9 @@ One table per provider; `<name>` is the provider part of model names such as `cl
 | `max_concurrency` | `4` | Maximum concurrent requests to this provider, shared by all agents; extra requests wait |
 | `max_output_tokens` | none | Output token limit. Anthropic requires one: without this key 128000 is sent, so set a lower value for models with a smaller limit. OpenAI: the model's own default |
 
-muliao does not use extended thinking: requests carry no thinking settings (each model follows its own default), and any thinking
-or reasoning blocks the model returns are dropped (not stored, shown or sent back). Text the model writes between tool calls is kept.
+muliao has no thinking settings: requests leave thinking to each model's default, so older models work too. Thinking or reasoning
+blocks the model returns are not shown; they are stored as-is only to be sent back on later requests, as the providers require.
+Text the model writes between tool calls is shown as usual.
 
 ## `[sessions]`
 

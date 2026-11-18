@@ -82,7 +82,7 @@
 
 ## 模型接入与外部服务（models 模块）
 - **配置**：`[models]` 必填：`default_model = "<服务商>:<模型名>"`，`[models.providers.<名字>]` 写 `protocol`（`anthropic` / `openai-responses`）、`base_url`（Anthropic 不带 `/v1`，OpenAI 带）、`api_key`、`max_concurrency`（默认 4）、`max_output_tokens`（可选）；`idle_timeout_seconds`（默认 180）是回复流多久没数据算断。`[web]`（`api_key`、`base_url`）与 `[transcription]`（`api_key`、`model`、`base_url`、`max_bytes`、`vocabulary`、`language_hints`）可选。
-- **请求模型**：`Models.request(ModelRef, ModelRequest)` 得到 `ZStream[ReplyEvent]`，最后一个是 `Finished(reply)`；用 `ReplyBuilder` 折叠事件得到到目前为止的各段（被打断时保存已生成的部分）。不重试：`AppError.Unavailable` 由调用方退避重试整步。回复各段的 `Seal` 是协议要回传的数据，只在收完的段上有，回传时只发同协议的。不用思考：请求不带思考设置（新模型如 opus-5-5 关不掉思考，发 `disabled` 会被拒），两种协议回来的思考/推理块都在读流时丢掉，所以 `ReplyPart` 只有正文和工具调用两种。
+- **请求模型**：`Models.request(ModelRef, ModelRequest)` 得到 `ZStream[ReplyEvent]`，最后一个是 `Finished(reply)`；用 `ReplyBuilder` 折叠事件得到到目前为止的各段（被打断时保存已生成的部分）。不重试：`AppError.Unavailable` 由调用方退避重试整步。回复各段的 `Seal` 是协议要回传的数据，只在收完的段上有，回传时只发同协议的。思考（#950）：请求不带思考设置（新模型如 opus-5-5 关不掉思考，发 `disabled` 会被拒）；回来的思考/推理块读流时不报告（各协议的 `Slot.Held`），收完时整块原样成 `ReplyPart.Reasoning` 插回原位（`Slot.interleave`），只为后续请求回传（官方要求工具循环里原样带回），实时事件、时间线、读会话都不展示；`Reply.shown` 是报告过的段。
 - **图片**：发给模型前在 `Models.request` 里统一整理（长图切段、超限缩小、坏图换成说明、超过张数上限的较早图片换成说明），会话历史存原件。
 - **MCP**：`McpConnector.connectAll(servers, secrets, launch)` 在调用方的 scope 里连接，得到工具（`<server>_<工具名>`）与没连上的原因；`SecretLookup` 由资源领域按使用者权限实现，`Launch` 给出 stdio server 的工作目录与写沙箱。
 - **测试**：协议读流用真实服务商录下的响应（`modules/models/src/test/resources/fixtures/`，录制脚本 `record_fixtures.py` 在同一目录，密钥从本机配置读、不打印）。对真实服务商各跑一次：`sbt "models/Test/runMain muliao.models.LiveCheck <配置文件> claude:<模型>,openai:<模型> <录音> audio/mp4"`（两轮工具调用验证回传、模型列表、网页搜索与抓取、语音转写）。

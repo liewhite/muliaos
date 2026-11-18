@@ -58,5 +58,20 @@ private[llm] final case class Emitted(builder: ReplyBuilder, events: Chunk[Reply
 private[llm] object Emitted:
   def from(b: ReplyBuilder): Emitted = Emitted(b, Chunk.empty)
 
+/** 协议里一块（输出项）在我们这边的去处。 */
+private[llm] enum Slot:
+  /** 报告出去的第 `index` 段 */
+  case Shown(index: Int)
+
+  /** 不报告的思考块：整块攒在 `block`；它开始时已报告了 `at` 段，收完时排在这些段之后、第 `at` 段之前 */
+  case Held(at: Int, block: Json)
+
+private[llm] object Slot:
+  /** 收完的回复里各段的真实顺序：把攒下的思考块按位置插回报告过的段之间（同一位置的按协议里的先后）。 */
+  def interleave(shown: Chunk[ReplyPart], slots: Iterable[(Long, Slot)], protocol: Protocol): Chunk[ReplyPart] =
+    val held = slots.toList.sortBy(_._1).collect { case (_, Held(at, block)) => at -> ReplyPart.Reasoning(Seal(protocol, block)) }
+    val byAt = held.groupMap(_._1)(_._2)
+    Chunk.fromIterable((0 to shown.size).flatMap(i => byAt.getOrElse(i, Nil) ++ shown.lift(i).toList))
+
 /** 模型列表的一页：模型名，与下一页的游标（没有了为空）。 */
 final case class ModelsPage(names: Chunk[String], next: Option[String])

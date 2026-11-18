@@ -25,6 +25,7 @@ object LiveCheck extends ZIOAppDefault:
   def show(r: Reply): String =
     val parts = r.parts.map {
       case ReplyPart.Text(t, s)            => s"文字「${t.take(80)}」${s.fold("")(_ => " +seal")}"
+      case ReplyPart.Reasoning(b)          => s"思考块 ${b.data.toString.length} 字节"
       case ReplyPart.ToolCall(_, n, a, s)  => s"调用 $n($a)${s.fold("")(_ => " +seal")}"
     }
     s"${r.model} ${parts.mkString("；")}，用量 ${r.usage}，结束 ${r.stopReason.getOrElse("?")}"

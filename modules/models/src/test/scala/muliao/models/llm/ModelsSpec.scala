@@ -54,7 +54,7 @@ object ModelsSpec extends ZIOSpecDefault:
             r.usage == Usage(input = 122 + 808, output = 50, cacheRead = 0, cacheWrite = 808),
             r.stopReason.contains("tool_use"),
             r.model == "claude-sonnet-5-5",
-            folded(events) == r.parts
+            folded(events) == r.shown
           )
       },
       test("OpenAI Responses：工具调用带输出项编号") {
@@ -68,28 +68,44 @@ object ModelsSpec extends ZIOSpecDefault:
             call.args.fromJson[Json].toOption.flatMap(_.at("city").str).contains("Paris"),
             call.seal.flatMap(_.data.at("id").str).exists(_.startsWith("fc_")),
             r.usage.input > 0,
-            folded(events) == r.parts
+            folded(events) == r.shown
           )
       },
-      test("OpenAI Responses：推理项丢掉，只留带编号的正文") {
+      test("OpenAI Responses：推理项不报告，整项（含加密内容）留在正文前面") {
         for events <- decode(OpenAiResponsesWire, fixture("openai-reasoning.sse"))
         yield
           val r = finished(events)
           assertTrue(
-            r.parts.size == 1,
-            r.parts.collectFirst { case t: ReplyPart.Text => t }.exists(_.seal.flatMap(_.data.at("id").str).exists(_.nonEmpty)),
-            folded(events) == r.parts
+            r.parts.head match
+              case ReplyPart.Reasoning(Seal(Protocol.OpenAiResponses, item)) => item.at("encrypted_content").str.exists(_.nonEmpty)
+              case _                                                         => false
+            ,
+            r.shown.size == 1,
+            r.shown.collectFirst { case t: ReplyPart.Text => t }.exists(_.seal.flatMap(_.data.at("id").str).exists(_.nonEmpty)),
+            folded(events) == r.shown
           )
       },
-      test("Anthropic：思考块及其增量、签名丢掉，只留正文") {
+      test("Anthropic：思考块不报告，整块（文字与签名接全）留在正文前面") {
         for events <- decode(AnthropicWire, fixture("anthropic-thinking.sse"))
         yield
           val r = finished(events)
           assertTrue(
-            r.parts.nonEmpty,
-            r.parts.forall(_.isInstanceOf[ReplyPart.Text]),
-            folded(events) == r.parts
+            r.parts.head match
+              case ReplyPart.Reasoning(Seal(Protocol.Anthropic, b)) =>
+                b.at("type").str.contains("thinking") && b.at("thinking").str.exists(_.nonEmpty) && b.at("signature").str.exists(_.nonEmpty)
+              case _ => false
+            ,
+            r.shown.nonEmpty,
+            r.shown.forall(_.isInstanceOf[ReplyPart.Text]),
+            folded(events) == r.shown
           )
+      },
+      test("思考块按协议里的先后插回报告过的段之间") {
+        val (a, b) = (ReplyPart.Text("a"), ReplyPart.Text("b"))
+        val (x, y) = (obj("n" -> s("x")), obj("n" -> s("y")))
+        val slots  = Map(3L -> Slot.Shown(1), 0L -> Slot.Held(0, x), 1L -> Slot.Shown(0), 2L -> Slot.Held(1, y))
+        val r      = (j: Json) => ReplyPart.Reasoning(Seal(Protocol.Anthropic, j))
+        assertTrue(Slot.interleave(Chunk(a, b), slots, Protocol.Anthropic) == Chunk(r(x), a, r(y), b))
       },
       test("流没收完就断了：暂时性失败") {
         val whole = String(fixture("anthropic-tool-call.sse").toArray, "UTF-8")
@@ -128,13 +144,15 @@ object ModelsSpec extends ZIOSpecDefault:
       }
     ),
     suite("请求体")(
-      test("Anthropic：三个缓存断点，不提思考") {
+      test("Anthropic：三个缓存断点，不提思考，本协议的思考块原样回传、别家的不发") {
+        val own     = obj("type" -> s("thinking"), "thinking" -> s(""), "signature" -> s("sig"))
+        val foreign = ReplyPart.Reasoning(Seal(Protocol.OpenAiResponses, obj("type" -> s("reasoning"), "id" -> s("rs_别家"))))
         val req = ModelRequest(
           "说明",
           Chunk(tool, tool.copy(name = "b")),
           Chunk(
             Message.User(Chunk(UserPart.Text("hi"))),
-            Message.Assistant(Chunk(ReplyPart.Text("查一下"), ReplyPart.ToolCall("c1", "get_weather", "not json"))),
+            Message.Assistant(Chunk(ReplyPart.Reasoning(Seal(Protocol.Anthropic, own)), foreign, ReplyPart.Text("查一下"), ReplyPart.ToolCall("c1", "get_weather", "not json"))),
             Message.User(Chunk(UserPart.ToolResult("c1", Chunk(ToolContent.Text("晴")), isError = false), UserPart.Text("")))
           )
         )
@@ -145,19 +163,23 @@ object ModelsSpec extends ZIOSpecDefault:
           "cache_control".r.findAllIn(json).size == 3,
           body.at("tools").arr.last.at("cache_control") != Json.Null,
           body.at("messages").arr.last.at("content").arr.last.at("cache_control") != Json.Null,
-          assistant.size == 2,
-          assistant(1).at("input") == Json.Obj(),
+          assistant.size == 3,
+          assistant(0) == own,
+          assistant(2).at("input") == Json.Obj(),
+          !json.contains("rs_别家"),
           body.at("thinking") == Json.Null,
           body.at("max_tokens").long.contains(AnthropicWire.DefaultMaxTokens.toLong)
         )
       },
-      test("OpenAI：工具结果在前、回传编号、不提推理、带缓存键") {
+      test("OpenAI：工具结果在前、推理项与编号原样回传、别家思考不发、不提推理力度、带缓存键") {
+        val item      = obj("type" -> s("reasoning"), "id" -> s("rs_1"), "summary" -> arr(Nil), "encrypted_content" -> s("enc"))
+        val foreign   = ReplyPart.Reasoning(Seal(Protocol.Anthropic, obj("type" -> s("thinking"), "signature" -> s("sig别家"))))
         val call      = ReplyPart.ToolCall("call_1", "get_weather", "{}", Some(Seal(Protocol.OpenAiResponses, obj("id" -> s("fc_1")))))
         val req = ModelRequest(
           "说明",
           Chunk(tool),
           Chunk(
-            Message.Assistant(Chunk(call)),
+            Message.Assistant(Chunk(ReplyPart.Reasoning(Seal(Protocol.OpenAiResponses, item)), foreign, call)),
             Message.User(Chunk(UserPart.Text("继续"), UserPart.ToolResult("call_1", Chunk(ToolContent.Text("晴")), isError = false)))
           ),
           cacheKey = Some("sess-1")
@@ -165,10 +187,12 @@ object ModelsSpec extends ZIOSpecDefault:
         val body  = OpenAiResponsesWire.body("m", req, Some(100))
         val input = body.at("input").arr
         assertTrue(
-          input.map(i => i.at("type").str.getOrElse("role:" + i.at("role").strOr())) == Chunk("function_call", "function_call_output", "role:user"),
-          input(0).at("id").str.contains("fc_1"),
+          input.map(i => i.at("type").str.getOrElse("role:" + i.at("role").strOr())) == Chunk("reasoning", "function_call", "function_call_output", "role:user"),
+          input(0) == item,
+          input(1).at("id").str.contains("fc_1"),
+          !body.toJson.contains("sig别家"),
           body.at("reasoning") == Json.Null,
-          body.at("include") == Json.Null,
+          body.at("include").arr == Chunk(s("reasoning.encrypted_content")),
           body.at("max_output_tokens").long.contains(100L),
           body.at("prompt_cache_key").str.contains("sess-1"),
           OpenAiResponsesWire.body("m", req.copy(cacheKey = None), None).at("prompt_cache_key") == Json.Null

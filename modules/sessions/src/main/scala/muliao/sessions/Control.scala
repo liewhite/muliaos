@@ -79,8 +79,8 @@ private[sessions] final case class Control(
     yield ()
 
   private def visible(p: ReplyPart): Boolean = p match
-    case ReplyPart.Text(t, _)     => t.nonEmpty
-    case _: ReplyPart.ToolCall    => false
+    case ReplyPart.Text(t, _)                           => t.nonEmpty
+    case _: ReplyPart.ToolCall | _: ReplyPart.Reasoning => false
 
   /** 被打断的回复：只存文字（半截的工具调用不存，也就不会发回模型）。 */
   private def savePartial(id: SessionId, p: Partial, t: Long) =

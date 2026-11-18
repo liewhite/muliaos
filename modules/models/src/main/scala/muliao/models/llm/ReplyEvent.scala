@@ -28,7 +28,7 @@ final case class ReplyBuilder(parts: Chunk[ReplyPart]):
       Either.cond(parts.isDefinedAt(i), ReplyBuilder(parts.updated(i, p)), s"替换不存在的第 $i 段")
     case ReplyEvent.Grew(i, g, t) =>
       parts.lift(i).toRight(s"增量指向不存在的第 $i 段").flatMap(p => ReplyBuilder.grow(p, g, t)).map(p => ReplyBuilder(parts.updated(i, p)))
-    case ReplyEvent.Finished(r) => Right(ReplyBuilder(r.parts))
+    case ReplyEvent.Finished(r) => Right(ReplyBuilder(r.shown))
 
 object ReplyBuilder:
   val empty: ReplyBuilder = ReplyBuilder(Chunk.empty)

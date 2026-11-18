@@ -12,7 +12,7 @@ import java.util.Base64
   *
   *   - 三个缓存断点：固定说明、工具定义（最后一个工具）、消息末尾（最后一块），让每次原样重发的前缀命中提示缓存（5 分钟档）；
   *   - 不提思考：不发 `thinking`，各模型按自己的默认（老模型不想；新模型如 opus-5-5 关不掉，发 `disabled` 会被拒）；
-  *     回来的思考块读流时丢掉，不存也不回传（实测服务端接受工具循环里不带思考块的回传）。
+  *     回来的思考块不报告，整块攒下成 [[ReplyPart.Reasoning]]，官方要求后续请求原样回传（工具循环里尤其如此）。
   */
 object AnthropicWire extends Wire:
   val protocol: Protocol = Protocol.Anthropic
@@ -87,7 +87,9 @@ object AnthropicWire extends Wire:
   }
 
   private def assistantBlocks(parts: Chunk[ReplyPart]): Chunk[Json] = parts.flatMap {
-    case ReplyPart.Text(t, _) => Chunk.fromIterable(text(t))
+    case ReplyPart.Text(t, _)                              => Chunk.fromIterable(text(t))
+    case ReplyPart.Reasoning(Seal(Protocol.Anthropic, b)) => Chunk.single(b)
+    case _: ReplyPart.Reasoning                            => Chunk.empty // 别家协议的思考不发
     case ReplyPart.ToolCall(id, name, args, _) =>
       // 参数不是 JSON 对象（模型生成坏了，执行时已按「请重试」处理）时发空对象：Anthropic 只收对象
       val input = parse(args).toOption.collect { case o: Json.Obj => o }.getOrElse(Json.Obj())
@@ -98,8 +100,8 @@ object AnthropicWire extends Wire:
 
   final case class State(
       emitted: Emitted,
-      /** Anthropic 的块序号 → 我们的段序号；丢掉的思考块是 None */
-      index: Map[Long, Option[Int]],
+      /** Anthropic 的块序号 → 它在我们这边的去处 */
+      index: Map[Long, Slot],
       model: String,
       id: Option[String],
       usage: Map[String, Long],
@@ -126,22 +128,26 @@ object AnthropicWire extends Wire:
         case "content_block_start" =>
           val block = v.at("content_block")
           val at    = v.at("index").long.getOrElse(0L)
-          val part: Either[AppError, Option[ReplyPart]] = block.at("type").strOr() match
-            case "text"                           => Right(Some(ReplyPart.Text(block.at("text").strOr())))
-            case "tool_use"                       => Right(Some(ReplyPart.ToolCall(block.at("id").strOr(), block.at("name").strOr(), "")))
-            case "thinking" | "redacted_thinking" => Right(None)
+          val ours  = fresh.emitted.parts.size
+          def show(p: ReplyPart) =
+            fresh.emitted.emit(ReplyEvent.Started(ours, p)).map(em => done(fresh.copy(emitted = em, index = fresh.index + (at -> Slot.Shown(ours)))))
+          block.at("type").strOr() match
+            case "text"                           => show(ReplyPart.Text(block.at("text").strOr()))
+            case "tool_use"                       => show(ReplyPart.ToolCall(block.at("id").strOr(), block.at("name").strOr(), ""))
+            case "thinking" | "redacted_thinking" => ok(fresh.copy(index = fresh.index + (at -> Slot.Held(ours, block))))
             case other                            => Left(Wire.outOfProtocol(s"不支持的内容块类型 $other"))
-          val ours = fresh.emitted.parts.size
-          part.flatMap {
-            case Some(p) => fresh.emitted.emit(ReplyEvent.Started(ours, p)).map(em => done(fresh.copy(emitted = em, index = fresh.index + (at -> Some(ours)))))
-            case None    => ok(fresh.copy(index = fresh.index + (at -> None)))
-          }
         case "content_block_delta" =>
           val at = v.at("index").long.getOrElse(0L)
+          val d  = v.at("delta")
           fresh.index.get(at).toRight(Wire.outOfProtocol(s"第 $at 块没开始就有增量")).flatMap {
-            case None => ok(fresh) // 丢掉的思考块
-            case Some(ours) =>
-              val d = v.at("delta")
+            case Slot.Held(pos, block) =>
+              // 思考文字与签名都可能分几段到，接在已有的后面
+              val grown = d.at("type").strOr() match
+                case "thinking_delta"  => appended(block, "thinking", d.at("thinking").strOr())
+                case "signature_delta" => appended(block, "signature", d.at("signature").strOr())
+                case _                 => block
+              ok(fresh.copy(index = fresh.index + (at -> Slot.Held(pos, grown))))
+            case Slot.Shown(ours) =>
               def grow(g: Growth, t: String) =
                 if t.isEmpty then ok(fresh) else fresh.emitted.emit(ReplyEvent.Grew(ours, g, t)).map(em => done(fresh.copy(emitted = em)))
               d.at("type").strOr() match
@@ -154,10 +160,11 @@ object AnthropicWire extends Wire:
           ok(fresh.copy(stopReason = v.at("delta").at("stop_reason").str.orElse(fresh.stopReason), usage = fresh.usage ++ usageOf(v.at("usage"))))
         case "message_stop" =>
           // 没有参数的调用不发 input_json_delta
-          val parts = fresh.emitted.parts.map {
+          val shown = fresh.emitted.parts.map {
             case c: ReplyPart.ToolCall if c.args.isEmpty => c.copy(args = "{}")
             case p                                       => p
           }
+          val parts = Slot.interleave(shown, fresh.index, protocol)
           val u               = (k: String) => fresh.usage.getOrElse(k, 0L)
           val (read, written) = (u("cache_read_input_tokens"), u("cache_creation_input_tokens"))
           val reply = Reply(parts, protocol, fresh.model, fresh.id, fresh.stopReason, Usage(u("input_tokens") + read + written, u("output_tokens"), read, written))
@@ -168,6 +175,9 @@ object AnthropicWire extends Wire:
           Left(if permanentErrors(kind) then AppError.External(msg) else AppError.Unavailable(msg))
         case _ => ok(fresh) // ping、content_block_stop
     }
+
+  private def appended(block: Json, key: String, t: String): Json =
+    block.withField(key, s(block.at(key).strOr() + t))
 
   private def ok(s: State): Either[AppError, (State, Chunk[ReplyEvent])] = Right(done(s))
   private def done(s: State): (State, Chunk[ReplyEvent])                 = (s, s.emitted.events)

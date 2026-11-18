@@ -28,15 +28,20 @@ enum UserPart:
   /** 一次工具调用的结果。`content` 里的图片同样会被整理。 */
   case ToolResult(callId: String, content: Chunk[ToolContent], isError: Boolean)
 
-/** 协议给的、回传时要原样带上的数据（输出项编号、`phase` 等）。
+/** 协议给的、回传时要原样带上的数据（输出项编号、`phase`、整个思考块等）。
   *
   * 只有协议给出完整一项时才有：生成到一半被打断的段没有它。回传时只用与目标协议相同的。
   */
 final case class Seal(protocol: Protocol, data: Json) derives JsonCodec
 
-/** 模型回复的一段。平台不请求思考，模型自己回的推理内容由各协议在读流时丢掉，所以没有思考这一种。 */
+/** 模型回复的一段。 */
 enum ReplyPart derives JsonCodec:
   case Text(text: String, seal: Option[Seal] = None)
+
+  /** 模型自己的思考块（整块原样在 `block` 里）。平台不请求、不展示思考，只因协议要求后续请求原样回传而保留；
+    * 只在收完的回复里出现（读流中的实时事件不带它，也就不占界面上的段序号）。
+    */
+  case Reasoning(block: Seal)
 
   /** 工具调用；`args` 是模型生成的参数原文（应是 JSON 对象，生成坏了时由执行方按「请重试」处理）。 */
   case ToolCall(id: String, name: String, args: String, seal: Option[Seal] = None)
@@ -61,6 +66,9 @@ final case class Reply(
     usage: Usage
 ) derives JsonCodec:
   def toolCalls: Chunk[ReplyPart.ToolCall] = parts.collect { case c: ReplyPart.ToolCall => c }
+
+  /** 读流时报告过的段（不含只为回传而留的思考块）。 */
+  def shown: Chunk[ReplyPart] = parts.filterNot(_.isInstanceOf[ReplyPart.Reasoning])
 
 /** 对话里的一条消息。 */
 enum Message:
