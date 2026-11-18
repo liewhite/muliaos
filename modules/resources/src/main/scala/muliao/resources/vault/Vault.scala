@@ -39,7 +39,7 @@ trait Vault:
   def reveal(agent: AgentId, keys: List[String], use: SecretUse, purpose: AskPurpose): IO[AppError, Map[String, String]]
 
   /** 请用户用签名钥匙 `key` 签一份内容（#938）：等用户在浏览器里解开并签好交回，私钥不出浏览器。返回签好的结果（SSH 证书是证书文件的一行）。
-    * 用它要有 use 权限；`key` 不是签名钥匙、或算法与内容要的不同都报错。
+    * 用它要有 use 权限；`key` 不是签名钥匙报错。
     */
   def sign(agent: AgentId, key: String, content: SignContent, purpose: AskPurpose): IO[AppError, String]
 
