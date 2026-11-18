@@ -163,14 +163,14 @@ final case class AssetItem(
     lock: Option[SecretLockView] = None
 ) derives JsonCodec, Schema
 
-/** secret 怎么锁着：服务端主密钥；passkey 加密（每次用都要用户授权，`box` 是密文，浏览器改锁法时用）；签名钥匙（只能在浏览器里签名，#938）。
+/** secret 怎么锁着：服务端主密钥；passkey 加密（每次用都要用户授权）；签名钥匙（只能在浏览器里签名，#938）。
   * JSON 里 `kind` 是分支名。
   */
 @jsonDiscriminator("kind")
 enum SecretLockView derives JsonCodec:
   case Server
-  case Passkey(box: PasskeyBox)
-  case Signing(algorithm: SigningAlgorithm, box: PasskeyBox)
+  case Passkey
+  case Signing(algorithm: SigningAlgorithm)
 
 object SecretLockView:
   given Schema[SecretLockView] =

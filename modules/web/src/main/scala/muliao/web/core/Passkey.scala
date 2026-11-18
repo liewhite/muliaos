@@ -48,15 +48,6 @@ object Passkey:
   def sealSigning(key: String, alg: SigningAlgorithm, plain: String, known: List[PasskeyCredential]): Future[PasskeyBox] =
     either(material(alg, plain)).flatMap(_ => seal(PasskeyAad.signing(key, alg), plain, known))
 
-  /** 把普通 passkey secret 转成签名钥匙：用原来那把 passkey 只确认一次，解开、核对是私钥、按签名钥匙的附加数据重新加密。 */
-  def toSigning(key: String, alg: SigningAlgorithm, box: PasskeyBox): Future[PasskeyBox] =
-    for
-      aes   <- unlock(box)
-      plain <- decrypt(aes, PasskeyAad.plain(key), box)
-      _     <- either(material(alg, plain))
-      out   <- encrypt(aes, box.credential, PasskeyAad.signing(key, alg), plain)
-    yield out
-
   /** 解开普通 passkey secret 交出明文（签名钥匙在这里解不开）。 */
   def reveal(key: String, box: PasskeyBox): Future[String] = open(PasskeyAad.plain(key), box)
 

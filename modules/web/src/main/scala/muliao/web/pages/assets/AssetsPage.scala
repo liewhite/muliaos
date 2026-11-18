@@ -252,8 +252,8 @@ object SecretTab:
   object Lock:
     def of(v: SecretLockView): Lock = v match
       case SecretLockView.Server        => Server
-      case SecretLockView.Passkey(_)    => Passkey
-      case SecretLockView.Signing(_, _) => Signing
+      case SecretLockView.Passkey       => Passkey
+      case SecretLockView.Signing(_)    => Signing
 
   /** `lock`、`allowShell` 没动过时：已有的保持原样、新建的取默认（只改值时不把加密方式和限制悄悄改掉）。 */
   final case class SecretForm(key: String, value: String, description: String, allowShell: Option[Boolean], owner: String, lock: Option[Lock])
@@ -354,8 +354,8 @@ object SecretTab:
               cls := "flex flex-row items-center gap-2",
               span(cls := "font-mono font-medium", key),
               child.maybe <-- s.map(_.lock.collect {
-                case SecretLockView.Passkey(_)    => Ui.chip("passkey", Tone.Accent)()
-                case SecretLockView.Signing(a, _) => Ui.chip(s"签名钥匙 ${a.label}", Tone.Accent)()
+                case SecretLockView.Passkey       => Ui.chip("passkey", Tone.Accent)()
+                case SecretLockView.Signing(a)    => Ui.chip(s"签名钥匙 ${a.label}", Tone.Accent)()
               }),
               child.maybe <-- s.map(i => Option.when(i.allowShell.contains(false))(Ui.chip("仅 skill 脚本")()))
             ),
@@ -367,13 +367,6 @@ object SecretTab:
             on => put(Future.successful(SecretWrite(allowShell = Some(on))), if on then "已允许 shell 使用" else "已改为仅 skill 脚本可用"),
             disabledIf = act.busy.signal
           ),
-          child.maybe <-- s.map(_.lock.collect { case SecretLockView.Passkey(box) =>
-            Ui.btn(Variant.Ghost, Size.Sm, pending = act.busy.signal)(
-              title := "里面是私钥（ed25519：OpenSSH 私钥文件）时，转成只能签名、取不出明文的签名钥匙",
-              "转成签名钥匙",
-              onClick --> (_ => put(Passkey.toSigning(key, SigningAlgorithm.Ed25519, box).map(b => SecretWrite(value = Some(SecretValue.Signing(SigningAlgorithm.Ed25519, b)))), "已转成签名钥匙"))
-            )
-          }),
           Ui.iconBtn("KeyRound", s"改 $key 的值")(onClick --> (_ => setting.update(!_))),
           AssetsPage.deleteButton(s, "引用它的 MCP 与命令会失败。", act)
         ),

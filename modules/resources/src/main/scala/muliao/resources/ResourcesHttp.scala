@@ -200,8 +200,8 @@ final case class ResourcesHttp(
       val secrets = snap.secrets.map(s =>
         val lock = s.content.lock match
           case SecretLock.Server(_)     => SecretLockView.Server
-          case SecretLock.Passkey(b)    => SecretLockView.Passkey(b)
-          case SecretLock.Signing(a, b) => SecretLockView.Signing(a, b)
+          case SecretLock.Passkey(_)    => SecretLockView.Passkey
+          case SecretLock.Signing(a, _) => SecretLockView.Signing(a)
         AssetItem(AssetItemKind.Secret, s.key, s.owner.label, rel(s.file), usedBy(AssetKind.Secret, s.key, s.owner), Some(s.content.description), None, Some(s.content.allowShell), Some(lock))
       )
       val agentFiles = as.filter(a => snap.profiles.contains(a.name)).map(a =>
