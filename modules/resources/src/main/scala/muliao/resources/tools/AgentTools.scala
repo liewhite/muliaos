@@ -8,14 +8,14 @@ import muliao.contract.AgentState
 import muliao.resources.agents.{AgentRecord, Agents, NewAgent}
 import muliao.contract.Thinking
 import muliao.resources.tree.{AssetPath, Owner}
-import muliao.resources.vault.{Actor, Vault}
+import muliao.resources.vault.{Actor, SshKeys, Vault}
 import muliao.toolkit.*
 import zio.*
 import zio.json.*
 import zio.schema.{DeriveSchema, Schema}
 import zio.schema.annotation.{description, fieldName}
 
-/** 本领域给 agent 的工具：list_agents、get_agent、create_agent、delete_agent、vault_set。 */
+/** 本领域给 agent 的工具：list_agents、get_agent、create_agent、delete_agent、vault_set、ssh_certificate。 */
 object AgentTools:
 
   final case class NoArgs()
@@ -47,6 +47,18 @@ object AgentTools:
       allowShell: Option[Boolean] = None
   )
   given Schema[VaultSet] = DeriveSchema.gen[VaultSet]
+
+  @description("签一张 SSH 证书")
+  final case class SshCertificate(
+      @description("能登录的「账户@主机」，主机写服务器 principals 文件里认的名字，如 `admin@relay`；一张证书可以写几台") logins: List[String],
+      @description("有效期（分钟，从用户批准时算起）") minutes: Int = 30,
+      @fieldName("source_address") @description("只许从这些地址用（CIDR，逗号分隔），如 `203.0.113.7/32`；不给不限") sourceAddress: Option[String] = None,
+      @description("CA 所在的 passkey secret") ca: String = "SSH_CA"
+  )
+  given Schema[SshCertificate] = DeriveSchema.gen[SshCertificate]
+
+  /** 「账户@主机」：两边都不能空，不带空白与逗号。 */
+  private val Login = "^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+$".r
 
   // ---- 输出 ----
 
@@ -115,8 +127,14 @@ object AgentTools:
     Scheduling.Ordered
   )
 
+  val SshCertificateDef = ToolDef[ToolContext, SshCertificate](
+    "ssh_certificate",
+    "用 passkey 加密的 SSH CA 签一张短期证书来登录服务器：平台现生成一把临时钥匙，等用户在界面上用 passkey 批准（每张都要批，期间这个调用一直等着），返回钥匙路径；之后 `ssh -i <钥匙> <主机>`（scp 同样加 -i，rsync 用 `-e 'ssh -i <钥匙>'`），证书在钥匙旁的 `-cert.pub`，ssh 自动带上。到期后重新申请。",
+    Access.Write
+  )
+
   /** 本领域工具的静态定义（进全部内置工具目录）。 */
-  val specs: List[ToolSpec] = List(ListAgentsDef, GetAgentDef, CreateAgentDef, DeleteAgentDef, VaultSetDef).map(_.spec)
+  val specs: List[ToolSpec] = List(ListAgentsDef, GetAgentDef, CreateAgentDef, DeleteAgentDef, VaultSetDef, SshCertificateDef).map(_.spec)
 
   def all(
       agents: Agents,
@@ -190,4 +208,20 @@ object AgentTools:
         .mapError(fail)
     }
 
-    List(listAgents, getAgent, createAgent, deleteAgent, vaultSet)
+    val sshCertificate = SshCertificateDef { (in, ctx) =>
+      (for
+        _ <- ZIO.when(in.logins.isEmpty)(ZIO.fail(AppError.invalid("logins 至少写一个「账户@主机」")))
+        _ <- ZIO.foreachDiscard(in.logins.filterNot(Login.matches))(l => ZIO.fail(AppError.invalid(s"$l 不是「账户@主机」的写法")))
+        _ <- ZIO.when(in.minutes <= 0)(ZIO.fail(AppError.invalid("minutes 要大于 0")))
+        me  <- agents.get(ctx.agent)
+        key <- SshKeys.generate
+        req  = muliao.contract.SshCertRequest(key.publicKey.line(""), in.logins.distinct, in.minutes, in.sourceAddress.map(_.trim).filter(_.nonEmpty), s"muliao:${me.name.value}:${ctx.session.value}")
+        what = s"签 SSH 证书：可登 ${req.principals.mkString("、")}，${req.minutes} 分钟${req.sourceAddress.fold("")(a => s"，只限从 $a")}"
+        cert <- vault.certify(ctx.agent, in.ca, req, muliao.contract.AskPurpose(Some(ctx.session), what))
+        path <- SshKeys.save(key, cert, req.keyId)
+      yield ToolOutcome.text(
+        s"证书已签好，可登 ${req.principals.mkString("、")}，批准后 ${req.minutes} 分钟内有效。\n钥匙：$path（证书 $path-cert.pub）\n用法：ssh -i $path <主机>"
+      )).mapError(fail)
+    }
+
+    List(listAgents, getAgent, createAgent, deleteAgent, vaultSet, sshCertificate)

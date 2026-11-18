@@ -1,6 +1,6 @@
 package muliao.web.core
 
-import muliao.contract.{PasskeyBox, PasskeyCredential}
+import muliao.contract.{PasskeyBox, PasskeyCredential, SshCert, SshCertRequest}
 import org.scalajs.dom
 
 import scala.concurrent.Future
@@ -55,6 +55,44 @@ object Passkey:
                 subtle.decrypt(js.Dynamic.literal(name = "AES-GCM", iv = unb64(box.iv), additionalData = utf8(key)), aes, unb64(box.ciphertext))
               ).recoverWith(_ => fail("解不开：选的不是加密时那把 passkey，或密文被改过"))
       yield js.Dynamic.newInstance(js.Dynamic.global.TextDecoder)().decode(new Uint8Array(pt)).asInstanceOf[String]
+
+  /** 用 passkey secret 里的 SSH CA 签一张证书（#938）：解开 CA 私钥、拼出证书、WebCrypto 签名，返回证书文件的一行。CA 私钥不离开这个页面。
+    * 有效期从现在起 `minutes` 分钟，开头往前留 5 分钟容服务器时钟偏差。
+    */
+  def certify(key: String, box: PasskeyBox, req: SshCertRequest): Future[String] =
+    for
+      pem <- open(key, box)
+      ca  <- either(SshCert.readPrivate(pem).left.map(e => s"secret $key 不是可用的 SSH CA：$e"))
+      pub <- either(SshCert.readPublic(req.publicKey).left.map(e => s"请求里的公钥不对：$e"))
+      now  = (js.Date.now() / 1000).toLong
+      unsigned = SshCert.Unsigned(
+                   nonce = bytes(random(32)),
+                   key = pub,
+                   serial = bytes(random(8)).foldLeft(0L)((acc, b) => (acc << 8) | (b & 0xffL)),
+                   keyId = req.keyId,
+                   principals = req.principals,
+                   validity = SshCert.Validity(now - 300, now + req.minutes.toLong * 60),
+                   sourceAddress = req.sourceAddress,
+                   ca = ca.publicKey
+                 )
+      signer <- promise[js.Dynamic](
+                  subtle.importKey("pkcs8", array(Pkcs8Ed25519 ++ ca.seed), js.Dynamic.literal(name = "Ed25519"), false, js.Array("sign"))
+                ).recoverWith(e => fail(s"浏览器不支持 Ed25519 签名（要 Safari 17、Chrome 137 以上）：${e.getMessage}"))
+      sig <- promise[ArrayBuffer](subtle.sign(js.Dynamic.literal(name = "Ed25519"), signer, array(unsigned.toBeSigned)))
+    yield unsigned.signed(bytes(new Uint8Array(sig)))
+
+  /** ed25519 私钥种子的 PKCS#8 外壳（RFC 8410）：后面接 32 字节种子。 */
+  private val Pkcs8Ed25519: Array[Byte] =
+    Array(0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20).map(_.toByte)
+
+  private def either[A](e: Either[String, A]): Future[A] = e.fold(fail, Future.successful)
+
+  private def bytes(a: Uint8Array): Array[Byte] = Array.tabulate(a.length)(i => a(i).toByte)
+
+  private def array(a: Array[Byte]): Uint8Array =
+    val u = new Uint8Array(a.length)
+    a.indices.foreach(i => u(i) = (a(i) & 0xff).toShort)
+    u
 
   private def elsewhere(rp: String) = s"passkey 绑在 $rp，请在 https://$rp 打开这一页"
 

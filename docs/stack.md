@@ -49,7 +49,7 @@
 ```
 | 模块 | 内容 | 直接依赖（另外每个领域都依赖 platform、toolkit） |
 |---|---|---|
-| contract | 跨领域编号（`Newtype`/opaque type）、`ApiError`、`Change`、各领域的 tapir 接口声明 | — |
+| contract | 跨领域编号（`Newtype`/opaque type）、`ApiError`、`Change`、各领域的 tapir 接口声明、前后端都要算的编码（SSH 证书 `SshCert`） | — |
 | platform | 配置、数据库与迁移、错误模型、日志、出站 HTTP 与系统代理、退避重试、「数据变了」总线、HTTP 服务骨架（登录、SSE、OpenAPI、静态前端）、单实例锁；不含领域词汇 | contract |
 | toolkit | 给 agent 的工具的共同契约：`Tool`、`ToolSpec`、参数 schema 生成、失败分类；MCP 的连接方式 `McpTransport`（资源领域读出、模型领域连接，共用一份） | platform |
 | exec | 以某身份起命令：进程组、写沙箱、secret 注入与打码、限时读完输出 | platform |
@@ -91,6 +91,7 @@
 - 资源目录的文件格式与布局与现有 `~/.muliao/assets` 兼容（agent 目录名就是 agent 名；`platform/access.toml` 里 `[agents.<编号>]`；secret 是 Fernet 密文，主密钥在配置 `[vault] key`）。SKILL.md 的 frontmatter 用 snakeyaml-engine 解析。
 - agent 的身份（编号、名字、归档、默认、改名/删除进度）在库里（表 `agent`），可编辑配置在 `agent.toml`。改名先记库再挪目录，删除先标「正在删」再清理；两者中途重启由 `Agents.start(各领域的 AgentHook)` 接着做（组装入口在 `Sessions.start` 之后调用；归档、删除在它之前会等它）。
 - **passkey secret**（#915）：secret 文件要么是 `ciphertext`（Fernet，服务端主密钥），要么是 `[passkey]` 表（`rp`、`credential`、`iv`、`ciphertext`：浏览器用 WebAuthn PRF 从 passkey 导出密钥、AES-GCM 加密，附加数据是 secret 名），读成 `SecretLock = Server | Passkey`；与 `allow_shell` 互不相干。只有用户能设、改 passkey 的值（界面里加密好再交 `SecretValue.Passkey`），agent 的 `vault_set` 与手改文件都改不动。`Vault.reveal` 是唯一入口：passkey 的经 `Grants.obtain` 等用户授权——每次调用各自一个请求，带 `AskPurpose`（哪个会话、拿去跑什么：命令全文、skill 脚本与参数、要连的 MCP、触发器名与命令），批准卡片显示在那个会话页（推送点开即到），没有会话的（触发器）在 AI 资产 Secret 页（那里列全部）。用户用 passkey 解开交回明文：「一次」「拒绝」只结这一个请求；「一段时间」把这个 agent 这个 secret 记成已授权并结掉它全部在等的请求，到期前不再问（到期的在下次读写状态时删掉）。调用结束（含被中断）时请求随之撤下（`acquireReleaseWith`）。授权全在内存，按 agent 隔离，重启清空。新请求经 `Grants.asked` 由通知领域的 `VaultLink` 推送给用户（有会话的指向会话；组装时在 `Sessions.start` 之前订上）。等待不设时限，也不在前置检查的时限里（时限只包命令本身）：触发器用到它就卡在「检查中」、之后到点记跳过，常驻流卡在启动前，直到用户授权（用户定：卡住就卡住，这类 secret 不该用在没人在场的地方）。MCP 配置引用它的，每次运行开头连 MCP 都要等授权（授权「一次」就每次运行问一次）。前端只在 HTTPS 的域名地址（不是 IP、localhost）上启用 passkey。接口 `VaultApi`（`VaultHttp`），主题 `vault`。
+- **SSH 短期证书**（#938）：passkey secret 也可以当 SSH CA（ed25519、不带口令的 OpenSSH 私钥），工具 `ssh_certificate` 经 `Vault.certify` → `Grants.certify` 请用户签一张证书：请求是 `AskWant.SshCert(SshCertRequest)`（临时公钥、能登录的「账户@主机」、分钟数、可选来源地址、记录名 `muliao:<agent>:<会话>`），卡片上「签发」时浏览器解开 CA、用 contract 的 `SshCert` 拼出待签证书、WebCrypto Ed25519 签名，只交回证书行（`AskDecision.Certificate`），CA 私钥不出浏览器；每张都要批，「一段时间」的取明文授权不管它，答复种类不符报错。临时钥匙由 `SshKeys` 用 JDK 生成，与证书一起写进系统临时目录下只有本用户可读的新目录（macOS 几天后自动清）。证书编码在 contract（前后端共用），测试与 ssh-keygen 签的逐字节比对。服务器端：`TrustedUserCAKeys` 加 `AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u`（文件里写「账户@主机」），签给一台的证书登不了别台。
 - 资源文件的位置与路径只在 `AssetPath` 互换：`classify`（路径 → 位置）、`render`（资源文件 → 路径，测试保证往返一致）、`home`（某资源归某主人时放在哪）；不手拼 `skills/`、`secrets/` 这类路径。每种文件的规格（名字、内容解析）只在 `FileSpec.load`，扫描与写入口共用。
 - 资源目录每 2 秒按指纹（路径、大小、纳秒修改时间、inode）轮询，变了才重新解析并广播主题 `assets`；平台自己写文件后立即刷新。
 - access.toml 写坏时沿用上一份有效的（副本在数据目录 `resources/access.last-good.toml`，重启后仍有效），平台经 `AccessEditor` 改它会被拒绝直到修好；平台写回 access.toml 时按固定格式重排（角色、agent 按名字排序，`[agents.<编号>] # 名字`），手写的注释不保留。

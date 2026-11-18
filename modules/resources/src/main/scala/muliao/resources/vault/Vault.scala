@@ -1,6 +1,6 @@
 package muliao.resources.vault
 
-import muliao.contract.{AgentId, AskPurpose, AssetKind, SecretValue}
+import muliao.contract.{AgentId, AskPurpose, AssetKind, SecretValue, SshCertRequest}
 import muliao.platform.AppError
 import muliao.resources.VaultSettings
 import muliao.resources.access.{Action, Decision, Permissions}
@@ -37,6 +37,11 @@ trait Vault:
     * 其中 passkey 加密的没有生效的授权时，等用户授权（几个同时等），被拒绝报错；`purpose` 给用户看拿去做什么、在哪个会话里批。
     */
   def reveal(agent: AgentId, keys: List[String], use: SecretUse, purpose: AskPurpose): IO[AppError, Map[String, String]]
+
+  /** 用 passkey 加密的 SSH CA（secret `ca`）签一张证书（#938）：等用户在浏览器里解开并签好交回，明文不出浏览器。
+    * 用它要有 use 权限；CA 是服务端主密钥加密的报错（那样本机就能解开，失去意义）。
+    */
+  def certify(agent: AgentId, ca: String, request: SshCertRequest, purpose: AskPurpose): IO[AppError, String]
 
 object Vault:
   val layer: ZLayer[VaultSettings & AssetStore & Agents & Grants, AppError, Vault] =
@@ -127,18 +132,24 @@ object Vault:
           if text.isEmpty then ZIO.fail(AppError.invalid("secret 的值不能为空")) else ZIO.succeed(SecretLock.Server(fernet.encrypt(text, now)))
         case (_, _, SecretValue.Passkey(box)) => ZIO.succeed(SecretLock.Passkey(box))
 
+    /** 这个 agent 能用的 secret 文件：不存在、没加载或没有 use 权限都报错。 */
+    private def usable(perms: Permissions, snap: Snapshot, key: String): IO[AppError, SecretDoc] =
+      for
+        doc <- ZIO
+                 .fromOption(snap.secret(key))
+                 .orElseFail(AppError.invalid(s"没有可用的 secret $key（不存在或文件没加载）"))
+        _ <- perms.decide(Action.Use, AssetKind.Secret, key, doc.owner) match
+               case Decision.Allowed(_) => ZIO.unit
+               case _                   => ZIO.fail(AppError.forbidden(s"你不能用 secret $key（归 ${doc.owner.label}）；找 admin 授权"))
+      yield doc
+
     def reveal(agent: AgentId, keys: List[String], use: SecretUse, purpose: AskPurpose): IO[AppError, Map[String, String]] =
       for
         perms <- permissions(agent)
         snap  <- store.snapshot
         docs <- ZIO.foreach(keys.distinct) { key =>
                   for
-                    doc <- ZIO
-                             .fromOption(snap.secret(key))
-                             .orElseFail(AppError.invalid(s"没有可用的 secret $key（不存在或文件没加载）"))
-                    _ <- perms.decide(Action.Use, AssetKind.Secret, key, doc.owner) match
-                           case Decision.Allowed(_) => ZIO.unit
-                           case _                   => ZIO.fail(AppError.forbidden(s"你不能用 secret $key（归 ${doc.owner.label}）；找 admin 授权"))
+                    doc <- usable(perms, snap, key)
                     _ <- ZIO.when(use == SecretUse.Shell && !doc.content.allowShell)(
                            ZIO.fail(AppError.forbidden(s"secret $key 只能经 skill 脚本（skill_run）或 MCP 使用，不能注入自写命令"))
                          )
@@ -147,6 +158,17 @@ object Vault:
         // 权限都过了才开始解：passkey 的几个同时等用户授权，一个被拒绝就不再等其余的
         pairs <- ZIO.foreachPar(docs)(doc => open(agent, doc, purpose).map(doc.key -> _))
       yield pairs.toMap
+
+    def certify(agent: AgentId, ca: String, request: SshCertRequest, purpose: AskPurpose): IO[AppError, String] =
+      for
+        perms <- permissions(agent)
+        snap  <- store.snapshot
+        doc   <- usable(perms, snap, ca)
+        cert <- doc.content.lock match
+                  case SecretLock.Passkey(box) => grants.certify(Slot(agent, ca), request, purpose, box)
+                  case SecretLock.Server(_) =>
+                    ZIO.fail(AppError.invalid(s"secret $ca 不是 passkey 加密的：SSH CA 要由用户在界面 Secret 页设成 passkey 加密，签证书时才只在浏览器里解开"))
+      yield cert
 
     private def open(agent: AgentId, doc: SecretDoc, purpose: AskPurpose): IO[AppError, String] =
       doc.content.lock match

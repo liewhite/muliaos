@@ -1,5 +1,6 @@
 package muliao.notifications
 
+import muliao.contract.AskWant
 import muliao.resources.agents.Agents
 import muliao.resources.vault.{Asked, Grants}
 import zio.*
@@ -14,7 +15,10 @@ object VaultLink:
     val first = a.purpose.what.linesIterator.map(_.trim).find(_.nonEmpty).getOrElse("")
     val what  = if first.length > 120 then first.take(120) + "…" else first
     val where = a.purpose.session.fold("在 Secret 页")(_ => "点开在会话里")
-    Notice(s"$agent 要用 secret ${a.slot.key}", s"要拿它跑：$what。${where}用 passkey 批准（一次或一段时间）或拒绝。", a.purpose.session.fold(Target.Page(Page))(Target.Session(_)))
+    val (title, body) = a.want match
+      case AskWant.Reveal     => (s"$agent 要用 secret ${a.slot.key}", s"要拿它跑：$what。${where}用 passkey 批准（一次或一段时间）或拒绝。")
+      case AskWant.SshCert(r) => (s"$agent 要签 SSH 证书", s"可登 ${r.principals.mkString("、")}，${r.minutes} 分钟。${where}用 passkey 签发或拒绝。")
+    Notice(title, body, a.purpose.session.fold(Target.Page(Page))(Target.Session(_)))
 
   /** 在调用方的 scope 里订阅并转发：返回时已订上。 */
   def start(grants: Grants, agents: Agents, n: Notifications): URIO[Scope, Unit] =

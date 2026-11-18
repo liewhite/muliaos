@@ -6,6 +6,9 @@ import muliao.resources.tree.{Formats, Owner, SecretFile, SecretLock}
 import muliao.resources.vault.*
 import zio.*
 import zio.test.*
+import zio.json.ast.Json
+import muliao.resources.tools.AgentTools
+import muliao.toolkit.ToolContext
 
 import java.nio.file.Files
 
@@ -98,7 +101,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
       yield assertTrue(
         reason(shell).contains("不能注入自写命令"),
         w2.map(x => (x.agent, x.key, x.purpose, x.box)).toSet == Set((a.id, "PK_TOKEN", in("s1", "cmd1"), box), (a.id, "PK_TOKEN", in("s2", "cmd2"), box)),
-        note == Asked(Slot(a.id, "PK_TOKEN"), in("s1", "cmd1")),
+        note == Asked(Slot(a.id, "PK_TOKEN"), AskWant.Reveal, in("s1", "cmd1")),
         r2 == Map("PK_TOKEN" -> "v-once"),
         w1.map(_.purpose.what) == List("cmd1"),
         wb.map(_.agent).contains(b.id),
@@ -133,4 +136,66 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         _  <- f4.interrupt
       yield assertTrue(r1 == Map("PK_TOKEN" -> "v"), w2.size == 1, w4.size == 1)
     }
+    ,
+    test("签 SSH 证书（#938）：工具发出请求（带能登哪些、多久、记录名）；每张都要批，一段时间的授权不管用；答错种类被拒；交回证书后写好钥匙与证书；服务端加密的 CA 不让用") {
+      for
+        (a, _, vault) <- setup
+        _     <- vault.set(Actor.User, "SSH_CA", SecretValue.Passkey(box), Some("CA"), Some(false), Owner.Agent(a.name))
+        _     <- vault.set(Actor.User, "PLAIN_CA", SecretValue.Plain("x"), None, None, Owner.Agent(a.name))
+        tool  <- toolOf("ssh_certificate")
+        sub   <- ZIO.serviceWithZIO[Grants](_.asked)
+        // 先给 SSH_CA 一段「取明文」的授权：签证书仍要问
+        f0    <- vault.reveal(a.id, List("SSH_CA"), SecretUse.Script, in("s0", "x")).fork
+        w0    <- asks(1)
+        _     <- answer(w0.head.id, AskDecision.For("pem", 60))
+        _     <- f0.join
+        _     <- sub.take
+        bad   <- tool.invoke(Json.Obj("logins" -> Json.Arr(Json.Str("relay"))), Ctx(a.id)).either
+        plain <- tool.invoke(Json.Obj("logins" -> Json.Arr(Json.Str("admin@relay")), "ca" -> Json.Str("PLAIN_CA")), Ctx(a.id)).either
+        f1    <- tool.invoke(Json.Obj("logins" -> Json.Arr(Json.Str("admin@relay"), Json.Str("root@jlp")), "minutes" -> Json.Num(10)), Ctx(a.id)).fork
+        w1    <- asks(1)
+        note  <- sub.take
+        once  <- answer(w1.head.id, AskDecision.Once("pem")).either
+        span  <- answer(w1.head.id, AskDecision.For("pem", 5)).either
+        still <- asks(1)
+        _     <- answer(w1.head.id, AskDecision.Certificate("ssh-ed25519-cert-v01@openssh.com AAAA muliao"))
+        out   <- f1.join
+        path   = (out match { case muliao.toolkit.ToolOutcome.Completed(cs) => cs.collect { case muliao.toolkit.ToolContent.Text(t) => t }.mkString }).linesIterator.collectFirst { case l if l.startsWith("钥匙：") => l.stripPrefix("钥匙：").takeWhile(_ != '（') }.get
+        cert  <- ZIO.attemptBlocking(Files.readString(java.nio.file.Path.of(path + "-cert.pub")))
+        f2    <- tool.invoke(Json.Obj("logins" -> Json.Arr(Json.Str("admin@relay"))), Ctx(a.id)).fork
+        w2    <- asks(1)
+        _     <- answer(w2.head.id, AskDecision.Deny)
+        denied <- f2.join.either
+      yield
+        val want = w1.head.want
+        assertTrue(
+          bad.isLeft,
+          plain.left.toOption.exists(_.toString.contains("不是 passkey 加密的")),
+          want match
+            case AskWant.SshCert(r) =>
+              r.principals == List("admin@relay", "root@jlp") && r.minutes == 10 && r.keyId == "muliao:alice:s" && SshCert.readPublic(r.publicKey).isRight
+            case AskWant.Reveal => false
+          ,
+          w1.head.purpose.session.contains(SessionId.wrap("s")),
+          note.want == want,
+          reason(once).contains("不符"),
+          reason(span).contains("不符"),
+          still.map(_.id) == w1.map(_.id),
+          cert == "ssh-ed25519-cert-v01@openssh.com AAAA muliao\n",
+          denied.left.toOption.exists(_.toString.contains("拒绝"))
+        )
+    }
   ).provideSomeLayer[Scope](TestEnv.layer) @@ TestAspect.sequential @@ TestAspect.timeout(60.seconds)
+
+  final case class Ctx(agent: AgentId) extends ToolContext:
+    val session = SessionId.wrap("s")
+    val call    = CallId.wrap("c")
+
+  def toolOf(name: String) =
+    for
+      ags   <- ZIO.service[Agents]
+      res   <- ZIO.service[Resources]
+      store <- ZIO.service[muliao.resources.tree.AssetStore]
+      vault <- ZIO.service[Vault]
+      paths <- ZIO.service[ResourcePaths]
+    yield AgentTools.all(ags, res, store, vault, TestEnv.tools, paths).find(_.spec.name == name).get

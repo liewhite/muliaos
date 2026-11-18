@@ -31,8 +31,25 @@ object SecretValue:
 /** 要 secret 做什么：哪个会话（触发器等没有会话的为空）、拿去跑什么（命令全文、skill 脚本与参数、要连的 MCP）。给用户判断批不批。 */
 final case class AskPurpose(session: Option[SessionId], what: String) derives JsonCodec, Schema
 
+/** 请 SSH CA 签一张用户证书（#938）：`publicKey` 是平台现生成的临时公钥（`ssh-ed25519 …` 一行），`principals` 是能登录的「账户@主机」，
+  * 有效 `minutes` 分钟（从用户批准时算起），`sourceAddress` 是只许从哪些地址用（CIDR，逗号分隔），`keyId` 记在证书里、服务器日志可见。
+  */
+final case class SshCertRequest(publicKey: String, principals: List[String], minutes: Int, sourceAddress: Option[String], keyId: String)
+    derives JsonCodec, Schema
+
+/** 要 passkey secret 做什么：解开交出明文，或当 SSH CA 签一张证书（CA 私钥只在浏览器里用、不交回）。JSON 里 `kind` 是分支名。 */
+@jsonDiscriminator("kind")
+enum AskWant derives JsonCodec:
+  case Reveal
+  case SshCert(request: SshCertRequest)
+
+object AskWant:
+  given Schema[AskWant] =
+    given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
+    Schema.derived
+
 /** 一次调用要用某个 passkey secret，正等用户授权（每次调用各自一个，`id` 全局唯一、不随重启重复，用来答复）。`box` 给浏览器解密用。 */
-final case class SecretAsk(id: AskId, agent: AgentId, key: String, purpose: AskPurpose, since: Long, box: PasskeyBox) derives JsonCodec, Schema
+final case class SecretAsk(id: AskId, agent: AgentId, key: String, want: AskWant, purpose: AskPurpose, since: Long, box: PasskeyBox) derives JsonCodec, Schema
 
 /** 一段时间的授权：到 `until`（epoch 毫秒）为止这个 agent 用这个 secret 不再问。 */
 final case class SecretGrant(agent: AgentId, key: String, until: Long) derives JsonCodec, Schema
@@ -42,17 +59,19 @@ final case class PasskeyCredential(rp: String, credential: String) derives JsonC
 
 final case class VaultState(asks: List[SecretAsk], grants: List[SecretGrant], credentials: List[PasskeyCredential]) derives JsonCodec, Schema
 
-/** 用户对一次请求的答复：解开的明文用一次、用一段时间（分钟），或拒绝。JSON 里 `kind` 是分支名。 */
+/** 用户对一次请求的答复：解开的明文用一次、用一段时间（分钟），签好的证书（证书文件的一行，答 `AskWant.SshCert`），或拒绝。JSON 里 `kind` 是分支名。 */
 @jsonDiscriminator("kind")
 enum AskDecision derives JsonCodec:
   case Once(value: String)
   case For(value: String, minutes: Int)
+  case Certificate(cert: String)
   case Deny
 
   override def toString: String = this match
-    case Once(_)       => "AskDecision.Once(***)"
-    case For(_, m)     => s"AskDecision.For(***, $m)"
-    case Deny          => "AskDecision.Deny"
+    case Once(_)        => "AskDecision.Once(***)"
+    case For(_, m)      => s"AskDecision.For(***, $m)"
+    case Certificate(c) => s"AskDecision.Certificate($c)"
+    case Deny           => "AskDecision.Deny"
 
 object AskDecision:
   given Schema[AskDecision] =
@@ -71,7 +90,7 @@ object VaultApi:
 
   val answerAsk =
     vault.post.in("answer").in(jsonBody[AskAnswer]).out(statusCode(StatusCode.NoContent)).name("answerAsk")
-      .description("答复一个等授权的请求：浏览器解开的明文用一次（只给这次调用）或一段时间（这个 agent 这个 secret 全部在等的一并给），或拒绝。请求已没了回 NotFound。")
+      .description("答复一个等授权的请求：浏览器解开的明文用一次（只给这次调用）或一段时间（这个 agent 这个 secret 全部在等的一并给），签证书的请求交回签好的证书，或拒绝。请求已没了回 NotFound，答复与请求种类不符回 BadRequest。")
 
   val revokeGrant =
     vault.post.in("revoke").in(jsonBody[GrantRevoke]).out(statusCode(StatusCode.NoContent)).name("revokeGrant")
