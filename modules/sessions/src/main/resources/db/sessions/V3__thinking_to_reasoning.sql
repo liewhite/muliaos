@@ -4,9 +4,10 @@ UPDATE entry
 SET body = json_set(
   body,
   '$.Reply.parts',
-  (SELECT json_group_array(
+  -- 子查询、CASE 的结果会丢掉 JSON 子类型（按 SQLite 版本而异），不套 json() 就被当成字符串写进去
+  json((SELECT json_group_array(json(
             CASE
-              WHEN json_type(p.value, '$.Thinking') IS NULL THEN json(p.value)
+              WHEN json_type(p.value, '$.Thinking') IS NULL THEN p.value
               WHEN json_extract(p.value, '$.Thinking.seal.protocol') = 'anthropic'
                    AND json_type(p.value, '$.Thinking.seal.data.signature') IS NOT NULL
                 THEN json_object('Reasoning', json_object('block', json_object('protocol', 'anthropic', 'data', json_object(
@@ -30,13 +31,13 @@ SET body = json_set(
                                       WHEN json_extract(p.value, '$.Thinking.seal.data.raw') AND json_extract(p.value, '$.Thinking.text') <> ''
                                         THEN json_array(json_object('type', 'reasoning_text', 'text', json_extract(p.value, '$.Thinking.text')))
                                     END)))))
-            END
+            END)
             ORDER BY p.key)
    FROM json_each(entry.body, '$.Reply.parts') AS p
    WHERE json_type(p.value, '$.Thinking') IS NULL
       OR json_type(p.value, '$.Thinking.seal.data.signature') IS NOT NULL
       OR json_type(p.value, '$.Thinking.seal.data.redacted') IS NOT NULL
       OR (json_extract(p.value, '$.Thinking.seal.protocol') = 'openai-responses'
-          AND json_type(p.value, '$.Thinking.seal.data.id') IS NOT NULL))
+          AND json_type(p.value, '$.Thinking.seal.data.id') IS NOT NULL)))
 )
 WHERE kind = 'reply' AND body GLOB '*"Thinking"*';
