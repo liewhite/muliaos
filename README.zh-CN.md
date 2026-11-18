@@ -2,7 +2,7 @@
 
 **跑在你自己 Mac 上的个人多 agent 平台：自托管、单用户，养一队长期在岗的 AI agent。**
 
-[English](README.md) · [文档](docs/README.md) · [许可证：MIT](LICENSE)
+[English](README.md) · [文档](#文档) · [许可证：MIT](LICENSE)
 
 你在网页上（电脑浏览器，或添加到 iPhone 主屏的应用）和 agent 对话、派活、看它们干活。
 每个 agent 有自己的描述、记忆、skill、工作目录和定时任务；它们能执行真实的 shell 命令、读写文件、互相委派、
@@ -47,14 +47,15 @@ muliao 是作者每天在用的个人项目，按现状分享。
 ```zsh
 brew install node openssl@3 rust
 curl -s "https://get.sdkman.io" | bash          # 装完开一个新终端
-sdk install java 25.0.3-tem && sdk install sbt
+sdk install java 25.0.5.0+8-tem && sdk install sbt   # 也可以用 `sdk list java` 里更新的 25.x Temurin
 cargo install --locked apple-codesign             # 提供 rcodesign
+echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.zprofile && export PATH="$HOME/.cargo/bin:$PATH"
 
 git clone https://github.com/liewhite/muliaos.git && cd muliaos
 mkdir -p ~/.muliao-scala
 cp deploy/config.example.toml ~/.muliao-scala/config.toml
 chmod 600 ~/.muliao-scala/config.toml
-$EDITOR ~/.muliao-scala/config.toml               # 填登录密码、cookie_secret、vault 主密钥、模型 API key
+$EDITOR ~/.muliao-scala/config.toml               # 把 CHANGE ME 都换掉，改成你的时区
 
 sh deploy/install.sh                              # 编译、签名、安装成单文件程序
 sh deploy/service.sh install                      # 注册并启动 launchd 服务
@@ -73,13 +74,10 @@ open http://127.0.0.1:1080
 | [核心概念](docs/zh-CN/concepts.md) | agent、会话与运行、工具、委派、看板、触发器、记忆、skill、角色、secret |
 | [配置](docs/zh-CN/configuration.md) | `config.toml` 的每个键，数据目录与资源目录的结构 |
 | [架构](docs/zh-CN/architecture.md) | 模块与依赖方向、持久化与恢复、打包 |
-| [参与开发](CONTRIBUTING.md) | 构建、测试与开发流程 |
+| [参与开发](CONTRIBUTING.md#参与开发) | 构建、测试与开发流程 |
+| [安全策略](SECURITY.md#安全策略) | 怎么报告漏洞，muliao 保护什么、不保护什么 |
 
 项目据以开发的设计文档：[需求](docs/requirements.md)、[技术栈与开发约定](docs/stack.md)、[前端](docs/web.md)。
-
-## 技术栈
-
-Scala 3 · ZIO 2 · tapir + zio-http · SQLite（ProtoQuill、Flyway）· Scala.js + Laminar · MCP Java SDK · jlink
 
 ## 许可证
 

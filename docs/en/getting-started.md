@@ -12,7 +12,7 @@ This guide installs muliao as a background service on your Mac, creates your fir
 - **Homebrew** packages: `node` (frontend build), `openssl@3` (the signing certificate is created with `/opt/homebrew/bin/openssl`),
   `rust` (to install `rcodesign`).
 - **JDK 25 and sbt** installed with [SDKMAN!](https://sdkman.io); the build uses `~/.sdkman/candidates/java/current` and `~/.sdkman/candidates/sbt/current`.
-- **rcodesign** (`cargo install --locked apple-codesign`) on your `PATH`, e.g. in `~/.cargo/bin`.
+- **rcodesign** (`cargo install --locked apple-codesign`) on your `PATH`. Cargo installs into `~/.cargo/bin`, which Homebrew's Rust does not add to `PATH`.
 - An API key for an **Anthropic** or **OpenAI-compatible** model provider. With the Anthropic protocol muliao always requests
   adaptive thinking, so the model must support it (older models answer `adaptive thinking is not supported on this model`).
 
@@ -20,9 +20,10 @@ This guide installs muliao as a background service on your Mac, creates your fir
 xcode-select --install
 brew install node openssl@3 rust
 curl -s "https://get.sdkman.io" | bash      # open a new terminal afterwards
-sdk install java 25.0.3-tem
+sdk install java 25.0.5.0+8-tem             # or a newer 25.x Temurin from `sdk list java`
 sdk install sbt
 cargo install --locked apple-codesign
+echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.zprofile && export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
 ## 1. Get the source
@@ -44,7 +45,7 @@ cp deploy/config.example.toml ~/.muliao-scala/config.toml
 chmod 600 ~/.muliao-scala/config.toml
 ```
 
-Edit `~/.muliao-scala/config.toml` and replace every `CHANGE ME` that is not commented out:
+Edit `~/.muliao-scala/config.toml`, set `general.timezone` to your time zone and replace every `CHANGE ME` that is not commented out:
 
 | Key | What to put there |
 |---|---|
@@ -88,9 +89,8 @@ sh deploy/selfcheck.sh
 ```
 
 It prints `PASS`/`FAIL` for: the process started after the install, the running version matches the installed one, no `ERROR` in the
-log since startup, the port answers 200, and launchd is not restarting it in a loop (this last check waits 60 seconds). On the very
-first start the program unpacks its runtime, which takes a few seconds; if the check runs before that it reports no running process,
-so run it again.
+log since startup, the port answers 200, and launchd is not restarting it in a loop (this last check waits 60 seconds). Run right
+after `service.sh install`, it can report no running process because Java is still starting; run it again a few seconds later.
 
 If the service does not come up, look at `~/.muliao-scala/muliao.log` (the program's log) and `~/.muliao-scala/launchd.log`
 (startup errors, such as an invalid configuration).
@@ -109,7 +109,10 @@ Agents, 触发器 (triggers), Token 用量 (usage), AI 资产 (assets), 角色 (
 ## 6. Use it from your phone (optional)
 
 muliao listens on `127.0.0.1` by default. To reach it from other devices, put it behind a reverse proxy that serves HTTPS on a domain
-name you control (any proxy or tunnel that terminates TLS and forwards to `127.0.0.1:1080` works), then:
+name you control (any proxy or tunnel that terminates TLS and forwards to `127.0.0.1:1080` works).
+
+The proxy must run on the same Mac and add an `X-Forwarded-For` header: login rate limiting uses its last entry to tell devices apart
+when a request comes from `127.0.0.1`. Without it, every device shares one counter and a few wrong passwords on one device lock out all of them. Then:
 
 1. Set `server.public_url` to that HTTPS address (notification links use it) and restart: `sh deploy/activate.sh --restart-only`.
 2. Open the address in Safari on the iPhone, *Share → Add to Home Screen*, and open muliao from the home screen.
@@ -175,5 +178,5 @@ Every deploy script reads three environment variables, so you can try a build wi
 | `MULIAO_LABEL` | `com.muliao.scala` | launchd service name |
 | `MULIAO_PORT` | `1080` | port used by the health checks; must match `server.port` |
 
-Use different `data_dir`, `assets_dir`, log file and `server.port` in that instance's config. One data directory can only be used
-by one running process.
+In that instance's config use different `data_dir`, `assets_dir` and `server.port`, and set `log.file` to `<MULIAO_HOME>/muliao.log`
+(`selfcheck.sh` reads the log from there). One data directory can only be used by one running process.

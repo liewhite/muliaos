@@ -2,7 +2,7 @@
 
 **A self-hosted, single-user platform for running a team of long-lived AI agents on your own Mac.**
 
-[中文](README.zh-CN.md) · [Documentation](docs/README.md) · [License: MIT](LICENSE)
+[中文](README.zh-CN.md) · [Documentation](#documentation) · [License: MIT](LICENSE)
 
 You talk to your agents from a web UI (desktop browser or an iPhone home-screen app), hand them work, and watch them do it.
 Each agent has its own description, memory, skills, workspace and schedule. Agents run real shell commands, read and edit files,
@@ -48,14 +48,15 @@ JDK 25 and sbt from [SDKMAN!](https://sdkman.io), and [`rcodesign`](https://gith
 ```zsh
 brew install node openssl@3 rust
 curl -s "https://get.sdkman.io" | bash          # then open a new terminal
-sdk install java 25.0.3-tem && sdk install sbt
+sdk install java 25.0.5.0+8-tem && sdk install sbt   # or a newer 25.x Temurin from `sdk list java`
 cargo install --locked apple-codesign             # provides rcodesign
+echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.zprofile && export PATH="$HOME/.cargo/bin:$PATH"
 
 git clone https://github.com/liewhite/muliaos.git && cd muliaos
 mkdir -p ~/.muliao-scala
 cp deploy/config.example.toml ~/.muliao-scala/config.toml
 chmod 600 ~/.muliao-scala/config.toml
-$EDITOR ~/.muliao-scala/config.toml               # set password, cookie_secret, vault key, model API key
+$EDITOR ~/.muliao-scala/config.toml               # replace every CHANGE ME, set your time zone
 
 sh deploy/install.sh                              # build, sign and install the single-file program
 sh deploy/service.sh install                      # register and start the launchd service
@@ -75,13 +76,10 @@ The full walkthrough, including HTTPS access from your phone, updates and rollba
 | [Configuration](docs/en/configuration.md) | Every `config.toml` key and the layout of the data and assets directories |
 | [Architecture](docs/en/architecture.md) | Modules, dependency direction, persistence and recovery, packaging |
 | [Contributing](CONTRIBUTING.md) | Building, testing and the development workflow |
+| [Security policy](SECURITY.md) | Reporting vulnerabilities, what muliao does and does not protect |
 
 The design documents the project is built against are in Chinese: [requirements](docs/requirements.md),
 [stack and conventions](docs/stack.md), [frontend](docs/web.md).
-
-## Built with
-
-Scala 3 · ZIO 2 · tapir + zio-http · SQLite (ProtoQuill, Flyway) · Scala.js + Laminar · MCP Java SDK · jlink
 
 ## License
 

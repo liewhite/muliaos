@@ -49,8 +49,8 @@ or *idle*. The same definition is used everywhere: the session list, the issue b
 
 ## Tools
 
-Agents only get the tools their permissions allow. The list does not change between runs (this keeps the prompt cache warm);
-tools that need a particular state check it when called and explain why they cannot run.
+Agents only get the tools their permissions allow. The list depends only on permissions and configured MCP servers, not on what the
+session is doing (this keeps the prompt cache warm); tools that need a particular state check it when called and explain why they cannot run.
 
 | Area | Tools |
 |---|---|
@@ -131,12 +131,12 @@ memories, skills, MCP servers, secrets, agent configs and the access rules. A fi
 Rules have the form `action:kind:pattern`:
 
 - `action` is `use` or `write`, `kind` is `tool`, `skill`, `mcp`, `secret` or `memory`, and `pattern` is a name with wildcards,
-  e.g. `use:skill:deploy-*`, `use:secret:GITHUB_*`, `write:memory:team`.
+  e.g. `use:skill:deploy-*`, `use:secret:GITHUB_*`, `write:memory:team`. `action` and `kind` may also be `*`.
 - `write:path:<dir>` lets the agent's commands and file tools write to a directory outside its workspace.
-- Rules are grouped in **allow** and **deny** lists; deny wins.
+- Rules are grouped in **allow** and **deny** lists; deny wins, except that it never blocks an agent's own resources or reading the global memory.
 
-A **role** is a named set of rules. Two roles are built in: `base` (every agent: all non-admin tools, the global memory and the
-platform's resources) and `admin` (all tools, write access to everything). An agent's effective permissions are `base` plus
+A **role** is a named set of rules. Two roles are built in: `base` (every agent: all non-admin tools, the global memory, plus any rules
+you add to the `base` role) and `admin` (all tools, write access to everything). An agent's effective permissions are `base` plus
 its roles plus its own extra rules; the agent page shows the result and which rule granted each item. Owners can always use and
 edit their own resources.
 

@@ -27,7 +27,7 @@ muliao 只读一个 TOML 文件，路径在命令行给出（`muliao serve <文�
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `level` | `"INFO"` | 最低级别：`DEBUG`、`INFO`、`WARN`、`ERROR` |
-| `file` | 无 | 日志文件；不写就打到标准输出 |
+| `file` | 无 | 日志文件；不写就打到标准输出。`deploy/selfcheck.sh` 读的是 `<MULIAO_HOME>/muliao.log` |
 | `max_size_mb` | `20` | 单个文件超过这么大就轮转 |
 | `keep` | `5` | 轮转保留的旧文件份数（`file.1` … `file.N`） |
 
@@ -169,6 +169,7 @@ platform/secrets/<KEY>.toml       平台的 secret
 ```
 
 `<agent>` 是 agent 的名字；资源在谁的目录下就归谁。`.` 开头的文件和目录不读。
+skill、MCP server、共享记忆的名字只用小写字母、数字和 `-`（以字母或数字开头，最多 64 个字符）。
 
 ### `agent.toml`
 

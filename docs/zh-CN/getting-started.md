@@ -10,7 +10,7 @@
 - **Xcode 命令行工具**（`xcode-select --install`），提供 `cc`。
 - **Homebrew** 装的 `node`（构建前端）、`openssl@3`（签名证书用 `/opt/homebrew/bin/openssl` 生成）、`rust`（用来装 `rcodesign`）。
 - [SDKMAN!](https://sdkman.io) 装的 **JDK 25 和 sbt**；构建用 `~/.sdkman/candidates/java/current` 和 `~/.sdkman/candidates/sbt/current`。
-- `PATH` 里有 **rcodesign**（`cargo install --locked apple-codesign`，装在 `~/.cargo/bin`）。
+- `PATH` 里有 **rcodesign**（`cargo install --locked apple-codesign`）。cargo 装在 `~/.cargo/bin`，Homebrew 的 Rust 不会把它加进 `PATH`。
 - 一个 **Anthropic** 或 **OpenAI 兼容**模型服务的 API key。走 Anthropic 协议时 muliao 总是请求 adaptive thinking，模型必须支持它
   （老模型会回 `adaptive thinking is not supported on this model`）。
 
@@ -18,9 +18,10 @@
 xcode-select --install
 brew install node openssl@3 rust
 curl -s "https://get.sdkman.io" | bash      # 装完开一个新终端
-sdk install java 25.0.3-tem
+sdk install java 25.0.5.0+8-tem             # 也可以用 `sdk list java` 里更新的 25.x Temurin
 sdk install sbt
 cargo install --locked apple-codesign
+echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.zprofile && export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
 ## 1. 取源码
@@ -42,7 +43,7 @@ cp deploy/config.example.toml ~/.muliao-scala/config.toml
 chmod 600 ~/.muliao-scala/config.toml
 ```
 
-编辑 `~/.muliao-scala/config.toml`，把没注释掉的 `CHANGE ME` 都换掉：
+编辑 `~/.muliao-scala/config.toml`，把 `general.timezone` 改成你的时区，把没注释掉的 `CHANGE ME` 都换掉：
 
 | 键 | 填什么 |
 |---|---|
@@ -83,7 +84,7 @@ sh deploy/selfcheck.sh
 ```
 
 它逐项打印 `PASS`/`FAIL`：进程晚于安装启动、在跑的版本就是装的版本、启动以来日志无 `ERROR`、端口返回 200、launchd 没在循环重启（最后一项要等 60 秒）。
-第一次启动时程序要先解开内置的运行时，要几秒；自检跑得太早会报没有在跑的进程，再跑一次即可。
+刚 `service.sh install` 完就跑自检，可能因为 Java 还在启动而报没有在跑的进程，过几秒再跑一次即可。
 
 服务起不来时看 `~/.muliao-scala/muliao.log`（程序日志）和 `~/.muliao-scala/launchd.log`（启动前的报错，比如配置写错）。
 
@@ -98,7 +99,10 @@ sh deploy/selfcheck.sh
 
 ## 6. 在手机上用（可选）
 
-muliao 默认只监听 `127.0.0.1`。要从别的设备访问，在前面放一个反向代理，用你自己的域名提供 HTTPS（任何终结 TLS、转发到 `127.0.0.1:1080` 的代理或隧道都行），然后：
+muliao 默认只监听 `127.0.0.1`。要从别的设备访问，在前面放一个反向代理，用你自己的域名提供 HTTPS（任何终结 TLS、转发到 `127.0.0.1:1080` 的代理或隧道都行）。
+
+代理要跑在同一台 Mac 上，并加上 `X-Forwarded-For` 请求头：请求来自 `127.0.0.1` 时，登录限速靠它的最后一跳区分设备。不加的话所有设备共用一个计数，
+一台设备输错几次密码就会把全部设备锁住一阵。然后：
 
 1. 把 `server.public_url` 设成那个 HTTPS 地址（通知里的链接用它），重启：`sh deploy/activate.sh --restart-only`。
 2. 在 iPhone 的 Safari 打开这个地址，「分享 → 添加到主屏幕」，之后从主屏图标打开。
@@ -161,4 +165,4 @@ rm -rf ~/.muliao-scala           # 删掉全部数据、资源、agent 工作目
 | `MULIAO_LABEL` | `com.muliao.scala` | launchd 服务名 |
 | `MULIAO_PORT` | `1080` | 健康检查用的端口，须与 `server.port` 一致 |
 
-那个实例的配置里 `data_dir`、`assets_dir`、日志文件和 `server.port` 都要换成不同的。一份数据目录同时只能有一个进程在用。
+那个实例的配置里 `data_dir`、`assets_dir`、`server.port` 要换成不同的，`log.file` 写 `<MULIAO_HOME>/muliao.log`（`selfcheck.sh` 从那里读日志）。一份数据目录同时只能有一个进程在用。

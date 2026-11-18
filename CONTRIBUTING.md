@@ -18,7 +18,7 @@ Install the toolchain from [Getting started](docs/en/getting-started.md#requirem
 export JAVA_HOME=~/.sdkman/candidates/java/current
 sbt test                    # all tests, including the Scala.js contract tests (needs node)
 sbt app/compile             # compile the server
-sbt "sessions/testOnly *DriverSpec"   # one spec of one module
+sbt "sessions/testOnly *SessionsSpec" # one spec of one module
 sbt --client test           # keep an sbt server running for much faster repeated builds
 ```
 

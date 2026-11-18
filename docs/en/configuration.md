@@ -27,7 +27,7 @@ The file contains the login password, the vault key and API keys: keep it readab
 | Key | Default | Description |
 |---|---|---|
 | `level` | `"INFO"` | Minimum level: `DEBUG`, `INFO`, `WARN`, `ERROR` |
-| `file` | none | Log file; without it the log goes to standard output |
+| `file` | none | Log file; without it the log goes to standard output. `deploy/selfcheck.sh` expects `<MULIAO_HOME>/muliao.log` |
 | `max_size_mb` | `20` | Rotate when the file exceeds this size |
 | `keep` | `5` | Rotated files to keep (`file.1` … `file.N`) |
 
@@ -171,6 +171,7 @@ platform/secrets/<KEY>.toml       platform secrets
 ```
 
 `<agent>` is the agent's name; a resource belongs to the directory it is in. Files and directories starting with `.` are ignored.
+Names of skills, MCP servers and shared memories use lowercase letters, digits and `-` (starting with a letter or digit, at most 64 characters).
 
 ### `agent.toml`
 
