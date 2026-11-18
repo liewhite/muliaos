@@ -68,7 +68,16 @@ final case class Reply(
   def toolCalls: Chunk[ReplyPart.ToolCall] = parts.collect { case c: ReplyPart.ToolCall => c }
 
   /** 读流时报告过的段（不含只为回传而留的思考块）。 */
-  def shown: Chunk[ReplyPart] = parts.filterNot(_.isInstanceOf[ReplyPart.Reasoning])
+  def shown: Chunk[ShownPart] = ShownPart.of(parts)
+
+/** 展示给人、实时报告的段：正文与工具调用。思考块不在其中，由类型保证它不进实时事件与界面。 */
+type ShownPart = ReplyPart.Text | ReplyPart.ToolCall
+
+object ShownPart:
+  def of(parts: Chunk[ReplyPart]): Chunk[ShownPart] = parts.collect {
+    case t: ReplyPart.Text     => t
+    case c: ReplyPart.ToolCall => c
+  }
 
 /** 对话里的一条消息。 */
 enum Message:

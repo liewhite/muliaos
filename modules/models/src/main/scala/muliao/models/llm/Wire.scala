@@ -53,7 +53,7 @@ private[llm] final case class Emitted(builder: ReplyBuilder, events: Chunk[Reply
   def emit(e: ReplyEvent): Either[AppError, Emitted] =
     builder(e).map(b => Emitted(b, events :+ e)).left.map(Wire.outOfProtocol)
 
-  def parts: Chunk[ReplyPart] = builder.parts
+  def parts: Chunk[ShownPart] = builder.parts
 
 private[llm] object Emitted:
   def from(b: ReplyBuilder): Emitted = Emitted(b, Chunk.empty)
@@ -68,7 +68,7 @@ private[llm] enum Slot:
 
 private[llm] object Slot:
   /** 收完的回复里各段的真实顺序：把攒下的思考块按位置插回报告过的段之间（同一位置的按协议里的先后）。 */
-  def interleave(shown: Chunk[ReplyPart], slots: Iterable[(Long, Slot)], protocol: Protocol): Chunk[ReplyPart] =
+  def interleave(shown: Chunk[ShownPart], slots: Iterable[(Long, Slot)], protocol: Protocol): Chunk[ReplyPart] =
     val held = slots.toList.sortBy(_._1).collect { case (_, Held(at, block)) => at -> ReplyPart.Reasoning(Seal(protocol, block)) }
     val byAt = held.groupMap(_._1)(_._2)
     Chunk.fromIterable((0 to shown.size).flatMap(i => byAt.getOrElse(i, Nil) ++ shown.lift(i).toList))

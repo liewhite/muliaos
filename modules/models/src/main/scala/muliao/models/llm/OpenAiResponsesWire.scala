@@ -10,7 +10,8 @@ import java.util.Base64
 
 /** OpenAI Responses 协议（https://platform.openai.com/docs/api-reference/responses），也用于兼容它的网关。
   *
-  *   - 不发 `reasoning`：推理模型按自己的默认力度想；它回的推理项不报告，整项（含加密内容）攒成 [[ReplyPart.Reasoning]]，后续请求原样回传；
+  *   - 不提推理力度与摘要，推理模型按自己的默认想；只给 `reasoning.context: all_turns`，让它用上以前各轮回传的推理（不支持的模型和网关忽略）；
+  *     它回的推理项不报告，整项（含加密内容）攒成 [[ReplyPart.Reasoning]]，后续请求原样回传；
   *   - 输出项的编号、`phase` 放在各段的 [[Seal]] 里，回传时原样带上；只有收完的项才有 Seal。
   */
 object OpenAiResponsesWire extends Wire:
@@ -42,6 +43,7 @@ object OpenAiResponsesWire extends Wire:
       "max_output_tokens" -> maxTokens.map(m => n(m.toLong)),
       // 没有它时连续两步常落到不同的缓存上，前缀不变也命中不了
       "prompt_cache_key"  -> req.cacheKey.map(s),
+      "reasoning"         -> Some(obj("context" -> s("all_turns"))),
       // 推理项要带上加密内容才能在后续请求里原样回传；不推理的模型和网关忽略它
       "include"           -> Some(arr(List(s("reasoning.encrypted_content"))))
     )
@@ -111,7 +113,7 @@ object OpenAiResponsesWire extends Wire:
     list.arr.filter(c => only.forall(t => c.at("type").str.contains(t))).flatMap(_.at("text").str)
 
   /** 一个要报告的输出项对应的段。`done`：这是结束时的完整项，只有它带 Seal。 */
-  private def partOf(item: Json, done: Boolean): Either[AppError, ReplyPart] =
+  private def partOf(item: Json, done: Boolean): Either[AppError, ShownPart] =
     val id = item.at("id").str.map(i => "id" -> s(i)).toList
     def seal(extra: List[(String, Json)]): Option[Seal] =
       val fields = id ++ extra
@@ -133,8 +135,8 @@ object OpenAiResponsesWire extends Wire:
       def grow(g: Growth, t: String) =
         if t.isEmpty then ok(fresh)
         else slot.flatMap {
-          case Slot.Shown(i)   => emit(ReplyEvent.Grew(i, g, t))
-          case _: Slot.Held    => Left(Wire.outOfProtocol(s"第 $n 个输出项是推理，却来了 $g 增量"))
+          case Slot.Shown(i) => emit(ReplyEvent.Grew(i, g, t))
+          case _: Slot.Held  => ok(fresh) // 推理项收完时整项替换，增量用不到
         }
       val delta = v.at("delta").strOr()
       v.at("type").strOr() match

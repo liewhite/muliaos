@@ -1,7 +1,7 @@
 package muliao.sessions
 
 import muliao.contract.*
-import muliao.models.llm.{ReplyPart, Usage}
+import muliao.models.llm.{ReplyPart, ShownPart, Usage}
 import muliao.platform.AppError
 import muliao.sessions.store.*
 import zio.*
@@ -78,9 +78,9 @@ private[sessions] final case class Control(
       _    <- delegations.handBack(i, h.pending, Outcome.Stopped(text))
     yield ()
 
-  private def visible(p: ReplyPart): Boolean = p match
-    case ReplyPart.Text(t, _)                           => t.nonEmpty
-    case _: ReplyPart.ToolCall | _: ReplyPart.Reasoning => false
+  private def visible(p: ShownPart): Boolean = p match
+    case ReplyPart.Text(t, _)  => t.nonEmpty
+    case _: ReplyPart.ToolCall => false
 
   /** 被打断的回复：只存文字（半截的工具调用不存，也就不会发回模型）。 */
   private def savePartial(id: SessionId, p: Partial, t: Long) =

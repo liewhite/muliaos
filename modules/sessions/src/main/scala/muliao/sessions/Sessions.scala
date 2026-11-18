@@ -73,7 +73,7 @@ trait SessionConsole:
   def delete(id: SessionId): IO[AppError, Unit]
   def markRead(id: SessionId): IO[AppError, Unit]
   def usage(from: Long, to: Long): IO[AppError, List[UsageLine]]
-  def subscribe(id: SessionId): URIO[Scope, (Option[zio.Chunk[muliao.models.llm.ReplyPart]], zio.stream.ZStream[Any, Nothing, LiveEvent])]
+  def subscribe(id: SessionId): URIO[Scope, (Option[zio.Chunk[muliao.models.llm.ShownPart]], zio.stream.ZStream[Any, Nothing, LiveEvent])]
   /** 界面怎么展示某个工具的调用与结果。 */
   def display: UIO[Timeline.Shows]
 

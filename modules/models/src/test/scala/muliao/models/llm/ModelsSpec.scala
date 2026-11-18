@@ -101,7 +101,7 @@ object ModelsSpec extends ZIOSpecDefault:
           )
       },
       test("思考块按协议里的先后插回报告过的段之间") {
-        val (a, b) = (ReplyPart.Text("a"), ReplyPart.Text("b"))
+        val (a, b) = (ReplyPart.Text("a"), ReplyPart.Text("b")): (ShownPart, ShownPart)
         val (x, y) = (obj("n" -> s("x")), obj("n" -> s("y")))
         val slots  = Map(3L -> Slot.Shown(1), 0L -> Slot.Held(0, x), 1L -> Slot.Shown(0), 2L -> Slot.Held(1, y))
         val r      = (j: Json) => ReplyPart.Reasoning(Seal(Protocol.Anthropic, j))
@@ -171,7 +171,7 @@ object ModelsSpec extends ZIOSpecDefault:
           body.at("max_tokens").long.contains(AnthropicWire.DefaultMaxTokens.toLong)
         )
       },
-      test("OpenAI：工具结果在前、推理项与编号原样回传、别家思考不发、不提推理力度、带缓存键") {
+      test("OpenAI：工具结果在前、推理项与编号原样回传、别家思考不发、只要以前各轮的推理、带缓存键") {
         val item      = obj("type" -> s("reasoning"), "id" -> s("rs_1"), "summary" -> arr(Nil), "encrypted_content" -> s("enc"))
         val foreign   = ReplyPart.Reasoning(Seal(Protocol.Anthropic, obj("type" -> s("thinking"), "signature" -> s("sig别家"))))
         val call      = ReplyPart.ToolCall("call_1", "get_weather", "{}", Some(Seal(Protocol.OpenAiResponses, obj("id" -> s("fc_1")))))
@@ -191,7 +191,7 @@ object ModelsSpec extends ZIOSpecDefault:
           input(0) == item,
           input(1).at("id").str.contains("fc_1"),
           !body.toJson.contains("sig别家"),
-          body.at("reasoning") == Json.Null,
+          body.at("reasoning") == obj("context" -> s("all_turns")),
           body.at("include").arr == Chunk(s("reasoning.encrypted_content")),
           body.at("max_output_tokens").long.contains(100L),
           body.at("prompt_cache_key").str.contains("sess-1"),

@@ -14,19 +14,18 @@ import java.nio.charset.StandardCharsets
 final case class SessionsHttp(sessions: Sessions, console: SessionConsole, files: Files, agents: Agents):
   import Endpoints.*
 
-  /** 实时事件的展示；读流不报告思考块，所以段序号与展示的一一对应。 */
-  private def view(e: LiveEvent, d: Timeline.Shows): Option[LiveView] = e match
-    case LiveEvent.Begin         => Some(LiveView.Begin)
-    case LiveEvent.Part(i, p)    => Timeline.part(p, Map.empty, d).map(LiveView.Part(i, _))
-    case LiveEvent.Grew(i, g, t) => Some(LiveView.Grew(i, g, t))
-    case LiveEvent.Changed       => Some(LiveView.Changed)
+  private def view(e: LiveEvent, d: Timeline.Shows): LiveView = e match
+    case LiveEvent.Begin         => LiveView.Begin
+    case LiveEvent.Part(i, p)    => LiveView.Part(i, Timeline.part(p, Map.empty, d))
+    case LiveEvent.Grew(i, g, t) => LiveView.Grew(i, g, t)
+    case LiveEvent.Changed       => LiveView.Changed
 
   /** 会话页的实时事件：先给正在生成的部分，再给之后的事件。 */
   private def live: Route =
     SessionsApi.live.securedFeed { id =>
       (sessions.info(id) *> console.display).map { d =>
         console.subscribe(id).map { (snap, stream) =>
-          ZStream.fromIterable(snap.map(ps => LiveView.Snapshot(ps.toList.flatMap(Timeline.part(_, Map.empty, d))))) ++ stream.map(view(_, d)).collectSome
+          ZStream.fromIterable(snap.map(ps => LiveView.Snapshot(ps.toList.map(Timeline.part(_, Map.empty, d))))) ++ stream.map(view(_, d))
         }
       }
     }

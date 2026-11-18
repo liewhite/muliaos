@@ -1,7 +1,7 @@
 package muliao.sessions
 
 import muliao.contract.SessionId
-import muliao.models.llm.{Growth, ReplyPart}
+import muliao.models.llm.{Growth, ShownPart}
 import zio.*
 import zio.stream.*
 
@@ -10,26 +10,26 @@ enum LiveEvent:
   /** 开始生成新的一条回复（清空正在生成的） */
   case Begin
   /** 第 `index` 段开始，或整段换成新的 */
-  case Part(index: Int, part: ReplyPart)
+  case Part(index: Int, part: ShownPart)
   /** 第 `index` 段长了一截 */
   case Grew(index: Int, growth: Growth, text: String)
   /** 库里的时间线或状态变了：重新拉取 */
   case Changed
 
 /** 各会话正在生成的回复与实时事件。 */
-final class LiveHub private (hub: Hub[(SessionId, LiveEvent)], current: Ref[Map[SessionId, Chunk[ReplyPart]]]):
+final class LiveHub private (hub: Hub[(SessionId, LiveEvent)], current: Ref[Map[SessionId, Chunk[ShownPart]]]):
 
   def publish(session: SessionId, e: LiveEvent): UIO[Unit] =
     current.update(_.updated(session, Chunk.empty)).when(e == LiveEvent.Begin) *> hub.publish(session -> e).unit
 
   /** 记下正在生成的回复到目前为止的各段（供中途打开页面的订阅者先拿到）。 */
-  def track(session: SessionId, parts: Chunk[ReplyPart]): UIO[Unit] = current.update(_.updated(session, parts))
+  def track(session: SessionId, parts: Chunk[ShownPart]): UIO[Unit] = current.update(_.updated(session, parts))
 
   /** 生成结束（存进库了，或放弃了）：不再有正在生成的。存库的一方经 `Kernel.touched` 通知页面重拉，这里不再发。 */
   def done(session: SessionId): UIO[Unit] = current.update(_ - session)
 
   /** 订阅一个会话：先给正在生成的部分（没有为 None），再给之后的事件。 */
-  def subscribe(session: SessionId): URIO[Scope, (Option[Chunk[ReplyPart]], ZStream[Any, Nothing, LiveEvent])] =
+  def subscribe(session: SessionId): URIO[Scope, (Option[Chunk[ShownPart]], ZStream[Any, Nothing, LiveEvent])] =
     for
       q    <- hub.subscribe
       snap <- current.get.map(_.get(session))
@@ -39,6 +39,6 @@ object LiveHub:
   val layer: ULayer[LiveHub] = ZLayer(
     for
       h <- Hub.sliding[(SessionId, LiveEvent)](4096)
-      c <- Ref.make(Map.empty[SessionId, Chunk[ReplyPart]])
+      c <- Ref.make(Map.empty[SessionId, Chunk[ShownPart]])
     yield LiveHub(h, c)
   )

@@ -129,7 +129,7 @@ object AnthropicWire extends Wire:
           val block = v.at("content_block")
           val at    = v.at("index").long.getOrElse(0L)
           val ours  = fresh.emitted.parts.size
-          def show(p: ReplyPart) =
+          def show(p: ShownPart) =
             fresh.emitted.emit(ReplyEvent.Started(ours, p)).map(em => done(fresh.copy(emitted = em, index = fresh.index + (at -> Slot.Shown(ours)))))
           block.at("type").strOr() match
             case "text"                           => show(ReplyPart.Text(block.at("text").strOr()))
@@ -160,7 +160,7 @@ object AnthropicWire extends Wire:
           ok(fresh.copy(stopReason = v.at("delta").at("stop_reason").str.orElse(fresh.stopReason), usage = fresh.usage ++ usageOf(v.at("usage"))))
         case "message_stop" =>
           // 没有参数的调用不发 input_json_delta
-          val shown = fresh.emitted.parts.map {
+          val shown = fresh.emitted.parts.map[ShownPart] {
             case c: ReplyPart.ToolCall if c.args.isEmpty => c.copy(args = "{}")
             case p                                       => p
           }

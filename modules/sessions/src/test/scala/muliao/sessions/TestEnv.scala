@@ -59,10 +59,10 @@ object TestEnv:
         seen.update(_ :+ req) *> handler.get.map(_(req)).map {
           case Script.Say(parts, usage) =>
             val ps = Chunk.fromIterable(parts)
-            ZStream.fromIterable(ps.zipWithIndex.map((p, i) => ReplyEvent.Started(i, p))) ++
+            ZStream.fromIterable(ShownPart.of(ps).zipWithIndex.map((p, i) => ReplyEvent.Started(i, p))) ++
               ZStream.succeed(ReplyEvent.Finished(Reply(ps, Protocol.Anthropic, model.model, None, Some("end_turn"), usage)))
           case Script.Hang(parts) =>
-            ZStream.fromIterable(parts.zipWithIndex.map((p, i) => ReplyEvent.Started(i, p))) ++ ZStream.never
+            ZStream.fromIterable(ShownPart.of(Chunk.fromIterable(parts)).zipWithIndex.map((p, i) => ReplyEvent.Started(i, p))) ++ ZStream.never
           case Script.Fail(e) => ZStream.fail(e)
         }
       )
