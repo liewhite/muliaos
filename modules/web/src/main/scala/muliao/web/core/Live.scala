@@ -81,7 +81,7 @@ object Live:
       val beat: dom.MessageEvent => Option[String] = e =>
         lastFrameAt = js.Date.now()
         val b = e.data.asInstanceOf[String].fromJson[Beat].toOption
-        intervalSeconds = b.map(_.intervalSeconds)
+        intervalSeconds = b.map(_.intervalSeconds).orElse(intervalSeconds)
         b.map(_.version)
       s.addEventListener("ready", (e: dom.MessageEvent) => fire(Frame.Ready(beat(e))))
       s.addEventListener("ping", (e: dom.MessageEvent) => { val _ = beat(e) })

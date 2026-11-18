@@ -53,10 +53,20 @@ object Events:
     * 页面里的前端代码还是旧的（接口格式可能已变，请求会被拒），外壳据此提示刷新。
     */
   val outdated: Signal[Boolean] =
-    frames
-      .collect { case Frame.Ready(v) => v }
-      .scanLeft(Option.empty[(Option[String], Option[String])])((seen, v) => Some(seen.fold(v)(_._1) -> v))
-      .map(_.exists(_ != _))
+    frames.collect { case Frame.Ready(v) => v }.scanLeft(Versions.NotYet: Versions)(_.next(_)).map(_.outdated)
+
+  /** 连上过的服务端版本：还没连上过，或第一次连上时的版本与最近一次的版本。 */
+  private enum Versions:
+    case NotYet
+    case Seen(first: Option[String], latest: Option[String])
+
+    def next(v: Option[String]): Versions = this match
+      case NotYet         => Seen(v, v)
+      case Seen(first, _) => Seen(first, v)
+
+    def outdated: Boolean = this match
+      case NotYet              => false
+      case Seen(first, latest) => first != latest
 
   /** 变了的主题。 */
   val changes: EventStream[Topic] = frames.collect { case Frame.Data(c) => c.topic }

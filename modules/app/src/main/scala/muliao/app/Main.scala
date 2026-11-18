@@ -1,7 +1,7 @@
 package muliao.app
 
 import muliao.contract.{Api, AuthApi, BoardApi, HistoryApi, ModelsApi, NotificationsApi, ResourcesApi, SessionsApi, TriggersApi, VaultApi, WorkspaceApi}
-import muliao.platform.{AppError, InstanceLock}
+import muliao.platform.{AppError, Build, InstanceLock}
 import muliao.platform.log.Logging
 import muliao.platform.server.{Endpoints, HttpServer}
 import zio.*
@@ -18,8 +18,6 @@ import java.nio.file.Paths
   */
 object Main extends ZIOAppDefault:
 
-  val version: String = muliao.platform.Build.version
-
   /** 全部接口声明（导出接口描述用）。 */
   val contractEndpoints =
     AuthApi.all ++ ResourcesApi.all ++ VaultApi.all ++ ModelsApi.all ++ SessionsApi.all ++ WorkspaceApi.all ++ NotificationsApi.all ++ BoardApi.all ++
@@ -29,8 +27,8 @@ object Main extends ZIOAppDefault:
     getArgs.flatMap {
       case Chunk("serve", path) =>
         serve(path).foldZIO(e => Console.printLineError(s"启动失败：${e.message}").ignore *> exit(ExitCode.failure), ZIO.succeed(_))
-      case Chunk("openapi") => Console.printLine(HttpServer.openApi(contractEndpoints, version))
-      case Chunk("version") => Console.printLine(version)
+      case Chunk("openapi") => Console.printLine(HttpServer.openApi(contractEndpoints, Build.version))
+      case Chunk("version") => Console.printLine(Build.version)
       case _                => Console.printLineError("用法：muliao serve <配置文件> | muliao openapi | muliao version").ignore *> exit(ExitCode(2))
     }
 
@@ -39,7 +37,7 @@ object Main extends ZIOAppDefault:
       ZIO
         .scoped(
           for
-            _   <- ZIO.logInfo(s"muliao $version 启动，pid ${ProcessHandle.current.pid}，配置 ${cfg.path}")
+            _   <- ZIO.logInfo(s"muliao ${Build.version} 启动，pid ${ProcessHandle.current.pid}，配置 ${cfg.path}")
             _   <- InstanceLock.acquire(cfg.general.dataDir)
             env <- Assembly.layer(cfg).build
             _   <- Assembly.boot.provideSomeEnvironment[Scope](_ ++ env)
