@@ -19,7 +19,7 @@ object WorkspaceHttpSpec extends ZIOSpecDefault:
       bus      <- ZIO.service[ChangeBus]
       settings  = ServerSettings(port = 0, password = "pw", cookieSecret = "s" * 32)
       auth     <- Auth.layer.build.map(_.get[Auth]).provideSomeLayer[Scope](ZLayer.succeed(settings))
-      port     <- HttpServer.serve(settings, auth, bus, http.routes, "test")
+      port     <- HttpServer.serve(settings, auth, bus, http.routes)
       in        = Client(s"http://127.0.0.1:$port")
       _        <- in.call("POST", "/api/auth/login", Some("""{"password":"pw"}"""))
     yield (in, Client(s"http://127.0.0.1:$port"))

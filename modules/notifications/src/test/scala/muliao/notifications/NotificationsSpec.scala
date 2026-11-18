@@ -217,7 +217,7 @@ object NotificationsSpec extends ZIOSpecDefault:
           http   = NotificationsHttp(n)
           set    = ServerSettings(port = 0, password = "pw", cookieSecret = "s" * 32)
           authz <- Auth.layer.build.map(_.get[Auth]).provideSomeLayer[Scope](ZLayer.succeed(set))
-          port  <- HttpServer.serve(set, authz, bus, http.routes, "test").orDie
+          port  <- HttpServer.serve(set, authz, bus, http.routes).orDie
           c      = muliao.sessions.SessionsHttpSpec.Client(s"http://127.0.0.1:$port")
           call   = (m: String, p: String, b: Option[String]) => c.call(m, p, b).orDie
           _     <- call("POST", "/api/auth/login", Some("""{"password":"pw"}"""))

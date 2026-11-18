@@ -18,7 +18,7 @@ import java.nio.file.Paths
   */
 object Main extends ZIOAppDefault:
 
-  val version: String = Option(getClass.getPackage.getImplementationVersion).getOrElse("dev")
+  val version: String = muliao.platform.Build.version
 
   /** 全部接口声明（导出接口描述用）。 */
   val contractEndpoints =
@@ -42,7 +42,7 @@ object Main extends ZIOAppDefault:
             _   <- ZIO.logInfo(s"muliao $version 启动，pid ${ProcessHandle.current.pid}，配置 ${cfg.path}")
             _   <- InstanceLock.acquire(cfg.general.dataDir)
             env <- Assembly.layer(cfg).build
-            _   <- Assembly.boot(version).provideSomeEnvironment[Scope](_ ++ env)
+            _   <- Assembly.boot.provideSomeEnvironment[Scope](_ ++ env)
             _   <- ZIO.addFinalizer(ZIO.logInfo("muliao 正在关停"))
             _   <- ZIO.never
           yield ()

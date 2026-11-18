@@ -47,7 +47,16 @@ object Events:
   val frames: EventStream[Frame[Change]] = Live.frames(Api.changes)(())
 
   /** 连上了（含重连）：断线期间可能错过变化，正在显示的数据都要重新拉取。 */
-  val ready: EventStream[Unit] = frames.collect { case Frame.Ready => () }
+  val ready: EventStream[Unit] = frames.collect { case Frame.Ready(_) => () }
+
+  /** 这个页面是旧版：第一次连上时记下服务端版本（页面就是那时的服务端给的），之后重连拿到的不同，说明服务端换了版，
+    * 页面里的前端代码还是旧的（接口格式可能已变，请求会被拒），外壳据此提示刷新。
+    */
+  val outdated: Signal[Boolean] =
+    frames
+      .collect { case Frame.Ready(v) => v }
+      .scanLeft(Option.empty[(Option[String], Option[String])])((seen, v) => Some(seen.fold(v)(_._1) -> v))
+      .map(_.exists(_ != _))
 
   /** 变了的主题。 */
   val changes: EventStream[Topic] = frames.collect { case Frame.Data(c) => c.topic }

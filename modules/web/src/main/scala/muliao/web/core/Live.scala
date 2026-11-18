@@ -1,18 +1,20 @@
 package muliao.web.core
 
 import com.raquo.airstream.core.EventStream
-import muliao.contract.Feed
+import muliao.contract.{Beat, Feed}
 import org.scalajs.dom
+import zio.json.*
 
 import scala.scalajs.js
 import scala.scalajs.js.timers.{SetIntervalHandle, SetTimeoutHandle, clearInterval, clearTimeout, setInterval, setTimeout}
 
-/** 一条实时连接（SSE）给出的东西：`Ready` 是订阅建好了（第一次连上与每次重连都有，页面据此重新拉取），`Data` 是一条业务事件
+/** 一条实时连接（SSE）给出的东西：`Ready` 是订阅建好了（第一次连上与每次重连都有，页面据此重新拉取；
+  * `version` 是服务端程序的版本，老版服务端不带时为 None），`Data` 是一条业务事件
   * （看不懂的丢掉：服务端比页面新时，重连后整页会重拉），`Closed` 是连接被关了（服务端回了非 200，如对象不存在、没登录；
   * 看门狗随后重连）：只靠 ready 首拉的页面据此也拉一次，好显示出错原因而不是一直转圈。
   */
 enum Frame[+E]:
-  case Ready
+  case Ready(version: Option[String])
   case Data(event: E)
   case Closed
 
@@ -40,9 +42,9 @@ object Live:
         conn.foreach(_.close())
         conn = None
     ).collectOpt {
-      case Frame.Ready   => Some(Frame.Ready)
-      case Frame.Closed  => Some(Frame.Closed)
-      case Frame.Data(j) => feed.codec.decoder.decodeJson(j).toOption.map(Frame.Data(_))
+      case Frame.Ready(v) => Some(Frame.Ready(v))
+      case Frame.Closed   => Some(Frame.Closed)
+      case Frame.Data(j)  => feed.codec.decoder.decodeJson(j).toOption.map(Frame.Data(_))
     }
 
   private final class Connection(url: String, eventName: String, fire: Frame[String] => Unit):
@@ -75,11 +77,14 @@ object Live:
     private def connect(): Unit =
       val s = new dom.EventSource(url)
       lastFrameAt = js.Date.now()
-      val beat: js.Function1[dom.MessageEvent, Unit] = e =>
+      // 连接帧：记下收到的时刻与心跳间隔，给出服务端版本
+      val beat: dom.MessageEvent => Option[String] = e =>
         lastFrameAt = js.Date.now()
-        intervalSeconds = js.JSON.parse(e.data.asInstanceOf[String]).intervalSeconds.asInstanceOf[js.UndefOr[Int]].toOption
-      s.addEventListener("ready", (e: dom.MessageEvent) => { beat(e); fire(Frame.Ready) })
-      s.addEventListener("ping", beat)
+        val b = e.data.asInstanceOf[String].fromJson[Beat].toOption
+        intervalSeconds = b.map(_.intervalSeconds)
+        b.map(_.version)
+      s.addEventListener("ready", (e: dom.MessageEvent) => fire(Frame.Ready(beat(e))))
+      s.addEventListener("ping", (e: dom.MessageEvent) => { val _ = beat(e) })
       s.addEventListener(eventName, (e: dom.MessageEvent) => { lastFrameAt = js.Date.now(); fire(Frame.Data(e.data.asInstanceOf[String])) })
       // 关闭的原因可能是登录过期（401）：用一次普通请求走统一的 401 处理
       s.onerror = _ =>

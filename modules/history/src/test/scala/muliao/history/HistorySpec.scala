@@ -263,7 +263,7 @@ object HistorySpec extends ZIOSpecDefault:
           bus  <- ZIO.service[ChangeBus]
           set   = ServerSettings(port = 0, password = "pw", cookieSecret = "s" * 32)
           auth <- Auth.layer.build.map(_.get[Auth]).provideSomeLayer[Scope](ZLayer.succeed(set))
-          port <- HttpServer.serve(set, auth, bus, HistoryHttp(h).routes, "test").orDie
+          port <- HttpServer.serve(set, auth, bus, HistoryHttp(h).routes).orDie
           c     = muliao.sessions.SessionsHttpSpec.Client(s"http://127.0.0.1:$port")
           call  = (m: String, p: String) => c.call(m, p, None).orDie
           _    <- c.call("POST", "/api/auth/login", Some("""{"password":"pw"}""")).orDie

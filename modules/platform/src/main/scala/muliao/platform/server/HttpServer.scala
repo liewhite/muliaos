@@ -108,12 +108,11 @@ object HttpServer:
       settings: ServerSettings,
       auth: Auth,
       bus: ChangeBus,
-      domain: List[Route],
-      version: String
+      domain: List[Route]
   ): ZIO[Scope, Throwable, Int] =
     import Endpoints.*
     val api: List[ApiEndpoint] = platformEndpoints(auth, bus) ++ domain.map(_(auth))
-    val docJson  = openApi((api :+ openApiEndpoint.public(_ => ZIO.succeed(""))).map(_.endpoint), version)
+    val docJson  = openApi((api :+ openApiEndpoint.public(_ => ZIO.succeed(""))).map(_.endpoint), muliao.platform.Build.version)
     val docs     = openApiEndpoint.public(_ => ZIO.succeed(docJson))
     val all      = api ++ List(docs, apiNotFound, StaticFiles.serverEndpoint(settings.webDir))
     val routes   = ZioHttpInterpreter(serverOptions).toHttp(all)

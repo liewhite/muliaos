@@ -57,8 +57,15 @@ extension [S, I, E, O, R](e: Endpoint[S, I, E, O, R])
 
 final case class Change(topic: Topic) derives JsonCodec, Schema
 
+/** 实时连接的连接帧（`ready`、`ping`）的 data。
+  * @param intervalSeconds 服务端每隔几秒发一次 `ping`（前端据此判断连接死没死）
+  * @param version 服务端程序的版本（`<时间>-<commit>`，开发时是 dev）：页面在第一次连上时记下，之后重连拿到的不同，
+  *   就说明服务端换了版、页面还跑着旧前端代码，提示用户刷新
+  */
+final case class Beat(intervalSeconds: Int, version: String) derives JsonCodec
+
 /** 一条实时连接（SSE）：`endpoint` 是地址与输入（输出的事件流由服务端补上），业务事件名是 `event`、data 是 `E` 的 JSON。
-  * 另有连接帧 `ready`（订阅建好）与 `ping`（保活），data 都是 `{"intervalSeconds":N}`。
+  * 另有连接帧 `ready`（订阅建好）与 `ping`（保活），data 都是 [[Beat]]。
   */
 final case class Feed[I, E](endpoint: Endpoint[Option[String], I, ApiError, Unit, Any], event: String)(using val codec: JsonCodec[E])
 

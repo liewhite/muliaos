@@ -26,7 +26,7 @@ object HttpServerSpec extends ZIOSpecDefault:
     for
       a    <- auth()
       bus  <- ChangeBus.layer.build.map(_.get[ChangeBus])
-      port <- HttpServer.serve(settings, a, bus, Nil, "test")
+      port <- HttpServer.serve(settings, a, bus, Nil)
     yield (s"http://127.0.0.1:$port", bus)
 
   def call(req: Request): ZIO[OutboundHttp, Nothing, Either[AppError, Response]] =
@@ -147,8 +147,8 @@ object HttpServerSpec extends ZIOSpecDefault:
           frames = text.linesIterator.filter(_.startsWith("data:")).map(_.stripPrefix("data:").trim).toList
           change = frames.find(_.contains("topic"))
         yield assertTrue(
-          // 订阅建好后先给 ready（带心跳间隔），前端据此重新拉取
-          frames.headOption.contains(s"""{"intervalSeconds":${Sse.PingSeconds}}"""),
+          // 订阅建好后先给 ready（带心跳间隔与程序版本），前端据此重新拉取、发现服务端换了版
+          frames.headOption.flatMap(_.fromJson[muliao.contract.Beat].toOption).contains(muliao.contract.Beat(Sse.PingSeconds, muliao.platform.Build.version)),
           change.flatMap(_.fromJson[Json].toOption).contains(Json.Obj("topic" -> Json.Str("issues")))
         )
       }
@@ -163,7 +163,7 @@ object HttpServerSpec extends ZIOSpecDefault:
         for
           a    <- auth()
           bus  <- ChangeBus.layer.build.map(_.get[ChangeBus])
-          port <- HttpServer.serve(settings, a, bus, List(route), "test")
+          port <- HttpServer.serve(settings, a, bus, List(route))
           base  = s"http://127.0.0.1:$port"
           big  <- post(base, 5 * 1024 * 1024)
           got  <- ZIO.foreach(big.toOption)(_.body.asString).orDie

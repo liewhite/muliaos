@@ -351,7 +351,7 @@ object BoardSpec extends ZIOSpecDefault:
           bus  <- ZIO.service[ChangeBus]
           set   = ServerSettings(port = 0, password = "pw", cookieSecret = "s" * 32)
           auth <- Auth.layer.build.map(_.get[Auth]).provideSomeLayer[Scope](ZLayer.succeed(set))
-          port <- HttpServer.serve(set, auth, bus, BoardHttp(b).routes, "test").orDie
+          port <- HttpServer.serve(set, auth, bus, BoardHttp(b).routes).orDie
           c     = muliao.sessions.SessionsHttpSpec.Client(s"http://127.0.0.1:$port")
           call  = (m: String, p: String, body: Option[String]) => c.call(m, p, body).orDie
           _    <- call("POST", "/api/auth/login", Some("""{"password":"pw"}"""))

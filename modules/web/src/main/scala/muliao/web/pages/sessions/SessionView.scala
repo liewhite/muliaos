@@ -158,7 +158,7 @@ object SessionView:
     // 这个会话的实时事件：连上（含重连，第一次连上就是首拉）、连接被关（会话不存在等，拉一次好显示原因）与「库里变了」时重新拉取详情与时间线
     val frames  = Live.frames(SessionsApi.live)(id)
     val views   = frames.collect { case Frame.Data(v) => v }
-    val reloads = EventStream.merge(frames.collect { case Frame.Ready | Frame.Closed => () }, views.filter(_ == LiveView.Changed).mapToUnit, Events.refreshNow.events)
+    val reloads = EventStream.merge(frames.collect { case Frame.Ready(_) | Frame.Closed => () }, views.filter(_ == LiveView.Changed).mapToUnit, Events.refreshNow.events)
     val detail   = Remote.triggered(reloads)(Http.call(SessionsApi.get)(id))
     val timeline = Remote.triggered(reloads)(Http.call(SessionsApi.timeline)(id))
     val live     = Var(LiveReply.empty)
@@ -276,7 +276,7 @@ object SessionView:
     )(
       // 打开即已读；重连（隐藏期间断开）与看着它时又来了通知，都再标一次
       onMountCallback(_ => markRead()),
-      frames.collect { case Frame.Ready => () } --> (_ => markRead()),
+      frames.collect { case Frame.Ready(_) => () } --> (_ => markRead()),
       Events.changes.filter(_ == Topic.Notifications) --> (_ => markRead()),
       sendable --> sendableNow,
       backTo --> backNow,

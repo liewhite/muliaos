@@ -35,7 +35,7 @@ object ModelsHttpSpec extends ZIOSpecDefault:
     for
       auth     <- Auth.layer.build.provideSomeLayer[Scope](ZLayer.succeed(settings)).map(_.get[Auth])
       bus      <- ChangeBus.layer.build.map(_.get[ChangeBus])
-      port     <- HttpServer.serve(settings, auth, bus, ModelsHttp.routes(models, t), "test")
+      port     <- HttpServer.serve(settings, auth, bus, ModelsHttp.routes(models, t))
       base      = s"http://127.0.0.1:$port"
       login    <- ZIO.serviceWithZIO[OutboundHttp](_.send(Request.post(URL.decode(s"$base/api/auth/login").toOption.get, Body.fromString("""{"password":"pw"}"""))
                     .addHeader(Header.ContentType(zio.http.MediaType.application.json))))

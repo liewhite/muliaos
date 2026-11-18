@@ -83,7 +83,7 @@ object AppSpec extends ZIOSpecDefault:
       cfg  <- AppConfig.load(h.config)
       _    <- InstanceLock.acquire(cfg.general.dataDir)
       env  <- Assembly.layer(cfg, fake(m)).build
-      port <- Assembly.boot("test").provideSomeEnvironment[Scope](_ ++ env)
+      port <- Assembly.boot.provideSomeEnvironment[Scope](_ ++ env)
       c     = Client(s"http://127.0.0.1:$port")
       r    <- c.call("POST", "/api/auth/login", Some("""{"password":"pw"}"""))
       _    <- ZIO.when(r.status / 100 != 2)(ZIO.fail(AppError.Internal(s"登录失败：$r")))

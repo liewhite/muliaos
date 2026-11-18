@@ -191,6 +191,18 @@ object Shell:
           case Load.Failed(m) => Some(div(cls := "alert alert--danger m-2 text-sm", s"agent 列表没拉到，名字先显示编号：$m"))
           case _              => None
         },
+        // 服务端换了版、这个页面还是旧前端代码：提示刷新（不自动刷新，免得冲掉正在写的内容）
+        child.maybe <-- Events.outdated.distinct.map(old =>
+          Option.when(old)(
+            div(
+              cls := "alert alert--warning m-2 flex items-center",
+              role := "alert",
+              div(cls := "alert__indicator", Icon("RefreshCw", "size-5")),
+              div(cls := "alert__content flex-1 text-sm", "muliao 已更新，这个页面还是旧版本，部分操作可能报错。"),
+              Ui.btn(size = Size.Sm)("刷新", onClick --> (_ => dom.window.location.reload()))
+            )
+          )
+        ),
         div(cls := "min-h-0 flex-1", child <-- route.map(_.isDefined).distinct.map {
           case true  => content(route.map(_.getOrElse(Route.home)))
           case false => div()

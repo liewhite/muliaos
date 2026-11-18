@@ -129,7 +129,7 @@ object Assembly:
     )
 
   /** 按启动顺序把服务跑起来，返回 HTTP 实际监听的端口。服务随调用方的 scope 关停。 */
-  def boot(version: String): ZIO[Services & Scope, AppError, Int] =
+  def boot: ZIO[Services & Scope, AppError, Int] =
     for
       contribs <- contributions
       jobs     <- Workspace.jobControl
@@ -141,14 +141,14 @@ object Assembly:
       _        <- ZIO.serviceWithZIO[Agents](_.start(sessions.agentHook :: contribs.flatMap(_.agentHook)))
       _        <- ZIO.serviceWithZIO[Jobs](_.recover)
       _        <- ZIO.serviceWithZIO[Triggers](_.start)
-      port     <- serve(version)
+      port     <- serve
     yield port
 
-  private def serve(version: String): ZIO[Services & Scope, AppError, Int] =
+  private def serve: ZIO[Services & Scope, AppError, Int] =
     for
       env  <- ZIO.environment[Services]
       port <- HttpServer
-                .serve(env.get[ServerSettings], env.get[Auth], env.get[ChangeBus], routes(env), version)
+                .serve(env.get[ServerSettings], env.get[Auth], env.get[ChangeBus], routes(env))
                 .mapError(e => AppError.internal(s"HTTP 服务起不来：${e.getMessage}", e))
     yield port
 
