@@ -1,6 +1,6 @@
 package muliao.web.core
 
-import muliao.contract.{PasskeyBox, PasskeyCredential, SshCert, SshCertRequest}
+import muliao.contract.{PasskeyAad, PasskeyBox, PasskeyCredential, SignContent, SigningAlgorithm, SshCert, SshCertRequest}
 import org.scalajs.dom
 
 import scala.concurrent.Future
@@ -9,8 +9,8 @@ import scala.scalajs.js.typedarray.{ArrayBuffer, Uint8Array}
 
 import Http.ec
 
-/** passkey 加密的 secret（#915）：WebAuthn 的 PRF 扩展从 passkey 导出一把固定的密钥，AES-GCM 在浏览器里加解密（附加数据是 secret 名），
-  * 服务端只存密文。passkey 绑定当前域名：在别的地址打开解不开。
+/** passkey 加密的 secret（#915）：WebAuthn 的 PRF 扩展从 passkey 导出一把固定的密钥，AES-GCM 在浏览器里加解密（附加数据见 [[PasskeyAad]]），
+  * 服务端只存密文。passkey 绑定当前域名：在别的地址打开解不开。签名钥匙（#938）只在这里签名，不交出明文：它的附加数据与普通的不同，取明文的路解不开它。
   */
 object Passkey:
   /** PRF 的输入与 HKDF 的 info（固定）：同一把 passkey 每次导出同一把密钥。改了就解不开已有的密文。 */
@@ -33,7 +33,7 @@ object Passkey:
   /** 加密一个新值（要在用户的点击里直接调，中间不发网络请求：Safari 要求 WebAuthn 由点击触发）。
     * `known` 是已用过的 passkey：有同一域名的就用它；都没有就新建一把，浏览器建时给出了 PRF 结果就直接加密，否则请用户再点一次。
     */
-  def seal(key: String, plain: String, known: List[PasskeyCredential]): Future[PasskeyBox] =
+  def seal(aad: String, plain: String, known: List[PasskeyCredential]): Future[PasskeyBox] =
     for
       (cred, aes) <- known.find(_.rp == host).map(_.credential).orElse(created) match
                        case Some(c) => derive(c).map(c -> _)
@@ -42,48 +42,60 @@ object Passkey:
                            case Some(other) => fail(elsewhere(other.rp))
                            case None        => create()
       iv   = random(12)
-      ct  <- promise[ArrayBuffer](subtle.encrypt(js.Dynamic.literal(name = "AES-GCM", iv = iv, additionalData = utf8(key)), aes, utf8(plain)))
+      ct  <- promise[ArrayBuffer](subtle.encrypt(js.Dynamic.literal(name = "AES-GCM", iv = iv, additionalData = utf8(aad)), aes, utf8(plain)))
     yield PasskeyBox(host, cred, b64(iv), b64(new Uint8Array(ct)))
 
-  /** 解开一个 passkey secret（用户在系统弹窗里确认）。 */
-  def open(key: String, box: PasskeyBox): Future[String] =
+  /** 用户设签名钥匙：先核对是这种算法认得的私钥，再加密。 */
+  def sealSigning(key: String, alg: SigningAlgorithm, plain: String, known: List[PasskeyCredential]): Future[PasskeyBox] =
+    either(material(alg, plain)).flatMap(_ => seal(PasskeyAad.signing(key, alg), plain, known))
+
+  /** 把普通 passkey secret 转成签名钥匙：解开、核对是私钥、按签名钥匙重新加密（用同一把 passkey）。 */
+  def toSigning(key: String, alg: SigningAlgorithm, box: PasskeyBox, known: List[PasskeyCredential]): Future[PasskeyBox] =
+    open(PasskeyAad.plain(key), box).flatMap(v => sealSigning(key, alg, v, known))
+
+  /** 解开普通 passkey secret 交出明文（签名钥匙在这里解不开）。 */
+  def reveal(key: String, box: PasskeyBox): Future[String] = open(PasskeyAad.plain(key), box)
+
+  /** 用签名钥匙签一份内容，返回签好的结果。内容按类型在这里拼成待签的字节，私钥不离开这个页面。 */
+  def sign(key: String, box: PasskeyBox, content: SignContent): Future[String] =
+    for
+      pem    <- open(PasskeyAad.signing(key, content.algorithm), box)
+      secret <- either(material(content.algorithm, pem).left.map(e => s"secret $key 不是可用的签名钥匙：$e"))
+      out <- content match
+               case SignContent.SshCert(req) => either(certificate(secret, req))
+    yield out
+
+  /** 某种算法的私钥文本读成能签名的东西。ed25519 认 OpenSSH 私钥文件（不带口令）。 */
+  private def material(alg: SigningAlgorithm, text: String): Either[String, SshCert.PrivateKey] = alg match
+    case SigningAlgorithm.Ed25519 => SshCert.readPrivate(text)
+
+  /** 签一张 SSH 证书：有效期从现在起 `minutes` 分钟，开头往前留 5 分钟容服务器时钟偏差；nonce、serial 取浏览器的安全随机数。 */
+  private def certificate(ca: SshCert.PrivateKey, req: SshCertRequest): Either[String, String] =
+    SshCert.readPublic(req.publicKey).left.map(e => s"请求里的公钥不对：$e").map { pub =>
+      val now = (js.Date.now() / 1000).toLong
+      val unsigned = SshCert.Unsigned(
+        nonce = bytes(random(32)),
+        key = pub,
+        serial = bytes(random(8)).foldLeft(0L)((acc, b) => (acc << 8) | (b & 0xffL)),
+        keyId = req.keyId,
+        principals = req.principals,
+        validity = SshCert.Validity(now - 300, now + req.minutes.toLong * 60),
+        sourceAddress = req.sourceAddress,
+        ca = ca.publicKey
+      )
+      unsigned.signed(bytes(NobleEd25519.sign(array(unsigned.toBeSigned), array(ca.seed))))
+    }
+
+  /** 解开（用户在系统弹窗里确认）。`aad` 不对（比如拿签名钥匙走取明文）就解不开。 */
+  private def open(aad: String, box: PasskeyBox): Future[String] =
     if box.rp != host then fail(elsewhere(box.rp))
     else
       for
         aes <- derive(box.credential)
         pt <- promise[ArrayBuffer](
-                subtle.decrypt(js.Dynamic.literal(name = "AES-GCM", iv = unb64(box.iv), additionalData = utf8(key)), aes, unb64(box.ciphertext))
+                subtle.decrypt(js.Dynamic.literal(name = "AES-GCM", iv = unb64(box.iv), additionalData = utf8(aad)), aes, unb64(box.ciphertext))
               ).recoverWith(_ => fail("解不开：选的不是加密时那把 passkey，或密文被改过"))
       yield js.Dynamic.newInstance(js.Dynamic.global.TextDecoder)().decode(new Uint8Array(pt)).asInstanceOf[String]
-
-  /** 用 passkey secret 里的 SSH CA 签一张证书（#938）：解开 CA 私钥、拼出证书、WebCrypto 签名，返回证书文件的一行。CA 私钥不离开这个页面。
-    * 有效期从现在起 `minutes` 分钟，开头往前留 5 分钟容服务器时钟偏差。
-    */
-  def certify(key: String, box: PasskeyBox, req: SshCertRequest): Future[String] =
-    for
-      pem <- open(key, box)
-      ca  <- either(SshCert.readPrivate(pem).left.map(e => s"secret $key 不是可用的 SSH CA：$e"))
-      pub <- either(SshCert.readPublic(req.publicKey).left.map(e => s"请求里的公钥不对：$e"))
-      now  = (js.Date.now() / 1000).toLong
-      unsigned = SshCert.Unsigned(
-                   nonce = bytes(random(32)),
-                   key = pub,
-                   serial = bytes(random(8)).foldLeft(0L)((acc, b) => (acc << 8) | (b & 0xffL)),
-                   keyId = req.keyId,
-                   principals = req.principals,
-                   validity = SshCert.Validity(now - 300, now + req.minutes.toLong * 60),
-                   sourceAddress = req.sourceAddress,
-                   ca = ca.publicKey
-                 )
-      signer <- promise[js.Dynamic](
-                  subtle.importKey("pkcs8", array(Pkcs8Ed25519 ++ ca.seed), js.Dynamic.literal(name = "Ed25519"), false, js.Array("sign"))
-                ).recoverWith(e => fail(s"浏览器不支持 Ed25519 签名（要 Safari 17、Chrome 137 以上）：${e.getMessage}"))
-      sig <- promise[ArrayBuffer](subtle.sign(js.Dynamic.literal(name = "Ed25519"), signer, array(unsigned.toBeSigned)))
-    yield unsigned.signed(bytes(new Uint8Array(sig)))
-
-  /** ed25519 私钥种子的 PKCS#8 外壳（RFC 8410）：后面接 32 字节种子。 */
-  private val Pkcs8Ed25519: Array[Byte] =
-    Array(0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20).map(_.toByte)
 
   private def either[A](e: Either[String, A]): Future[A] = e.fold(fail, Future.successful)
 

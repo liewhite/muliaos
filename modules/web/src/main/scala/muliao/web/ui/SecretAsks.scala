@@ -31,16 +31,16 @@ object SecretAsks:
     def reply(d: scala.concurrent.Future[AskDecision]): Unit = act.fire(d.flatMap(x => Http.call(VaultApi.answerAsk)(AskAnswer(a.id, x))))
     val (head, body, buttons) = a.want match
       case AskWant.Reveal =>
-        def answer(d: String => AskDecision): Unit = reply(Passkey.open(a.key, a.box).map(d))
+        def answer(d: String => AskDecision): Unit = reply(Passkey.reveal(a.key, a.box).map(d))
         (
           "要用 passkey secret",
           pre(cls := Ui.CodeBlock + " max-h-60 overflow-auto", a.purpose.what),
           List(deny) ++ Spans.map((m, label) => Ui.btn(Variant.Secondary, Size.Sm, disabledIf = act.busy.signal)(title := "这个 agent 用这个 secret 在这段时间内不再问，正在等的一并放行", s"允许 $label", onClick --> (_ => answer(AskDecision.For(_, m))))) :+
             Ui.btn(Variant.Primary, Size.Sm, pending = act.busy.signal)("允许一次", onClick --> (_ => answer(AskDecision.Once(_))))
         )
-      case AskWant.SshCert(r) =>
+      case AskWant.Sign(content @ SignContent.SshCert(r)) =>
         (
-          "要用 SSH CA 签证书",
+          "要用签名钥匙签 SSH 证书",
           div(
             cls := "grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm",
             span(cls := "text-muted", "可登"), code(cls := "font-mono break-all", r.principals.mkString("  ")),
@@ -53,7 +53,7 @@ object SecretAsks:
             Ui.btn(Variant.Primary, Size.Sm, pending = act.busy.signal)(
               title := "用 passkey 解开 CA、在这个页面里签好证书交回，CA 私钥不离开浏览器",
               "签发",
-              onClick --> (_ => reply(Passkey.certify(a.key, a.box, r).map(AskDecision.Certificate(_))))
+              onClick --> (_ => reply(Passkey.sign(a.key, a.box, content).map(AskDecision.Signed(_))))
             )
           )
         )

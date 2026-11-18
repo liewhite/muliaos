@@ -51,3 +51,10 @@ object Hljs extends js.Object:
 object Dagre extends js.Object:
   def layout(g: js.Any): Unit = js.native
   val graphlib: js.Dynamic = js.native
+
+/** ed25519 签名（@noble/curves，#938）：签名钥匙在浏览器里签名用；以后的 secp256k1 等也用这个库。`secretKey` 是 32 字节种子。 */
+@js.native
+@JSImport("@noble/curves/ed25519.js", "ed25519")
+object NobleEd25519 extends js.Object:
+  def sign(message: scala.scalajs.js.typedarray.Uint8Array, secretKey: scala.scalajs.js.typedarray.Uint8Array): scala.scalajs.js.typedarray.Uint8Array = js.native
+  def getPublicKey(secretKey: scala.scalajs.js.typedarray.Uint8Array): scala.scalajs.js.typedarray.Uint8Array = js.native

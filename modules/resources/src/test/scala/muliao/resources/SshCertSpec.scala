@@ -40,6 +40,7 @@ object SshCertSpec extends ZIOSpecDefault:
         sh(dir, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "ca", "-f", "ca")
         sh(dir, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "", "-f", "user")
         val ca   = SshCert.readPrivate(Files.readString(dir.resolve("ca"))).toOption.get
+        val oneLine = SshCert.readPrivate(Files.readString(dir.resolve("ca")).replace("\n", "")).map(_.publicKey) // 网页单行输入框删掉了换行
         val caPub = SshCert.readPublic(Files.readString(dir.resolve("ca.pub"))).toOption.get
         val user = SshCert.readPublic(Files.readString(dir.resolve("user.pub"))).toOption.get
         def both(source: Option[String]) =
@@ -52,10 +53,11 @@ object SshCertSpec extends ZIOSpecDefault:
         val (t2, o2) = both(Some("203.0.113.7/32,10.0.0.0/8"))
         Files.writeString(dir.resolve("mine-cert.pub"), o2 + "\n")
         val listed = sh(dir, "ssh-keygen", "-L", "-f", "mine-cert.pub")
-        (ca, caPub, t1, o1, t2, o2, listed)
-      }.map { (ca, caPub, t1, o1, t2, o2, listed) =>
+        (ca, caPub, t1, o1, t2, o2, listed, oneLine)
+      }.map { (ca, caPub, t1, o1, t2, o2, listed, oneLine) =>
         assertTrue(
           ca.publicKey == caPub,
+          oneLine == Right(caPub),
           o1.split(" ")(1) == t1,
           o2.split(" ")(1) == t2,
           o1.startsWith(SshCert.CertType + " "),

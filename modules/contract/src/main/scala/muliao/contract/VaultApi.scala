@@ -13,15 +13,32 @@ import zio.json.*
 final case class PasskeyBox(rp: String, credential: String, iv: String, ciphertext: String) derives JsonCodec, Schema:
   override def toString: String = s"PasskeyBox($rp)"
 
-/** 设 secret 的新值：明文（服务端用主密钥加密）或浏览器里已用 passkey 加密好的密文。JSON 里 `kind` 是分支名。 */
+/** 签名钥匙的算法（#938）。 */
+enum SigningAlgorithm(val label: String) extends Labeled:
+  case Ed25519 extends SigningAlgorithm("ed25519")
+
+object SigningAlgorithm extends Labels[SigningAlgorithm]("签名算法", SigningAlgorithm.values)
+
+/** passkey 加密时 AES-GCM 的附加数据：普通的是 secret 名；签名钥匙带上「签名钥匙、算法」，于是取明文的那条路（按 secret 名解）解不开它，
+  * 服务端被攻破、把签名钥匙冒充成普通 secret 发来取明文，浏览器也解不开。
+  */
+object PasskeyAad:
+  def plain(key: String): String                           = key
+  def signing(key: String, alg: SigningAlgorithm): String = s"signing:${alg.label}:$key"
+
+/** 设 secret 的新值：明文（服务端用主密钥加密）、浏览器里已用 passkey 加密好的密文，或签名钥匙（passkey 加密的私钥，只能在浏览器里签名，#938）。
+  * JSON 里 `kind` 是分支名。
+  */
 @jsonDiscriminator("kind")
 enum SecretValue derives JsonCodec:
   case Plain(text: String)
   case Passkey(box: PasskeyBox)
+  case Signing(algorithm: SigningAlgorithm, box: PasskeyBox)
 
   override def toString: String = this match
-    case Plain(_)   => "SecretValue.Plain(***)"
-    case Passkey(b) => s"SecretValue.Passkey($b)"
+    case Plain(_)      => "SecretValue.Plain(***)"
+    case Passkey(b)    => s"SecretValue.Passkey($b)"
+    case Signing(a, b) => s"SecretValue.Signing(${a.label}, $b)"
 
 object SecretValue:
   given Schema[SecretValue] =
@@ -37,11 +54,29 @@ final case class AskPurpose(session: Option[SessionId], what: String) derives Js
 final case class SshCertRequest(publicKey: String, principals: List[String], minutes: Int, sourceAddress: Option[String], keyId: String)
     derives JsonCodec, Schema
 
-/** 要 passkey secret 做什么：解开交出明文，或当 SSH CA 签一张证书（CA 私钥只在浏览器里用、不交回）。JSON 里 `kind` 是分支名。 */
+/** 要签名钥匙签的内容，带类型：浏览器按类型自己解码成人能看懂的样子显示、自己拼出待签的字节，不采信 agent 写的说明（#938）。
+  * 加一种内容就加一个分支。JSON 里 `kind` 是分支名。
+  */
+@jsonDiscriminator("kind")
+enum SignContent derives JsonCodec:
+  /** SSH 用户证书（ed25519 CA）。 */
+  case SshCert(request: SshCertRequest)
+
+  /** 这种内容要哪种算法的钥匙。 */
+  def algorithm: SigningAlgorithm = this match
+    case SshCert(_) => SigningAlgorithm.Ed25519
+
+object SignContent:
+  given Schema[SignContent] =
+    given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
+    Schema.derived
+
+/** 要 passkey secret 做什么：解开交出明文，或用签名钥匙签一份内容（私钥只在浏览器里用、不交回）。JSON 里 `kind` 是分支名。 */
 @jsonDiscriminator("kind")
 enum AskWant derives JsonCodec:
   case Reveal
-  case SshCert(request: SshCertRequest)
+  // 钥匙的算法就是 `content.algorithm`（服务端发请求前核对过）
+  case Sign(content: SignContent)
 
 object AskWant:
   given Schema[AskWant] =
@@ -59,19 +94,21 @@ final case class PasskeyCredential(rp: String, credential: String) derives JsonC
 
 final case class VaultState(asks: List[SecretAsk], grants: List[SecretGrant], credentials: List[PasskeyCredential]) derives JsonCodec, Schema
 
-/** 用户对一次请求的答复：解开的明文用一次、用一段时间（分钟），签好的证书（证书文件的一行，答 `AskWant.SshCert`），或拒绝。JSON 里 `kind` 是分支名。 */
+/** 用户对一次请求的答复：解开的明文用一次、用一段时间（分钟），签好的结果（答 `AskWant.Sign`：SSH 证书是证书文件的一行），或拒绝。
+  * JSON 里 `kind` 是分支名。
+  */
 @jsonDiscriminator("kind")
 enum AskDecision derives JsonCodec:
   case Once(value: String)
   case For(value: String, minutes: Int)
-  case Certificate(cert: String)
+  case Signed(result: String)
   case Deny
 
   override def toString: String = this match
-    case Once(_)        => "AskDecision.Once(***)"
-    case For(_, m)      => s"AskDecision.For(***, $m)"
-    case Certificate(c) => s"AskDecision.Certificate($c)"
-    case Deny           => "AskDecision.Deny"
+    case Once(_)   => "AskDecision.Once(***)"
+    case For(_, m) => s"AskDecision.For(***, $m)"
+    case Signed(r) => s"AskDecision.Signed($r)"
+    case Deny      => "AskDecision.Deny"
 
 object AskDecision:
   given Schema[AskDecision] =
@@ -90,7 +127,7 @@ object VaultApi:
 
   val answerAsk =
     vault.post.in("answer").in(jsonBody[AskAnswer]).out(statusCode(StatusCode.NoContent)).name("answerAsk")
-      .description("答复一个等授权的请求：浏览器解开的明文用一次（只给这次调用）或一段时间（这个 agent 这个 secret 全部在等的一并给），签证书的请求交回签好的证书，或拒绝。请求已没了回 NotFound，答复与请求种类不符回 BadRequest。")
+      .description("答复一个等授权的请求：浏览器解开的明文用一次（只给这次调用）或一段时间（这个 agent 这个 secret 全部在等的一并给），签名请求交回签好的结果，或拒绝。请求已没了回 NotFound，答复与请求种类不符回 BadRequest。")
 
   val revokeGrant =
     vault.post.in("revoke").in(jsonBody[GrantRevoke]).out(statusCode(StatusCode.NoContent)).name("revokeGrant")

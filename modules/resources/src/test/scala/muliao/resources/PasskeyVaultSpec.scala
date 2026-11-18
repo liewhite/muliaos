@@ -137,28 +137,44 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
       yield assertTrue(r1 == Map("PK_TOKEN" -> "v"), w2.size == 1, w4.size == 1)
     }
     ,
-    test("签 SSH 证书（#938）：工具发出请求（带能登哪些、多久、记录名）；每张都要批，一段时间的授权不管用；答错种类被拒；交回证书后写好钥匙与证书；服务端加密的 CA 不让用") {
+    test("签名钥匙（#938）：文件是 [signing] 表；只有用户能设；取明文被拒、不发请求；普通 passkey secret 不能拿来签") {
       for
         (a, _, vault) <- setup
-        _     <- vault.set(Actor.User, "SSH_CA", SecretValue.Passkey(box), Some("CA"), Some(false), Owner.Agent(a.name))
-        _     <- vault.set(Actor.User, "PLAIN_CA", SecretValue.Plain("x"), None, None, Owner.Agent(a.name))
+        _     <- vault.set(Actor.User, "SSH_CA", SecretValue.Signing(SigningAlgorithm.Ed25519, box), Some("CA"), Some(false), Owner.Agent(a.name))
+        dirs  <- ZIO.service[TestEnv.Dirs]
+        raw   <- ZIO.succeed(Files.readString(dirs.assets.resolve("alice/secrets/SSH_CA.toml")))
+        e1    <- vault.set(Actor.Agent(a.id), "SSH_CA", SecretValue.Plain("降级"), None, None, Owner.Platform).either
+        e2    <- vault.set(Actor.Agent(a.id), "OTHER", SecretValue.Signing(SigningAlgorithm.Ed25519, box), None, None, Owner.Platform).either
+        rv    <- vault.reveal(a.id, List("SSH_CA"), SecretUse.Script, in("s1", "cat")).either
+        none  <- ZIO.serviceWithZIO[Grants](_.view.map(_._1))
+        req    = SshCertRequest("ssh-ed25519 AAAA", List("admin@relay"), 5, None, "id")
+        gen   <- vault.sign(a.id, "PK_TOKEN", SignContent.SshCert(req), in("s1", "x")).either
+      yield assertTrue(
+        raw.contains("[signing]"),
+        raw.contains("algorithm = \"ed25519\""),
+        Formats.parseSecret(raw).map(_.lock) == Right(SecretLock.Signing(SigningAlgorithm.Ed25519, box)),
+        Formats.parseSecret(raw + "\n[passkey]\nrp = \"a\"\ncredential = \"b\"\niv = \"c\"\nciphertext = \"d\"\n").isLeft,
+        reason(e1).contains("只能由用户在界面上改值"),
+        reason(e2).contains("只能由用户在界面上设值"),
+        reason(rv).contains("不能取明文"),
+        none.isEmpty,
+        reason(gen).contains("不是签名钥匙")
+      )
+    },
+    test("签 SSH 证书（#938）：工具发出请求（带能登哪些、多久、记录名）；每张都要批；答错种类被拒；交回证书后写好钥匙与证书；拒绝") {
+      for
+        (a, _, vault) <- setup
+        _     <- vault.set(Actor.User, "SSH_CA", SecretValue.Signing(SigningAlgorithm.Ed25519, box), Some("CA"), Some(false), Owner.Agent(a.name))
         tool  <- toolOf("ssh_certificate")
         sub   <- ZIO.serviceWithZIO[Grants](_.asked)
-        // 先给 SSH_CA 一段「取明文」的授权：签证书仍要问
-        f0    <- vault.reveal(a.id, List("SSH_CA"), SecretUse.Script, in("s0", "x")).fork
-        w0    <- asks(1)
-        _     <- answer(w0.head.id, AskDecision.For("pem", 60))
-        _     <- f0.join
-        _     <- sub.take
         bad   <- tool.invoke(Json.Obj("logins" -> Json.Arr(Json.Str("relay"))), Ctx(a.id)).either
-        plain <- tool.invoke(Json.Obj("logins" -> Json.Arr(Json.Str("admin@relay")), "ca" -> Json.Str("PLAIN_CA")), Ctx(a.id)).either
         f1    <- tool.invoke(Json.Obj("logins" -> Json.Arr(Json.Str("admin@relay"), Json.Str("root@jlp")), "minutes" -> Json.Num(10)), Ctx(a.id)).fork
         w1    <- asks(1)
         note  <- sub.take
         once  <- answer(w1.head.id, AskDecision.Once("pem")).either
         span  <- answer(w1.head.id, AskDecision.For("pem", 5)).either
         still <- asks(1)
-        _     <- answer(w1.head.id, AskDecision.Certificate("ssh-ed25519-cert-v01@openssh.com AAAA muliao"))
+        _     <- answer(w1.head.id, AskDecision.Signed("ssh-ed25519-cert-v01@openssh.com AAAA muliao"))
         out   <- f1.join
         path   = (out match { case muliao.toolkit.ToolOutcome.Completed(cs) => cs.collect { case muliao.toolkit.ToolContent.Text(t) => t }.mkString }).linesIterator.collectFirst { case l if l.startsWith("钥匙：") => l.stripPrefix("钥匙：").takeWhile(_ != '（') }.get
         cert  <- ZIO.attemptBlocking(Files.readString(java.nio.file.Path.of(path + "-cert.pub")))
@@ -170,11 +186,10 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         val want = w1.head.want
         assertTrue(
           bad.isLeft,
-          plain.left.toOption.exists(_.toString.contains("不是 passkey 加密的")),
           want match
-            case AskWant.SshCert(r) =>
+            case AskWant.Sign(SignContent.SshCert(r)) =>
               r.principals == List("admin@relay", "root@jlp") && r.minutes == 10 && r.keyId == "muliao:alice:s" && SshCert.readPublic(r.publicKey).isRight
-            case AskWant.Reveal => false
+            case _ => false
           ,
           w1.head.purpose.session.contains(SessionId.wrap("s")),
           note.want == want,

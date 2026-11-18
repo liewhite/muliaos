@@ -148,10 +148,12 @@ object Formats:
 
   // ---- secret ----
 
-  private val secretKeys  = Set("description", "ciphertext", "passkey", "allow_shell")
+  private val secretKeys  = Set("description", "ciphertext", "passkey", "signing", "allow_shell")
   private val passkeyKeys = Set("rp", "credential", "iv", "ciphertext")
 
-  /** 服务端加密的写 `ciphertext`（Fernet 密文）；passkey 加密的写 `[passkey]` 表（rp、credential、iv、ciphertext），两者恰好一个。 */
+  /** 服务端加密的写 `ciphertext`（Fernet 密文）；passkey 加密的写 `[passkey]` 表（rp、credential、iv、ciphertext）；
+    * 签名钥匙写 `[signing]` 表（algorithm 加 passkey 的四项），三者恰好一个。
+    */
   def parseSecret(text: String): Either[String, SecretFile] =
     for
       t     <- TomlFile.parse(text).map(TomlFile.fields)
@@ -159,17 +161,23 @@ object Formats:
       desc  <- t.string("description")
       ct    <- t.string("ciphertext")
       pk    <- t.table("passkey")
-      lock  <- (ct, pk) match
-                 case (Some(token), None) => Right(SecretLock.Server(token))
-                 case (None, Some(p))     => passkeyBox(p).map(SecretLock.Passkey(_))
-                 case (Some(_), Some(_))  => Left("ciphertext 与 [passkey] 只能有一个")
-                 case (None, None)        => Left("缺少 ciphertext（或 [passkey]）")
+      sg    <- t.table("signing")
+      lock  <- (ct, pk, sg) match
+                 case (Some(token), None, None) => Right(SecretLock.Server(token))
+                 case (None, Some(p), None)     => passkeyBox(p, passkeyKeys).map(SecretLock.Passkey(_))
+                 case (None, None, Some(g)) =>
+                   for
+                     alg <- g.requiredString("algorithm").flatMap(muliao.contract.SigningAlgorithm.parse)
+                     box <- passkeyBox(g, passkeyKeys + "algorithm")
+                   yield SecretLock.Signing(alg, box)
+                 case (None, None, None) => Left("缺少 ciphertext（或 [passkey]、[signing]）")
+                 case _                  => Left("ciphertext、[passkey]、[signing] 只能有一个")
       shell <- t.bool("allow_shell")
     yield SecretFile(desc.getOrElse(""), lock, shell.getOrElse(true))
 
-  private def passkeyBox(p: TomlFile.Fields): Either[String, muliao.contract.PasskeyBox] =
+  private def passkeyBox(p: TomlFile.Fields, allowed: Set[String]): Either[String, muliao.contract.PasskeyBox] =
     for
-      _    <- p.only(passkeyKeys)
+      _    <- p.only(allowed)
       rp   <- p.requiredString("rp")
       cred <- p.requiredString("credential")
       iv   <- p.requiredString("iv")
@@ -179,17 +187,12 @@ object Formats:
   def renderSecret(s: SecretFile): String =
     val desc  = s"description = ${TomlFile.str(s.description)}"
     val shell = Option.when(!s.allowShell)("allow_shell = false").toList
+    def box(b: muliao.contract.PasskeyBox) =
+      List(s"rp = ${TomlFile.str(b.rp)}", s"credential = ${TomlFile.str(b.credential)}", s"iv = ${TomlFile.str(b.iv)}", s"ciphertext = ${TomlFile.str(b.ciphertext)}")
     val lines = s.lock match
       case SecretLock.Server(token) => List(desc, s"ciphertext = ${TomlFile.str(token)}") ++ shell
-      case SecretLock.Passkey(b) =>
-        List(desc) ++ shell ++ List(
-          "",
-          "[passkey]",
-          s"rp = ${TomlFile.str(b.rp)}",
-          s"credential = ${TomlFile.str(b.credential)}",
-          s"iv = ${TomlFile.str(b.iv)}",
-          s"ciphertext = ${TomlFile.str(b.ciphertext)}"
-        )
+      case SecretLock.Passkey(b)    => List(desc) ++ shell ++ List("", "[passkey]") ++ box(b)
+      case SecretLock.Signing(a, b) => List(desc) ++ shell ++ List("", "[signing]", s"algorithm = ${TomlFile.str(a.label)}") ++ box(b)
     lines.mkString("", "\n", "\n")
 
   /** secret 名：大写字母开头，大写字母、数字、下划线。 */

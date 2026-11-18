@@ -1,6 +1,6 @@
 package muliao.resources.vault
 
-import muliao.contract.{AgentId, AskPurpose, AssetKind, SecretValue, SshCertRequest}
+import muliao.contract.{AgentId, AskPurpose, AssetKind, SecretValue, SignContent}
 import muliao.platform.AppError
 import muliao.resources.VaultSettings
 import muliao.resources.access.{Action, Decision, Permissions}
@@ -38,10 +38,10 @@ trait Vault:
     */
   def reveal(agent: AgentId, keys: List[String], use: SecretUse, purpose: AskPurpose): IO[AppError, Map[String, String]]
 
-  /** 用 passkey 加密的 SSH CA（secret `ca`）签一张证书（#938）：等用户在浏览器里解开并签好交回，明文不出浏览器。
-    * 用它要有 use 权限；CA 是服务端主密钥加密的报错（那样本机就能解开，失去意义）。
+  /** 请用户用签名钥匙 `key` 签一份内容（#938）：等用户在浏览器里解开并签好交回，私钥不出浏览器。返回签好的结果（SSH 证书是证书文件的一行）。
+    * 用它要有 use 权限；`key` 不是签名钥匙、或算法与内容要的不同都报错。
     */
-  def certify(agent: AgentId, ca: String, request: SshCertRequest, purpose: AskPurpose): IO[AppError, String]
+  def sign(agent: AgentId, key: String, content: SignContent, purpose: AskPurpose): IO[AppError, String]
 
 object Vault:
   val layer: ZLayer[VaultSettings & AssetStore & Agents & Grants, AppError, Vault] =
@@ -124,13 +124,14 @@ object Vault:
     /** 新值锁成什么：明文用主密钥加密；passkey 的密文浏览器里已加密好，原样存。passkey 加密的只有用户能设、能改。 */
     private def seal(actor: Actor, key: String, value: SecretValue, before: Option[SecretLock], now: Long): IO[AppError, SecretLock] =
       (actor, before, value) match
-        case (Actor.Agent(_), Some(_: SecretLock.Passkey), _) =>
+        case (Actor.Agent(_), Some(_: (SecretLock.Passkey | SecretLock.Signing)), _) =>
           ZIO.fail(AppError.forbidden(s"secret $key 是 passkey 加密的，只能由用户在界面上改值"))
-        case (Actor.Agent(_), _, _: SecretValue.Passkey) =>
+        case (Actor.Agent(_), _, _: (SecretValue.Passkey | SecretValue.Signing)) =>
           ZIO.fail(AppError.forbidden("passkey 加密的 secret 只能由用户在界面上设值"))
         case (_, _, SecretValue.Plain(text)) =>
           if text.isEmpty then ZIO.fail(AppError.invalid("secret 的值不能为空")) else ZIO.succeed(SecretLock.Server(fernet.encrypt(text, now)))
-        case (_, _, SecretValue.Passkey(box)) => ZIO.succeed(SecretLock.Passkey(box))
+        case (_, _, SecretValue.Passkey(box))      => ZIO.succeed(SecretLock.Passkey(box))
+        case (_, _, SecretValue.Signing(alg, box)) => ZIO.succeed(SecretLock.Signing(alg, box))
 
     /** 这个 agent 能用的 secret 文件：不存在、没加载或没有 use 权限都报错。 */
     private def usable(perms: Permissions, snap: Snapshot, key: String): IO[AppError, SecretDoc] =
@@ -159,19 +160,23 @@ object Vault:
         pairs <- ZIO.foreachPar(docs)(doc => open(agent, doc, purpose).map(doc.key -> _))
       yield pairs.toMap
 
-    def certify(agent: AgentId, ca: String, request: SshCertRequest, purpose: AskPurpose): IO[AppError, String] =
+    def sign(agent: AgentId, key: String, content: SignContent, purpose: AskPurpose): IO[AppError, String] =
       for
         perms <- permissions(agent)
         snap  <- store.snapshot
-        doc   <- usable(perms, snap, ca)
-        cert <- doc.content.lock match
-                  case SecretLock.Passkey(box) => grants.certify(Slot(agent, ca), request, purpose, box)
-                  case SecretLock.Server(_) =>
-                    ZIO.fail(AppError.invalid(s"secret $ca 不是 passkey 加密的：SSH CA 要由用户在界面 Secret 页设成 passkey 加密，签证书时才只在浏览器里解开"))
-      yield cert
+        doc   <- usable(perms, snap, key)
+        out <- doc.content.lock match
+                 case SecretLock.Signing(alg, box) if alg == content.algorithm => grants.sign(Slot(agent, key), content, purpose, box)
+                 case SecretLock.Signing(alg, _) =>
+                   ZIO.fail(AppError.invalid(s"secret $key 是 ${alg.label} 签名钥匙，这份内容要 ${content.algorithm.label} 的"))
+                 case _ =>
+                   ZIO.fail(AppError.invalid(s"secret $key 不是签名钥匙：要由用户在界面 Secret 页设成签名钥匙（${content.algorithm.label}）"))
+      yield out
 
     private def open(agent: AgentId, doc: SecretDoc, purpose: AskPurpose): IO[AppError, String] =
       doc.content.lock match
         case SecretLock.Server(token) =>
           ZIO.fromEither(fernet.decrypt(token)).mapError(r => AppError.invalid(s"secret ${doc.key} 解不开（$r），请重新存一次它的值"))
         case SecretLock.Passkey(box) => grants.obtain(Slot(agent, doc.key), purpose, box)
+        case SecretLock.Signing(_, _) =>
+          ZIO.fail(AppError.forbidden(s"secret ${doc.key} 是签名钥匙，只能请用户签名（如 ssh_certificate），不能取明文"))

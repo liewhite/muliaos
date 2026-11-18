@@ -76,7 +76,8 @@ object SshCert:
 
   /** 读 OpenSSH 格式、不带口令的 ed25519 私钥文件（`-----BEGIN OPENSSH PRIVATE KEY-----`）。 */
   def readPrivate(pem: String): Either[String, PrivateKey] =
-    val body = pem.linesIterator.map(_.trim).filterNot(l => l.isEmpty || l.startsWith("-----")).mkString
+    // 不按行切：网页的单行输入框会把换行删掉，整份成了一行
+    val body = pem.replaceAll("-----(BEGIN|END) OPENSSH PRIVATE KEY-----", "").replaceAll("\\s+", "")
     for
       bin <- unb64(body)
       k <- Wire.read(bin) { r =>
@@ -140,7 +141,7 @@ object SshCert:
     final class Reader(a: Array[Byte]):
       private var at = 0
       private def take(n: Int): Either[String, Array[Byte]] =
-        if n < 0 || at + n > a.length then Left("数据被截断")
+        if n < 0 || n > a.length - at then Left("数据被截断")
         else
           val r = a.slice(at, at + n)
           at += n

@@ -53,7 +53,7 @@ object AgentTools:
       @description("能登录的「账户@主机」，主机写服务器 principals 文件里认的名字，如 `admin@relay`；一张证书可以写几台") logins: List[String],
       @description("有效期（分钟，从用户批准时算起）") minutes: Int = 30,
       @fieldName("source_address") @description("只许从这些地址用（CIDR，逗号分隔），如 `203.0.113.7/32`；不给不限") sourceAddress: Option[String] = None,
-      @description("CA 所在的 passkey secret") ca: String = "SSH_CA"
+      @description("SSH CA：一个 ed25519 签名钥匙类的 secret") ca: String = "SSH_CA"
   )
   given Schema[SshCertificate] = DeriveSchema.gen[SshCertificate]
 
@@ -129,7 +129,7 @@ object AgentTools:
 
   val SshCertificateDef = ToolDef[ToolContext, SshCertificate](
     "ssh_certificate",
-    "用 passkey 加密的 SSH CA 签一张短期证书来登录服务器：平台现生成一把临时钥匙，等用户在界面上用 passkey 批准（每张都要批，期间这个调用一直等着），返回钥匙路径；之后 `ssh -i <钥匙> <主机>`（scp 同样加 -i，rsync 用 `-e 'ssh -i <钥匙>'`），证书在钥匙旁的 `-cert.pub`，ssh 自动带上。到期后重新申请。",
+    "用签名钥匙类的 SSH CA 签一张短期证书来登录服务器：平台现生成一把临时钥匙，等用户在界面上用 passkey 批准（每张都要批，期间这个调用一直等着），返回钥匙路径；之后 `ssh -i <钥匙> -l <账户> <ssh 主机>`（账户要和证书里的一致，ssh 配置里那台的 User 不同时以 -l 为准；scp、rsync 同样带 -i），证书在钥匙旁的 `-cert.pub`，ssh 自动带上。「账户@主机」里的主机是服务器上认的名字，不一定是 ssh 别名。到期后重新申请。",
     Access.Write
   )
 
@@ -217,10 +217,10 @@ object AgentTools:
         key <- SshKeys.generate
         req  = muliao.contract.SshCertRequest(key.publicKey.line(""), in.logins.distinct, in.minutes, in.sourceAddress.map(_.trim).filter(_.nonEmpty), s"muliao:${me.name.value}:${ctx.session.value}")
         what = s"签 SSH 证书：可登 ${req.principals.mkString("、")}，${req.minutes} 分钟${req.sourceAddress.fold("")(a => s"，只限从 $a")}"
-        cert <- vault.certify(ctx.agent, in.ca, req, muliao.contract.AskPurpose(Some(ctx.session), what))
+        cert <- vault.sign(ctx.agent, in.ca, muliao.contract.SignContent.SshCert(req), muliao.contract.AskPurpose(Some(ctx.session), what))
         path <- SshKeys.save(key, cert, req.keyId)
       yield ToolOutcome.text(
-        s"证书已签好，可登 ${req.principals.mkString("、")}，批准后 ${req.minutes} 分钟内有效。\n钥匙：$path（证书 $path-cert.pub）\n用法：ssh -i $path <主机>"
+        s"证书已签好，可登 ${req.principals.mkString("、")}，批准后 ${req.minutes} 分钟内有效。\n钥匙：$path（证书 $path-cert.pub）\n用法：ssh -i $path -l <账户> <ssh 主机>"
       )).mapError(fail)
     }
 

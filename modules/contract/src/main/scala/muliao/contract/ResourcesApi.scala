@@ -159,9 +159,23 @@ final case class AssetItem(
     description: Option[String],
     enabled: Option[Boolean],
     allowShell: Option[Boolean],
-    /** secret：是否 passkey 加密（每次用都要用户授权） */
-    passkey: Option[Boolean] = None
+    /** secret：怎么锁着 */
+    lock: Option[SecretLockView] = None
 ) derives JsonCodec, Schema
+
+/** secret 怎么锁着：服务端主密钥；passkey 加密（每次用都要用户授权，`box` 是密文，浏览器改锁法时用）；签名钥匙（只能在浏览器里签名，#938）。
+  * JSON 里 `kind` 是分支名。
+  */
+@jsonDiscriminator("kind")
+enum SecretLockView derives JsonCodec:
+  case Server
+  case Passkey(box: PasskeyBox)
+  case Signing(algorithm: SigningAlgorithm, box: PasskeyBox)
+
+object SecretLockView:
+  given Schema[SecretLockView] =
+    given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
+    Schema.derived
 
 final case class AssetIndex(root: String, items: List[AssetItem], problems: List[ProblemView], accessBroken: Option[String]) derives JsonCodec, Schema
 

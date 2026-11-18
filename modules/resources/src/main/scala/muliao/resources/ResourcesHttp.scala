@@ -198,10 +198,11 @@ final case class ResourcesHttp(
       val skills = snap.skills.map(s => AssetItem(AssetItemKind.Skill, s.name.value, s.owner.label, rel(s.main), usedBy(AssetKind.Skill, s.name.value, s.owner), Some(s.description), None, None))
       val mcps = snap.mcps.map(m => AssetItem(AssetItemKind.Mcp, m.name, m.owner.label, rel(m.file), usedBy(AssetKind.Mcp, m.name, m.owner), None, Some(m.config.enabled), None))
       val secrets = snap.secrets.map(s =>
-        val passkey = s.content.lock match
-          case _: SecretLock.Passkey => true
-          case _: SecretLock.Server  => false
-        AssetItem(AssetItemKind.Secret, s.key, s.owner.label, rel(s.file), usedBy(AssetKind.Secret, s.key, s.owner), Some(s.content.description), None, Some(s.content.allowShell), Some(passkey))
+        val lock = s.content.lock match
+          case SecretLock.Server(_)     => SecretLockView.Server
+          case SecretLock.Passkey(b)    => SecretLockView.Passkey(b)
+          case SecretLock.Signing(a, b) => SecretLockView.Signing(a, b)
+        AssetItem(AssetItemKind.Secret, s.key, s.owner.label, rel(s.file), usedBy(AssetKind.Secret, s.key, s.owner), Some(s.content.description), None, Some(s.content.allowShell), Some(lock))
       )
       val agentFiles = as.filter(a => snap.profiles.contains(a.name)).map(a =>
         AssetItem(AssetItemKind.Agent, a.name.value, a.name.value, AssetPath.render(AssetPath.AgentFile(a.name)).toString, List(a.name), snap.profiles.get(a.name).map(_.description), None, None)
