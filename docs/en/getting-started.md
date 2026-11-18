@@ -112,7 +112,7 @@ muliao listens on `127.0.0.1` by default. To reach it from other devices, put it
 name you control (any proxy or tunnel that terminates TLS and forwards to `127.0.0.1:1080` works).
 
 The proxy must run on the same Mac and add an `X-Forwarded-For` header: login rate limiting uses its last entry to tell devices apart
-when a request comes from `127.0.0.1`. Without it, every device shares one counter and a few wrong passwords on one device lock out all of them. Then:
+when a request comes from `127.0.0.1`. Without it, every device shares one counter and a few wrong passwords on one device lock out all of them for a while. Then:
 
 1. Set `server.public_url` to that HTTPS address (notification links use it) and restart: `sh deploy/activate.sh --restart-only`.
 2. Open the address in Safari on the iPhone, *Share → Add to Home Screen*, and open muliao from the home screen.

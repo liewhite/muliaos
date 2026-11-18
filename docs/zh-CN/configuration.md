@@ -27,7 +27,7 @@ muliao 只读一个 TOML 文件，路径在命令行给出（`muliao serve <文�
 | 键 | 默认 | 说明 |
 |---|---|---|
 | `level` | `"INFO"` | 最低级别：`DEBUG`、`INFO`、`WARN`、`ERROR` |
-| `file` | 无 | 日志文件；不写就打到标准输出。`deploy/selfcheck.sh` 读的是 `<MULIAO_HOME>/muliao.log` |
+| `file` | 无 | 日志文件；不写就打到标准输出 |
 | `max_size_mb` | `20` | 单个文件超过这么大就轮转 |
 | `keep` | `5` | 轮转保留的旧文件份数（`file.1` … `file.N`） |
 

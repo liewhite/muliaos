@@ -27,7 +27,7 @@ The file contains the login password, the vault key and API keys: keep it readab
 | Key | Default | Description |
 |---|---|---|
 | `level` | `"INFO"` | Minimum level: `DEBUG`, `INFO`, `WARN`, `ERROR` |
-| `file` | none | Log file; without it the log goes to standard output. `deploy/selfcheck.sh` expects `<MULIAO_HOME>/muliao.log` |
+| `file` | none | Log file; without it the log goes to standard output. |
 | `max_size_mb` | `20` | Rotate when the file exceeds this size |
 | `keep` | `5` | Rotated files to keep (`file.1` … `file.N`) |
 
