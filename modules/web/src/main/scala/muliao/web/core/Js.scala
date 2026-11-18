@@ -57,4 +57,3 @@ object Dagre extends js.Object:
 @JSImport("@noble/curves/ed25519.js", "ed25519")
 object NobleEd25519 extends js.Object:
   def sign(message: scala.scalajs.js.typedarray.Uint8Array, secretKey: scala.scalajs.js.typedarray.Uint8Array): scala.scalajs.js.typedarray.Uint8Array = js.native
-  def getPublicKey(secretKey: scala.scalajs.js.typedarray.Uint8Array): scala.scalajs.js.typedarray.Uint8Array = js.native

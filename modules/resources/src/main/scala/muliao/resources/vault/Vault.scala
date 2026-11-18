@@ -166,9 +166,8 @@ object Vault:
         snap  <- store.snapshot
         doc   <- usable(perms, snap, key)
         out <- doc.content.lock match
-                 case SecretLock.Signing(alg, box) if alg == content.algorithm => grants.sign(Slot(agent, key), content, purpose, box)
-                 case SecretLock.Signing(alg, _) =>
-                   ZIO.fail(AppError.invalid(s"secret $key 是 ${alg.label} 签名钥匙，这份内容要 ${content.algorithm.label} 的"))
+                 // 现在只有一种算法；加第二种时在这里核对钥匙的算法与 content.algorithm 相同
+                 case SecretLock.Signing(_, box) => grants.sign(Slot(agent, key), content, purpose, box)
                  case _ =>
                    ZIO.fail(AppError.invalid(s"secret $key 不是签名钥匙：要由用户在界面 Secret 页设成签名钥匙（${content.algorithm.label}）"))
       yield out

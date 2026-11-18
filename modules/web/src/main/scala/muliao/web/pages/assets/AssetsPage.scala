@@ -371,7 +371,7 @@ object SecretTab:
             Ui.btn(Variant.Ghost, Size.Sm, pending = act.busy.signal)(
               title := "里面是私钥（ed25519：OpenSSH 私钥文件）时，转成只能签名、取不出明文的签名钥匙",
               "转成签名钥匙",
-              onClick --> (_ => put(Passkey.toSigning(key, SigningAlgorithm.Ed25519, box, creds.now()).map(b => SecretWrite(value = Some(SecretValue.Signing(SigningAlgorithm.Ed25519, b)))), "已转成签名钥匙"))
+              onClick --> (_ => put(Passkey.toSigning(key, SigningAlgorithm.Ed25519, box).map(b => SecretWrite(value = Some(SecretValue.Signing(SigningAlgorithm.Ed25519, b)))), "已转成签名钥匙"))
             )
           }),
           Ui.iconBtn("KeyRound", s"改 $key 的值")(onClick --> (_ => setting.update(!_))),
@@ -385,7 +385,7 @@ object SecretTab:
               div(cls := "flex-1", Fields.text("新的值", newValue, inputType = "password", autoFocusOn = true)),
               AssetUi.submit("保存", act.busy.signal, newValue.signal.map(_.nonEmpty))(
                 // 沿用原来的锁法：passkey 加密的仍用 passkey 加密，签名钥匙仍是签名钥匙
-                onClick --> (_ => put(valueOf(key, newValue.now(), s.now().lock.fold(Lock.Server)(Lock.of), creds.now()).map(v => SecretWrite(value = Some(v))), "已改值"))
+                onClick --> (_ => s.now().lock.map(Lock.of).foreach(l => put(valueOf(key, newValue.now(), l, creds.now()).map(v => SecretWrite(value = Some(v))), "已改值")))
               )
             )
           )

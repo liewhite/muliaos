@@ -41,17 +41,21 @@ object Passkey:
                          known.headOption match
                            case Some(other) => fail(elsewhere(other.rp))
                            case None        => create()
-      iv   = random(12)
-      ct  <- promise[ArrayBuffer](subtle.encrypt(js.Dynamic.literal(name = "AES-GCM", iv = iv, additionalData = utf8(aad)), aes, utf8(plain)))
-    yield PasskeyBox(host, cred, b64(iv), b64(new Uint8Array(ct)))
+      box         <- encrypt(aes, cred, aad, plain)
+    yield box
 
   /** 用户设签名钥匙：先核对是这种算法认得的私钥，再加密。 */
   def sealSigning(key: String, alg: SigningAlgorithm, plain: String, known: List[PasskeyCredential]): Future[PasskeyBox] =
     either(material(alg, plain)).flatMap(_ => seal(PasskeyAad.signing(key, alg), plain, known))
 
-  /** 把普通 passkey secret 转成签名钥匙：解开、核对是私钥、按签名钥匙重新加密（用同一把 passkey）。 */
-  def toSigning(key: String, alg: SigningAlgorithm, box: PasskeyBox, known: List[PasskeyCredential]): Future[PasskeyBox] =
-    open(PasskeyAad.plain(key), box).flatMap(v => sealSigning(key, alg, v, known))
+  /** 把普通 passkey secret 转成签名钥匙：用原来那把 passkey 只确认一次，解开、核对是私钥、按签名钥匙的附加数据重新加密。 */
+  def toSigning(key: String, alg: SigningAlgorithm, box: PasskeyBox): Future[PasskeyBox] =
+    for
+      aes   <- unlock(box)
+      plain <- decrypt(aes, PasskeyAad.plain(key), box)
+      _     <- either(material(alg, plain))
+      out   <- encrypt(aes, box.credential, PasskeyAad.signing(key, alg), plain)
+    yield out
 
   /** 解开普通 passkey secret 交出明文（签名钥匙在这里解不开）。 */
   def reveal(key: String, box: PasskeyBox): Future[String] = open(PasskeyAad.plain(key), box)
@@ -87,15 +91,22 @@ object Passkey:
     }
 
   /** 解开（用户在系统弹窗里确认）。`aad` 不对（比如拿签名钥匙走取明文）就解不开。 */
-  private def open(aad: String, box: PasskeyBox): Future[String] =
-    if box.rp != host then fail(elsewhere(box.rp))
-    else
-      for
-        aes <- derive(box.credential)
-        pt <- promise[ArrayBuffer](
-                subtle.decrypt(js.Dynamic.literal(name = "AES-GCM", iv = unb64(box.iv), additionalData = utf8(aad)), aes, unb64(box.ciphertext))
-              ).recoverWith(_ => fail("解不开：选的不是加密时那把 passkey，或密文被改过"))
-      yield js.Dynamic.newInstance(js.Dynamic.global.TextDecoder)().decode(new Uint8Array(pt)).asInstanceOf[String]
+  private def open(aad: String, box: PasskeyBox): Future[String] = unlock(box).flatMap(decrypt(_, aad, box))
+
+  /** 用加密这份密文的那把 passkey 导出 AES 密钥（用户确认一次）。 */
+  private def unlock(box: PasskeyBox): Future[js.Dynamic] =
+    if box.rp != host then fail(elsewhere(box.rp)) else derive(box.credential)
+
+  private def decrypt(aes: js.Dynamic, aad: String, box: PasskeyBox): Future[String] =
+    promise[ArrayBuffer](
+      subtle.decrypt(js.Dynamic.literal(name = "AES-GCM", iv = unb64(box.iv), additionalData = utf8(aad)), aes, unb64(box.ciphertext))
+    ).recoverWith(_ => fail("解不开：选的不是加密时那把 passkey，或密文被改过"))
+      .map(pt => js.Dynamic.newInstance(js.Dynamic.global.TextDecoder)().decode(new Uint8Array(pt)).asInstanceOf[String])
+
+  private def encrypt(aes: js.Dynamic, credential: String, aad: String, plain: String): Future[PasskeyBox] =
+    val iv = random(12)
+    promise[ArrayBuffer](subtle.encrypt(js.Dynamic.literal(name = "AES-GCM", iv = iv, additionalData = utf8(aad)), aes, utf8(plain)))
+      .map(ct => PasskeyBox(host, credential, b64(iv), b64(new Uint8Array(ct))))
 
   private def either[A](e: Either[String, A]): Future[A] = e.fold(fail, Future.successful)
 
