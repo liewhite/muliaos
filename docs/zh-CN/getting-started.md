@@ -11,8 +11,7 @@
 - **Homebrew** 装的 `node`（构建前端）、`openssl@3`（签名证书用 `/opt/homebrew/bin/openssl` 生成）、`rust`（用来装 `rcodesign`）。
 - [SDKMAN!](https://sdkman.io) 装的 **JDK 25 和 sbt**；构建用 `~/.sdkman/candidates/java/current` 和 `~/.sdkman/candidates/sbt/current`。
 - `PATH` 里有 **rcodesign**（`cargo install --locked apple-codesign`）。cargo 装在 `~/.cargo/bin`，Homebrew 的 Rust 不会把它加进 `PATH`。
-- 一个 **Anthropic** 或 **OpenAI 兼容**模型服务的 API key。走 Anthropic 协议时 muliao 总是请求 adaptive thinking，模型必须支持它
-  （老模型会回 `adaptive thinking is not supported on this model`）。
+- 一个 **Anthropic** 或 **OpenAI 兼容**模型服务的 API key。
 
 ```zsh
 xcode-select --install

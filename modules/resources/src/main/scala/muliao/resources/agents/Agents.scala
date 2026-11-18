@@ -1,6 +1,6 @@
 package muliao.resources.agents
 
-import muliao.contract.{AgentState, Thinking, AssetKind}
+import muliao.contract.{AgentState, AssetKind}
 import muliao.contract.{AgentId, AgentName, RoleName, Topic}
 import muliao.platform.AppError
 import muliao.platform.db.Database
@@ -17,7 +17,6 @@ final case class NewAgent(
     name: String,
     description: String,
     model: Option[String] = None,
-    thinking: Thinking = Thinking.Default,
     group: Option[String] = None,
     roles: List[RoleName] = Nil,
     allow: List[String] = Nil,
@@ -29,7 +28,6 @@ final case class AgentPatch(
     name: Option[String] = None,
     description: Option[String] = None,
     model: Option[String] = None,
-    thinking: Option[Thinking] = None,
     group: Option[Option[String]] = None,
     roles: Option[List[RoleName]] = None,
     allow: Option[List[String]] = None,
@@ -211,7 +209,7 @@ object Agents:
           _  <- dirFree(name)
           id <- newId
           t  <- now
-          profile = AgentProfile(req.description.trim, model, req.thinking, req.group.map(_.trim).filter(_.nonEmpty))
+          profile = AgentProfile(req.description.trim, model, req.group.map(_.trim).filter(_.nonEmpty))
           _ <- store.write(AssetPath.AgentFile(name), Formats.renderAgent(profile))
           _ <- store.write(AssetPath.PrivateMemory(name), "")
           _ <- paths.ensureWorkspace(id)
@@ -241,7 +239,7 @@ object Agents:
       }
 
     private def updateProfile(a: AgentRecord, p: AgentPatch): IO[AppError, Unit] =
-      val touched = p.description.isDefined || p.model.isDefined || p.thinking.isDefined || p.group.isDefined
+      val touched = p.description.isDefined || p.model.isDefined || p.group.isDefined
       ZIO.when(touched) {
         for
           old <- profile(a.id)
@@ -249,7 +247,7 @@ object Agents:
           _   <- ZIO.when(desc.isEmpty)(ZIO.fail(AppError.invalid("描述不能为空")))
           model = p.model.map(_.trim).getOrElse(old.model)
           _   <- ZIO.when(p.model.isDefined)(checkModel(model))
-          next = AgentProfile(desc, model, p.thinking.getOrElse(old.thinking), p.group.fold(old.group)(_.map(_.trim).filter(_.nonEmpty)))
+          next = AgentProfile(desc, model, p.group.fold(old.group)(_.map(_.trim).filter(_.nonEmpty)))
           _   <- store.write(AssetPath.AgentFile(a.name), Formats.renderAgent(next))
         yield ()
       }.unit

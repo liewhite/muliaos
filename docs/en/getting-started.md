@@ -13,8 +13,7 @@ This guide installs muliao as a background service on your Mac, creates your fir
   `rust` (to install `rcodesign`).
 - **JDK 25 and sbt** installed with [SDKMAN!](https://sdkman.io); the build uses `~/.sdkman/candidates/java/current` and `~/.sdkman/candidates/sbt/current`.
 - **rcodesign** (`cargo install --locked apple-codesign`) on your `PATH`. Cargo installs into `~/.cargo/bin`, which Homebrew's Rust does not add to `PATH`.
-- An API key for an **Anthropic** or **OpenAI-compatible** model provider. With the Anthropic protocol muliao always requests
-  adaptive thinking, so the model must support it (older models answer `adaptive thinking is not supported on this model`).
+- An API key for an **Anthropic** or **OpenAI-compatible** model provider.
 
 ```zsh
 xcode-select --install

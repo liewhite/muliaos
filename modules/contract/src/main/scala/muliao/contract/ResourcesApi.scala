@@ -25,17 +25,6 @@ enum AgentState(val label: String) extends Labeled:
 
 object AgentState extends Labels[AgentState]("agent 状态", AgentState.values)
 
-/** 思考档位：`default` 照模型平时的做法并要回思考摘要；`off` 不思考；其余按这个力度思考，也要摘要。照发给服务商。 */
-enum Thinking(val label: String) extends Labeled:
-  case Default extends Thinking("default")
-  case Off     extends Thinking("off")
-  case Low     extends Thinking("low")
-  case Medium  extends Thinking("medium")
-  case High    extends Thinking("high")
-  case XHigh   extends Thinking("xhigh")
-
-object Thinking extends Labels[Thinking]("思考档位", Thinking.values)
-
 /** agent 列表里的一行（只列还存在的：`state` 是 active 或 archived）。 */
 final case class AgentSummary(
     id: AgentId,
@@ -66,7 +55,6 @@ final case class ProblemView(path: String, reason: String, owner: Option[String]
 
 final case class AgentDetail(
     summary: AgentSummary,
-    thinking: Option[Thinking],
     roles: List[RoleName],
     allow: List[String],
     deny: List[String],
@@ -86,7 +74,6 @@ final case class AgentCreate(
     name: String,
     description: String,
     model: Option[String] = None,
-    thinking: Option[Thinking] = None,
     group: Option[String] = None,
     roles: List[RoleName] = Nil,
     allow: List[String] = Nil,
@@ -98,7 +85,6 @@ final case class AgentUpdate(
     name: Option[String] = None,
     description: Option[String] = None,
     model: Option[String] = None,
-    thinking: Option[Thinking] = None,
     group: Option[String] = None,
     roles: Option[List[RoleName]] = None,
     allow: Option[List[String]] = None,
@@ -113,7 +99,7 @@ final case class PreviewRequest(agent: Option[AgentId] = None, roles: List[RoleN
 
 final case class PreviewResult(tools: List[GrantView], assets: List[GrantView], writablePaths: List[String]) derives JsonCodec, Schema
 
-final case class AgentDefaults(model: String, thinking: List[Thinking]) derives JsonCodec, Schema
+final case class AgentDefaults(model: String) derives JsonCodec, Schema
 
 // ---- 角色 ----
 

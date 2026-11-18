@@ -201,7 +201,7 @@ object VaultScopeToolsSpec extends ZIOSpecDefault:
         ga    <- tools("get_agent").invoke(Json.Obj("agent" -> Json.Str("BOB")), Ctx(a.id))
         la    <- tools("list_agents").invoke(Json.Obj(), Ctx(a.id))
         self  <- tools("delete_agent").invoke(Json.Obj("agent" -> Json.Str("alice")), Ctx(a.id)).either
-        mk    <- tools("create_agent").invoke(Json.Obj("name" -> Json.Str("carol"), "description" -> Json.Str("新"), "thinking" -> Json.Str("low")), Ctx(a.id))
+        mk    <- tools("create_agent").invoke(Json.Obj("name" -> Json.Str("carol"), "description" -> Json.Str("新")), Ctx(a.id))
         del   <- tools("delete_agent").invoke(Json.Obj("agent" -> Json.Str("carol")), Ctx(a.id))
         gone  <- ags.find("carol")
       yield

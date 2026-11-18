@@ -57,7 +57,7 @@ private[sessions] final case class Compaction(kernel: Kernel, requests: Requests
         case Some(Compaction.Batch(cut, more)) =>
           val ask     = Entry(Long.MaxValue, None, EntryBody.Context(Prompt.compactionRequest), 0L, 0L)
           val earlier = w.copy(entries = w.entries.filter(_.id < cut) :+ ask)
-          val req     = ModelRequest(kit.system, kit.defs, earlier.messages, kit.thinking, cacheKey = Some(id.value))
+          val req     = ModelRequest(kit.system, kit.defs, earlier.messages, cacheKey = Some(id.value))
           for
             _     <- ZIO.logInfo(s"会话 ${id.value} 压缩上下文：总结第 $cut 条之前的部分${if more then "（分批，后面还有）" else ""}")
             reply <- requests.call(kit, run, req, None)
@@ -99,7 +99,6 @@ private[sessions] object Compaction:
     case EntryBody.Reply(parts, _, _, _, _) =>
       val own = parts.map {
         case ReplyPart.Text(t, _)          => t.length.toLong
-        case ReplyPart.Thinking(t, _)      => t.length.toLong
         case ReplyPart.ToolCall(_, n, a, _) => (n.length + a.length).toLong
       }.sum
       own + calls.flatMap(_.status.outcome.toList).flatMap(_.content).collect { case StoredPart.Text(t) => t.length.toLong }.sum

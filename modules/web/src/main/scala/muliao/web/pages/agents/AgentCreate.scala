@@ -35,7 +35,7 @@ object AgentCreate:
         .foreach(_ => ())
     div(
       cls := "flex flex-col gap-4",
-      AgentForm.fields(None, value, defaults.thinking),
+      AgentForm.fields(None, value),
       act.errorView(),
       div(Ui.btn(pending = act.busy.signal)("保存", onClick --> (_ => submit())))
     )

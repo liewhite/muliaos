@@ -77,8 +77,8 @@ One table per provider; `<name>` is the provider part of model names such as `cl
 | `max_concurrency` | `4` | Maximum concurrent requests to this provider, shared by all agents; extra requests wait |
 | `max_output_tokens` | none | Output token limit. Anthropic requires one: without this key 128000 is sent, so set a lower value for models with a smaller limit. OpenAI: the model's own default |
 
-With the `anthropic` protocol muliao requests adaptive thinking with summarised thinking output (`thinking` level `off` disables it),
-so the model must support adaptive thinking.
+muliao does not use extended thinking: requests carry no thinking settings (each model follows its own default), and any thinking
+or reasoning blocks the model returns are dropped (not stored, shown or sent back). Text the model writes between tool calls is kept.
 
 ## `[sessions]`
 
@@ -178,7 +178,6 @@ Names of skills, MCP servers and shared memories use lowercase letters, digits a
 ```toml
 description = "Keeps an eye on this Mac: disk space, backups, long-running jobs."
 model = "claude:claude-sonnet-5-5"
-thinking = "default"     # default, off, low, medium, high, xhigh
 group = "infra"          # optional
 ```
 

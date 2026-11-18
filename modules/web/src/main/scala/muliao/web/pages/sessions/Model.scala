@@ -77,10 +77,8 @@ object Model:
 
   // ---- 展示块 ----
 
-  /** 过程步骤：思考与工具调用。连续的步骤收进一个折叠组。 */
-  enum Step:
-    case Thinking(text: String)
-    case Tool(call: CallView, entry: Long)
+  /** 过程步骤：一次工具调用。连续的步骤收进一个折叠组。 */
+  final case class Step(call: CallView, entry: Long)
 
   enum Block:
     case Context(text: String, at: Long)
@@ -118,15 +116,13 @@ object Model:
     parts.flatMap {
       case PartView.Call(c) if isAsk(c)      => Some(Block.Ask(c, entry))
       case PartView.Call(c) if isApproval(c) => Some(Block.Approval(c, entry))
-      case PartView.Call(c)                  => Some(Block.Process(List(Step.Tool(c, entry))))
-      case PartView.Thinking(t)              => Option.when(t.trim.nonEmpty)(Block.Process(List(Step.Thinking(t))))
+      case PartView.Call(c)                  => Some(Block.Process(List(Step(c, entry))))
       case PartView.Text(t)                  => Option.when(t.trim.nonEmpty)(Block.Assistant(t))
     }
 
   /** 一步有没有不随过程折叠的成果（交给用户的文件、开出的 thread）。 */
-  private def hasOutputs(s: Step, threads: CallView => Option[SessionSummary]): Boolean = s match
-    case Step.Tool(c, _) => sharedFile(c).isDefined || threads(c).isDefined
-    case _               => false
+  private def hasOutputs(s: Step, threads: CallView => Option[SessionSummary]): Boolean =
+    sharedFile(s.call).isDefined || threads(s.call).isDefined
 
   /** 连续的步骤合成一个过程组；有成果的组到此为止（成果显示在组下方，之后的步骤另起一组，否则看起来像发生在成果之前）。 */
   def groupSteps(bs: List[Block], threads: CallView => Option[SessionSummary]): List[Block] =
@@ -145,17 +141,12 @@ object Model:
     case Block.Assistant(t) => t.trim == "…" || t.trim == "..."
     case _                  => false
 
-  private def onlyThinking(b: Block): Boolean = b match
-    case Block.Process(steps) => steps.forall { case Step.Thinking(_) => true; case _ => false }
-    case _                    => false
-
-  /** 连续的运行中检查（夹在中间的占位答复、紧接着占位答复的纯思考一并收起）按来源合成一条。 */
+  /** 连续的运行中检查（夹在中间的占位答复一并收起）按来源合成一条。 */
   def foldCheckIns(bs: List[Block]): List[Block] =
     val arr = bs.toVector
     arr.indices
       .foldLeft((Vector.empty[Block], false)) { case ((out, inRun), i) =>
         arr(i) match
-          case b if inRun && onlyThinking(b) && arr.lift(i + 1).exists(isFiller) => (out, true)
           case Block.CheckIns(k, cs) =>
             out.lastIndexWhere { case Block.CheckIns(k2, _) => k2 == k; case _ => false } match
               case j if inRun && j >= 0 =>
@@ -168,14 +159,12 @@ object Model:
       ._1
       .toList
 
-  /** 一组步骤的标题：如「思考 · 8 次工具调用」。 */
-  def stepsLabel(steps: List[Step]): String =
-    val tools = steps.count { case Step.Tool(_, _) => true; case _ => false }
-    (Option.when(steps.exists { case Step.Thinking(_) => true; case _ => false })("思考") ++ Option.when(tools > 0)(s"$tools 次工具调用")).mkString(" · ")
+  /** 一组步骤的标题：如「8 次工具调用」。 */
+  def stepsLabel(steps: List[Step]): String = s"${steps.size} 次工具调用"
 
   /** 一组步骤的状态一句话。 */
   def stepsStatus(steps: List[Step], live: Boolean, runActive: Boolean): (Option[String], String) =
-    val calls    = steps.collect { case Step.Tool(c, _) => c }
+    val calls    = steps.map(_.call)
     val statuses = calls.map(c => c -> toolStatus(c, live, runActive))
     val running  = statuses.collectFirst { case (c, ToolStatus.Running) => c.name }
     val unfinished = statuses.count(_._2 == ToolStatus.Unfinished)

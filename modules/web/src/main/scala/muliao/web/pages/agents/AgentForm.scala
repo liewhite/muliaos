@@ -12,7 +12,6 @@ final case class AgentForm(
     description: String,
     group: String,
     model: String,
-    thinking: Thinking,
     roles: List[RoleName],
     allow: List[String],
     deny: List[String]
@@ -27,20 +26,18 @@ object AgentForm:
       d.summary.description.getOrElse(""),
       d.summary.group.getOrElse(""),
       d.summary.model.getOrElse(""),
-      d.thinking.getOrElse(Thinking.Default),
       d.roles,
       d.allow,
       d.deny
     )
 
-  def blank(defaults: AgentDefaults): AgentForm = AgentForm("", "", "", defaults.model, Thinking.Default, Nil, Nil, Nil)
+  def blank(defaults: AgentDefaults): AgentForm = AgentForm("", "", "", defaults.model, Nil, Nil, Nil)
 
   def create(f: AgentForm): AgentCreate =
     AgentCreate(
       name = f.name.trim,
       description = f.description.trim,
       model = Option(f.model).filter(_.nonEmpty),
-      thinking = Some(f.thinking),
       group = Option(f.group.trim).filter(_.nonEmpty),
       roles = f.roles,
       allow = f.allow,
@@ -54,20 +51,13 @@ object AgentForm:
       description = d.changed(_.description.trim),
       group = d.changed(_.group.trim),
       model = d.changed(_.model),
-      thinking = d.changed(_.thinking),
       roles = d.changed(_.roles),
       allow = d.changed(_.allow),
       deny = d.changed(_.deny)
     )
 
-  /** 思考档位的显示名：「默认」什么都不传（按模型与服务端的默认）。 */
-  def thinkingLabel(t: Thinking): String = t match
-    case Thinking.Default => "默认"
-    case Thinking.Off     => "关闭"
-    case other            => other.label
-
   /** 各项配置。`agent` 为空是还没建的（预览权限时按它算「自己的资源」）。 */
-  def fields(agent: Option[AgentId], form: Var[AgentForm], thinkings: List[Thinking]): Modifier[HtmlElement] =
+  def fields(agent: Option[AgentId], form: Var[AgentForm]): Modifier[HtmlElement] =
     def field(get: AgentForm => String, set: (AgentForm, String) => AgentForm): Var[String] =
       form.zoom(get)((f, v) => set(f, v))
     Seq(
@@ -78,18 +68,18 @@ object AgentForm:
         hint = Some("它的角色：agent 自己每次运行都会看到，其他 agent 委派任务时据此选择")
       ),
       Fields.text("分组", field(_.group, (f, v) => f.copy(group = v)), hint = Some("可不填；同一类的 agent（如一批接单的）归到一组，列表里按组折叠")),
-      ModelInput.view(form.signal.map(_.model), m => form.update(_.copy(model = m)), form.signal.map(_.thinking), t => form.update(_.copy(thinking = t)), thinkings),
+      ModelInput.view(form.signal.map(_.model), m => form.update(_.copy(model = m))),
       PermissionsInput.view(agent, form.signal.map(_.permissions), f => form.update(x => x.withPermissions(f(x.permissions))))
     )
 
-/** agent 的模型：服务商来自服务端配置，模型名向该服务商实时查询；旁边是它的思考档位。 */
+/** agent 的模型：服务商来自服务端配置，模型名向该服务商实时查询。 */
 object ModelInput:
   def split(model: String): (String, String) = model.split(":", 2) match
     case Array(p, m) => (p, m)
     case Array(p)    => (p, "")
     case _           => ("", "")
 
-  def view(model: Signal[String], onModel: String => Unit, thinking: Signal[Thinking], onThinking: Thinking => Unit, thinkings: List[Thinking]): HtmlElement =
+  def view(model: Signal[String], onModel: String => Unit): HtmlElement =
     val overview = Remote(ModelsApi.overview)(())
     val provider = model.map(split(_)._1).distinct
     val listed: Signal[Load[List[String]]] = provider.flatMapSwitch {
@@ -103,7 +93,7 @@ object ModelInput:
       cls := "flex flex-col gap-2",
       model --> current,
       div(
-        cls := "grid grid-cols-1 gap-2 sm:grid-cols-3",
+        cls := "grid grid-cols-1 gap-2 sm:grid-cols-2",
         Fields.select[String](
           "服务商",
           provider.map(p => Option(p).filter(_.nonEmpty)),
@@ -125,13 +115,6 @@ object ModelInput:
           }),
           placeholderText = "请选择",
           disabledIf = provider.map(_.isEmpty)
-        ),
-        Fields.select[Thinking](
-          "思考",
-          thinking.map(Some(_)),
-          onThinking,
-          Val(thinkings.map(t => Opt(t, AgentForm.thinkingLabel(t)))),
-          hint = Some("默认＝不传，按模型自己的默认")
         )
       ),
       child.maybe <-- overview.map { case Load.Failed(m) => Some(Ui.errorAlert("读取服务商失败", m)); case _ => None },

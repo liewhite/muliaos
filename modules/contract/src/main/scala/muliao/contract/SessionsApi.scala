@@ -190,7 +190,6 @@ private object Tagged:
 @jsonDiscriminator("kind")
 enum PartView derives JsonCodec:
   case Text(text: String)
-  case Thinking(text: String)
   case Call(call: CallView)
 
 object PartView:
@@ -308,7 +307,6 @@ final case class AnswerIn(answers: Option[List[String]] = None, approved: Option
 /** 回复的一段长了哪种内容。 */
 enum Growth(val label: String) extends Labeled:
   case Text     extends Growth("Text")
-  case Thinking extends Growth("Thinking")
   case ToolArgs extends Growth("ToolArgs")
 
 object Growth extends Labels[Growth]("增长种类", Growth.values)

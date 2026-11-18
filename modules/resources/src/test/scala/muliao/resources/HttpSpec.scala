@@ -45,7 +45,7 @@ object HttpSpec extends ZIOSpecDefault:
       ZIO.scoped {
         for
           c   <- server
-          mk  <- c.call("POST", "/api/agents", Some("""{"name":"alice","description":"做事","thinking":"low","roles":["admin"]}"""))
+          mk  <- c.call("POST", "/api/agents", Some("""{"name":"alice","description":"做事","roles":["admin"]}"""))
           d    = mk.body.fromJson[AgentDetail].toOption.get
           dup <- c.call("POST", "/api/agents", Some("""{"name":"ALICE","description":"x"}"""))
           ls  <- c.call("GET", "/api/agents")
@@ -59,7 +59,6 @@ object HttpSpec extends ZIOSpecDefault:
           val err     = dup.body.fromJson[ApiError].toOption.get
           assertTrue(
             mk.status == 201,
-            d.thinking.contains(Thinking.Low),
             d.roles == List("admin"),
             d.tools.exists(_.name == "create_agent"),
             dup.status == 409,

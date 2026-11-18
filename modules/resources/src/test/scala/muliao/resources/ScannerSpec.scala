@@ -1,6 +1,6 @@
 package muliao.resources
 
-import muliao.contract.{Thinking, AssetKind, SkillName}
+import muliao.contract.{AssetKind, SkillName}
 import muliao.contract.AgentName
 import muliao.resources.tree.*
 import zio.*
@@ -44,7 +44,7 @@ object ScannerSpec extends ZIOSpecDefault:
         "platform/memory/trading.md" -> "交易",
         "platform/skills/code-std/SKILL.md" -> "---\ndescription: 写代码时\n  读它\napproval: [scripts/run.sh]\n---\n",
         "platform/skills/code-std/scripts/run.sh" -> "#!/bin/sh\n",
-        "alice/agent.toml" -> "description = \"做事\"\nmodel = \"claude:x\"\nthinking = \"high\"\ngroup = \"g\"\n",
+        "alice/agent.toml" -> "description = \"做事\"\nmodel = \"claude:x\"\ngroup = \"g\"\n",
         "alice/memory.md" -> "私有",
         "alice/mcp/web.json" -> """{"transport":"http","url":"https://x/mcp","headers":{"A":"Bearer ${vault:TOKEN_A}"}}""",
         "alice/secrets/TOKEN_A.toml" -> "description = \"d\"\nciphertext = \"gAAA\"\nallow_shell = false\n",
@@ -56,7 +56,7 @@ object ScannerSpec extends ZIOSpecDefault:
         s.skill(SkillName.wrap("code-std")).exists(d => d.description == "写代码时 读它" && d.approval == Set("scripts/run.sh") && d.owner == Owner.Platform),
         s.mcp("web").exists(_.config.secretRefs == Set("TOKEN_A")),
         s.secret("TOKEN_A").exists(d => !d.content.allowShell && d.owner == Owner.Agent(AgentName.wrap("alice"))),
-        s.profiles.get(AgentName.wrap("alice")).contains(AgentProfile("做事", "claude:x", Thinking.High, Some("g"))),
+        s.profiles.get(AgentName.wrap("alice")).contains(AgentProfile("做事", "claude:x", Some("g"))),
         s.privateMemory(AgentName.wrap("alice")).exists(_.content == "私有"),
         s.sharedMemory("trading").isDefined,
         s.agentDirs == Set(AgentName.wrap("alice"))

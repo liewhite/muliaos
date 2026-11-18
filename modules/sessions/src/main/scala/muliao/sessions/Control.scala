@@ -80,10 +80,9 @@ private[sessions] final case class Control(
 
   private def visible(p: ReplyPart): Boolean = p match
     case ReplyPart.Text(t, _)     => t.nonEmpty
-    case ReplyPart.Thinking(t, _) => t.nonEmpty
     case _: ReplyPart.ToolCall    => false
 
-  /** 被打断的回复：只存文字与思考（半截的工具调用不存，也就不会发回模型）。 */
+  /** 被打断的回复：只存文字（半截的工具调用不存，也就不会发回模型）。 */
   private def savePartial(id: SessionId, p: Partial, t: Long) =
     val parts = p.builder.parts.filter(visible)
     Repo.insertEntry(

@@ -68,18 +68,16 @@ final case class LiveReply(parts: Vector[PartView], covered: Boolean):
 object LiveReply:
   val empty: LiveReply = LiveReply(Vector.empty, covered = false)
 
-  /** 各段的文字（正文、思考、调用参数）连起来，用来判断库里的回复是否已包含正在生成的。 */
+  /** 各段的文字（正文、调用参数）连起来，用来判断库里的回复是否已包含正在生成的。 */
   def textOf(ps: Iterable[PartView]): String =
     ps.map {
       case PartView.Text(t)     => t
-      case PartView.Thinking(t) => t
       case PartView.Call(c)     => c.args
     }.mkString
 
   private def grow(p: PartView, g: Growth, t: String): PartView = (p, g) match
     case (PartView.Call(c), Growth.ToolArgs) => PartView.Call(c.copy(args = c.args + t))
     case (PartView.Text(x), _)               => PartView.Text(x + t)
-    case (PartView.Thinking(x), _)           => PartView.Thinking(x + t)
     case (other, _)                          => other
 
   /** 应用一条实时事件（纯函数）。 */

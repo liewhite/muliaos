@@ -37,7 +37,6 @@ object Timeline:
   /** 一段回复。工具调用有记录时带上状态与结果；还没落库的（正在生成）是待执行。 */
   def part(p: ReplyPart, calls: Map[CallId, Call], display: Timeline.Shows): PartView = p match
     case ReplyPart.Text(t, _)     => PartView.Text(t)
-    case ReplyPart.Thinking(t, _) => PartView.Thinking(t)
     case ReplyPart.ToolCall(id, name, args, _) =>
       val cid = CallId.wrap(id)
       PartView.Call(calls.get(cid).map(call(_, display)).getOrElse(CallView(cid, name, args, display(name, args), CallState.Pending, None, None, None, None)))

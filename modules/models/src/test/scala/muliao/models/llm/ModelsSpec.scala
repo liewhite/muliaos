@@ -57,18 +57,6 @@ object ModelsSpec extends ZIOSpecDefault:
             folded(events) == r.parts
           )
       },
-      test("Anthropic：思考带签名，正文在后") {
-        for events <- decode(AnthropicWire, fixture("anthropic-thinking.sse"))
-        yield
-          val r = finished(events)
-          val thinking = r.parts.collectFirst { case t: ReplyPart.Thinking => t }.get
-          assertTrue(
-            thinking.text.nonEmpty,
-            thinking.seal.exists(s => s.protocol == Protocol.Anthropic && s.data.at("signature").str.exists(_.nonEmpty)),
-            r.parts.last.isInstanceOf[ReplyPart.Text],
-            folded(events) == r.parts
-          )
-      },
       test("OpenAI Responses：工具调用带输出项编号") {
         for events <- decode(OpenAiResponsesWire, fixture("openai-tool-call.sse"))
         yield
@@ -83,16 +71,23 @@ object ModelsSpec extends ZIOSpecDefault:
             folded(events) == r.parts
           )
       },
-      test("OpenAI Responses：推理摘要与加密推理，正文带编号") {
+      test("OpenAI Responses：推理项丢掉，只留带编号的正文") {
         for events <- decode(OpenAiResponsesWire, fixture("openai-reasoning.sse"))
         yield
-          val r        = finished(events)
-          val thinking = r.parts.collectFirst { case t: ReplyPart.Thinking => t }.get
-          val text     = r.parts.collectFirst { case t: ReplyPart.Text => t }.get
+          val r = finished(events)
           assertTrue(
-            thinking.text.nonEmpty,
-            thinking.seal.exists(_.data.at("encrypted_content").str.exists(_.nonEmpty)),
-            text.seal.flatMap(_.data.at("id").str).exists(_.nonEmpty),
+            r.parts.size == 1,
+            r.parts.collectFirst { case t: ReplyPart.Text => t }.exists(_.seal.flatMap(_.data.at("id").str).exists(_.nonEmpty)),
+            folded(events) == r.parts
+          )
+      },
+      test("Anthropic：思考块及其增量、签名丢掉，只留正文") {
+        for events <- decode(AnthropicWire, fixture("anthropic-thinking.sse"))
+        yield
+          val r = finished(events)
+          assertTrue(
+            r.parts.nonEmpty,
+            r.parts.forall(_.isInstanceOf[ReplyPart.Text]),
             folded(events) == r.parts
           )
       },
@@ -133,19 +128,15 @@ object ModelsSpec extends ZIOSpecDefault:
       }
     ),
     suite("请求体")(
-      test("Anthropic：三个缓存断点，只回传本协议签过名的思考") {
-        val signed   = ReplyPart.Thinking("想过了", Some(Seal(Protocol.Anthropic, obj("signature" -> s("sig")))))
-        val unsigned = ReplyPart.Thinking("被打断的", None)
-        val foreign  = ReplyPart.Thinking("别家的", Some(Seal(Protocol.OpenAiResponses, obj("id" -> s("rs_1")))))
+      test("Anthropic：三个缓存断点，不提思考") {
         val req = ModelRequest(
           "说明",
           Chunk(tool, tool.copy(name = "b")),
           Chunk(
             Message.User(Chunk(UserPart.Text("hi"))),
-            Message.Assistant(Chunk(signed, unsigned, foreign, ReplyPart.ToolCall("c1", "get_weather", "not json"))),
+            Message.Assistant(Chunk(ReplyPart.Text("查一下"), ReplyPart.ToolCall("c1", "get_weather", "not json"))),
             Message.User(Chunk(UserPart.ToolResult("c1", Chunk(ToolContent.Text("晴")), isError = false), UserPart.Text("")))
-          ),
-          Thinking.High
+          )
         )
         val body = AnthropicWire.body("m", req, None)
         val json = body.toJson
@@ -155,40 +146,32 @@ object ModelsSpec extends ZIOSpecDefault:
           body.at("tools").arr.last.at("cache_control") != Json.Null,
           body.at("messages").arr.last.at("content").arr.last.at("cache_control") != Json.Null,
           assistant.size == 2,
-          assistant(0).at("signature").str.contains("sig"),
           assistant(1).at("input") == Json.Obj(),
-          body.at("output_config").at("effort").str.contains("high"),
-          body.at("max_tokens").long.contains(AnthropicWire.DefaultMaxTokens.toLong),
-          !json.contains("被打断的"),
-          !json.contains("别家的")
+          body.at("thinking") == Json.Null,
+          body.at("max_tokens").long.contains(AnthropicWire.DefaultMaxTokens.toLong)
         )
       },
-      test("OpenAI：工具结果在前、回传推理与编号、别家思考不发、关思考不要加密推理、带缓存键") {
-        val reasoning = ReplyPart.Thinking("摘要", Some(Seal(Protocol.OpenAiResponses, obj("id" -> s("rs_1"), "encrypted_content" -> s("enc")))))
-        val foreign   = ReplyPart.Thinking("别家的", Some(Seal(Protocol.Anthropic, obj("signature" -> s("sig")))))
+      test("OpenAI：工具结果在前、回传编号、不提推理、带缓存键") {
         val call      = ReplyPart.ToolCall("call_1", "get_weather", "{}", Some(Seal(Protocol.OpenAiResponses, obj("id" -> s("fc_1")))))
         val req = ModelRequest(
           "说明",
           Chunk(tool),
           Chunk(
-            Message.Assistant(Chunk(reasoning, foreign, call)),
+            Message.Assistant(Chunk(call)),
             Message.User(Chunk(UserPart.Text("继续"), UserPart.ToolResult("call_1", Chunk(ToolContent.Text("晴")), isError = false)))
           ),
-          Thinking.Off,
           cacheKey = Some("sess-1")
         )
         val body  = OpenAiResponsesWire.body("m", req, Some(100))
         val input = body.at("input").arr
         assertTrue(
-          input.map(i => i.at("type").str.getOrElse("role:" + i.at("role").strOr())) == Chunk("reasoning", "function_call", "function_call_output", "role:user"),
-          input(0).at("encrypted_content").str.contains("enc"),
-          input(1).at("id").str.contains("fc_1"),
-          body.at("reasoning").at("effort").str.contains("none"),
+          input.map(i => i.at("type").str.getOrElse("role:" + i.at("role").strOr())) == Chunk("function_call", "function_call_output", "role:user"),
+          input(0).at("id").str.contains("fc_1"),
+          body.at("reasoning") == Json.Null,
           body.at("include") == Json.Null,
           body.at("max_output_tokens").long.contains(100L),
           body.at("prompt_cache_key").str.contains("sess-1"),
-          OpenAiResponsesWire.body("m", req.copy(cacheKey = None), None).at("prompt_cache_key") == Json.Null,
-          !body.toJson.contains("别家的")
+          OpenAiResponsesWire.body("m", req.copy(cacheKey = None), None).at("prompt_cache_key") == Json.Null
         )
       }
     ),

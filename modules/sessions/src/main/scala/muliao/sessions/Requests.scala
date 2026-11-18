@@ -18,7 +18,6 @@ private[sessions] final case class Kit(
     info: SessionInfo,
     res: RunResources,
     model: ModelRef,
-    thinking: Thinking,
     system: String,
     tools: Map[String, Tool[RunContext, Pause]],
     defs: Chunk[ToolDef],
@@ -63,7 +62,6 @@ private[sessions] final case class Requests(
       info = i,
       res = r,
       model = model,
-      thinking = r.profile.thinking,
       system = Prompt.system(r, i.origin, ws),
       tools = all.map(t => t.spec.name -> t).toMap,
       defs = Chunk.fromIterable(all.map(t => ToolDef(t.spec.name, t.spec.description, t.spec.inputSchema))),
@@ -91,7 +89,7 @@ private[sessions] final case class Requests(
 
   /** 组装这一次请求：固定说明 + 工具 + 最近压缩点之后的时间线。 */
   def buildRequest(kit: Kit): IO[AppError, ModelRequest] =
-    window(kit.info.id).map(w => ModelRequest(kit.system, kit.defs, w.messages, kit.thinking, cacheKey = Some(kit.info.id.value)))
+    window(kit.info.id).map(w => ModelRequest(kit.system, kit.defs, w.messages, cacheKey = Some(kit.info.id.value)))
 
   /** 最近压缩点之后的时间线、其中的调用与用到的附件。 */
   def window(id: SessionId): IO[AppError, Window] =

@@ -45,7 +45,6 @@ object Reading:
                   ReadItem(s"${if r.isError then "error" else "result"} ${c.name}", None, c.finishedAt.getOrElse(t.finishedAt), r.text + images, clippable = true)
                 }
                 call :: result.toList
-              case PartView.Thinking(_) => Nil // 思考不读出
           } ++ cut
     }
 

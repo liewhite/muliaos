@@ -1,6 +1,6 @@
 package muliao.resources
 
-import muliao.contract.{AgentState, Thinking, SkillName}
+import muliao.contract.{AgentState, SkillName}
 import muliao.contract.{AgentId, RoleName}
 import muliao.platform.AppError
 import muliao.resources.agents.*
@@ -28,7 +28,7 @@ object AgentsSpec extends ZIOSpecDefault:
     test("新建：库里一行、资源目录（agent.toml、记忆）、工作目录、access.toml 里的角色与规则") {
       for
         dirs  <- ZIO.service[TestEnv.Dirs]
-        a     <- agents.flatMap(_.create(NewAgent("小助手", "帮忙", Some("deepseek:v4"), Thinking.High, Some("日常"), List(RoleName.wrap("admin")), List("write:path:/opt/x"))))
+        a     <- agents.flatMap(_.create(NewAgent("小助手", "帮忙", Some("deepseek:v4"), Some("日常"), List(RoleName.wrap("admin")), List("write:path:/opt/x"))))
         prof  <- agents.flatMap(_.profile(a.id))
         store <- ZIO.service[AssetStore]
         acc   <- store.access
@@ -36,7 +36,6 @@ object AgentsSpec extends ZIOSpecDefault:
       yield assertTrue(
         a.id.value.matches("[0-9a-f]{12}"),
         prof.model == "deepseek:v4",
-        prof.thinking == Thinking.High,
         prof.group.contains("日常"),
         Files.isRegularFile(dirs.assets.resolve("小助手/memory.md")),
         Files.isDirectory(dirs.workspaces.resolve(a.id.value)),
@@ -179,7 +178,7 @@ object AgentsSpec extends ZIOSpecDefault:
         a <- create("alice")
         _ <- agents.flatMap(_.update(a.id, AgentPatch(description = Some("新职责"), group = Some(Some("g")))))
         p <- agents.flatMap(_.profile(a.id))
-        _ <- agents.flatMap(_.update(a.id, AgentPatch(group = Some(None), thinking = Some(Thinking.Off))))
+        _ <- agents.flatMap(_.update(a.id, AgentPatch(group = Some(None))))
         q <- agents.flatMap(_.profile(a.id))
         e <- agents.flatMap(_.update(a.id, AgentPatch(description = Some("  ")))).either
       yield assertTrue(
@@ -187,7 +186,6 @@ object AgentsSpec extends ZIOSpecDefault:
         p.group.contains("g"),
         p.model == TestEnv.models.defaultModel,
         q.group.isEmpty,
-        q.thinking == Thinking.Off,
         q.description == "新职责",
         e.isLeft
       )

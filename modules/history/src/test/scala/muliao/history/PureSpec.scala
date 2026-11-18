@@ -71,7 +71,7 @@ object PureSpec extends ZIOSpecDefault:
       val tl = List(
         TimelineItem(1, Some(1), at(9, 0), at(9, 0), EntryView.Context("当前时间 ...")),
         TimelineItem(2, Some(1), at(9, 0), at(9, 0), EntryView.Letter(SourceView.User, "帮我看看目录" * 300, Nil, checkIn = false)),
-        TimelineItem(3, Some(1), at(9, 1), at(9, 1), EntryView.Reply(List(PartView.Thinking("想一想"), PartView.Text("好的"), PartView.Call(call), PartView.Call(bad)), "m", UsageView(0, 0, 0, 0), interrupted = false)),
+        TimelineItem(3, Some(1), at(9, 1), at(9, 1), EntryView.Reply(List(PartView.Text("好的"), PartView.Call(call), PartView.Call(bad)), "m", UsageView(0, 0, 0, 0), interrupted = false)),
         TimelineItem(4, Some(2), at(10, 0), at(10, 0), EntryView.Letter(SourceView.Trigger(TriggerName.wrap("daily")), "每日检查", Nil, checkIn = false)),
         TimelineItem(5, Some(2), at(10, 1), at(10, 1), EntryView.Notice(NoticeKind.Failed, "模型不可用"))
       )
@@ -80,7 +80,6 @@ object PureSpec extends ZIOSpecDefault:
       val r = scala.util.matching.Regex("(?i)RUN_SHELL")
       assertTrue(
         xs.map(_.label) == List("CONTEXT", "USER", "ASSISTANT", "call run_shell", "result run_shell", "call read_file", "error read_file", "TRIGGER", "NOTICE Failed"),
-        !xs.exists(_.text.contains("想一想")),
         xs.find(_.label == "error read_file").exists(_.text.endsWith("[图片 1 张]")),
         pick(ReadFilter(labels = List("call"))) == List("call run_shell", "call read_file"),
         pick(ReadFilter(labels = List("USER", "NOTICE"))) == List("USER", "NOTICE Failed"),

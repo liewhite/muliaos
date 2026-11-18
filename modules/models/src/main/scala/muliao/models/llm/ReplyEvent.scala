@@ -35,6 +35,5 @@ object ReplyBuilder:
 
   private def grow(p: ReplyPart, g: Growth, t: String): Either[String, ReplyPart] = (p, g) match
     case (x: ReplyPart.Text, Growth.Text)         => Right(x.copy(text = x.text + t))
-    case (x: ReplyPart.Thinking, Growth.Thinking) => Right(x.copy(text = x.text + t))
     case (x: ReplyPart.ToolCall, Growth.ToolArgs) => Right(x.copy(args = x.args + t))
     case _                                        => Left(s"${g} 增量对不上段的种类 ${p.getClass.getSimpleName}")

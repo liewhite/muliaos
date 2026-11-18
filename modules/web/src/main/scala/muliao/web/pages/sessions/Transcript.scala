@@ -156,9 +156,9 @@ final class TranscriptView:
       span(cls := "ml-auto shrink-0 text-xs text-muted", Ui.formatTime(t.updatedAt))
     )
 
-  /** 连续的思考与工具调用收成一组，默认折叠；标题汇总步骤数与状态。交给用户的文件、开出的 thread 是成果，显示在组下方。 */
+  /** 连续的工具调用收成一组，默认折叠；标题汇总步骤数与状态。交给用户的文件、开出的 thread 是成果，显示在组下方。 */
   private def process(key: String, steps: List[Step], live: Boolean, ctx: TranscriptCtx): HtmlElement =
-    val calls         = steps.collect { case Step.Tool(c, _) => c }
+    val calls         = steps.map(_.call)
     val (running, st) = stepsStatus(steps, live, ctx.runActive)
     val isRunning     = (x: CallView) => toolStatus(x, live, ctx.runActive) == ToolStatus.Running
     div(
@@ -177,10 +177,7 @@ final class TranscriptView:
       )(
         div(
           cls := "flex flex-col gap-2",
-          steps.zipWithIndex.map {
-            case (Step.Tool(c, _), _)    => toolBlock(c, live, ctx)
-            case (Step.Thinking(t), i) => collapsible(s"$key:think:$i", "思考", extra = "self-stretch")(div(cls := "whitespace-pre-wrap", t))
-          }
+          calls.map(toolBlock(_, live, ctx))
         )
       ),
       Attachments.list(calls.flatMap(sharedFile)),
@@ -357,8 +354,7 @@ final class TranscriptView:
     val seen = mutable.Map.empty[String, Int]
     raw.map { b =>
       val base = b match
-        case Block.Process(Step.Tool(c, _) :: _) => s"p:${c.id}"
-        case Block.Process(Step.Thinking(t) :: _) => s"pt:${t.take(40).hashCode}"
+        case Block.Process(Step(c, _) :: _)      => s"p:${c.id}"
         case Block.Ask(c, _)                     => s"ask:${c.id}"
         case Block.Approval(c, _)                => s"appr:${c.id}"
         case Block.Letter(_, _, _, at)           => s"l:$at"

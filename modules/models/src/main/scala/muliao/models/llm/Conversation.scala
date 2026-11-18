@@ -1,7 +1,6 @@
 package muliao.models.llm
 
 import muliao.contract.{Labeled, Labels}
-export muliao.contract.Thinking
 import muliao.toolkit.ToolContent
 import zio.Chunk
 import zio.json.*
@@ -29,19 +28,15 @@ enum UserPart:
   /** 一次工具调用的结果。`content` 里的图片同样会被整理。 */
   case ToolResult(callId: String, content: Chunk[ToolContent], isError: Boolean)
 
-/** 协议给的、回传时要原样带上的数据（签名、加密推理、输出项编号等）。
+/** 协议给的、回传时要原样带上的数据（输出项编号、`phase` 等）。
   *
-  * 只有协议给出完整一项时才有：生成到一半被打断的段没有它。回传时只发与目标协议相同的，所以「被打断的思考」与「别家协议的思考」
-  * 都不会发回模型——这条规则由这个类型表达，而不是在各处判断。
+  * 只有协议给出完整一项时才有：生成到一半被打断的段没有它。回传时只用与目标协议相同的。
   */
 final case class Seal(protocol: Protocol, data: Json) derives JsonCodec
 
-/** 模型回复的一段。 */
+/** 模型回复的一段。平台不请求思考，模型自己回的推理内容由各协议在读流时丢掉，所以没有思考这一种。 */
 enum ReplyPart derives JsonCodec:
   case Text(text: String, seal: Option[Seal] = None)
-
-  /** 思考内容（给人看的摘要；没有摘要的开源推理模型是原始推理文字）。 */
-  case Thinking(text: String, seal: Option[Seal] = None)
 
   /** 工具调用；`args` 是模型生成的参数原文（应是 JSON 对象，生成坏了时由执行方按「请重试」处理）。 */
   case ToolCall(id: String, name: String, args: String, seal: Option[Seal] = None)
@@ -80,7 +75,6 @@ final case class ModelRequest(
     system: String,
     tools: Chunk[ToolDef],
     messages: Chunk[Message],
-    thinking: Thinking = Thinking.Default,
     maxTokens: Option[Int] = None,
     /** 前缀相同的一组请求的标识（如会话编号）：OpenAI Responses 据此把请求路由到同一份提示缓存；Anthropic 靠缓存断点，不用它 */
     cacheKey: Option[String] = None

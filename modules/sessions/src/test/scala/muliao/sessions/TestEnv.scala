@@ -289,7 +289,6 @@ object TestEnv:
     extension (p: PartView)
       def text: Option[String] = p match
         case PartView.Text(x)     => Some(x)
-        case PartView.Thinking(x) => Some(x)
         case PartView.Call(_)     => None
       def call: Option[CallView] = p match
         case PartView.Call(c) => Some(c)

@@ -57,7 +57,6 @@ final case class ResourcesHttp(
                 )
     yield AgentDetail(
       summary = summary(a, snap),
-      thinking = snap.profiles.get(a.name).map(_.thinking),
       roles = grants.roles,
       allow = grants.allow.map(_.text),
       deny = grants.deny.map(_.text),
@@ -82,7 +81,7 @@ final case class ResourcesHttp(
   private def createAgent(req: AgentCreate): IO[AppError, AgentDetail] =
     for
       a <- agents.create(
-             NewAgent(req.name, req.description, req.model, req.thinking.getOrElse(Thinking.Default), req.group, req.roles, req.allow, req.deny)
+             NewAgent(req.name, req.description, req.model, req.group, req.roles, req.allow, req.deny)
            )
       d <- detail(a.id)
     yield d
@@ -95,7 +94,6 @@ final case class ResourcesHttp(
                name = req.name,
                description = req.description,
                model = req.model,
-               thinking = req.thinking,
                group = req.group.map(g => Option(g.trim).filter(_.nonEmpty)),
                roles = req.roles,
                allow = req.allow,
@@ -301,7 +299,7 @@ final case class ResourcesHttp(
       ResourcesApi.updateAgent.secured((id, req) => updateAgent(id, req)),
       ResourcesApi.deleteAgent.secured(agents.delete),
       ResourcesApi.previewAgent.secured(preview),
-      ResourcesApi.agentDefaults.secured(_ => ZIO.succeed(AgentDefaults(models.defaultModel, Thinking.values.toList))),
+      ResourcesApi.agentDefaults.secured(_ => ZIO.succeed(AgentDefaults(models.defaultModel))),
       ResourcesApi.listRoles.secured(_ => listRoles),
       ResourcesApi.putRole.secured((n, r) => putRole(n, r)),
       ResourcesApi.deleteRole.secured(deleteRole),

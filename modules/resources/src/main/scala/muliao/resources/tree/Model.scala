@@ -1,6 +1,6 @@
 package muliao.resources.tree
 
-import muliao.contract.{AgentName, AssetKind, SkillName, Thinking}
+import muliao.contract.{AgentName, AssetKind, SkillName}
 import muliao.toolkit.McpTransport
 
 import java.nio.file.Path
@@ -22,7 +22,7 @@ object Owner:
   def ofLabel(label: String): Owner = if label == PlatformDir then Platform else Agent(AgentName.wrap(label))
 
 /** `agent.toml`：agent 的可编辑配置（名字、归档、权限不在这里）。 */
-final case class AgentProfile(description: String, model: String, thinking: Thinking, group: Option[String])
+final case class AgentProfile(description: String, model: String, group: Option[String])
 
 /** 没加载的文件和原因。`subject` 是能认出来的资源（种类、名字），用来判断告诉谁。 */
 final case class Problem(path: Path, reason: String, owner: Option[Owner], subject: Option[(AssetKind, String)])

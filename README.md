@@ -13,7 +13,7 @@ Everything is persisted step by step, so a restart never loses or repeats work.
 
 ## Features
 
-- **Many agents, one owner.** Create as many agents as you like, each with a role, a model, a thinking level and its own working directory. Only one human user; the design trades multi-tenancy for simplicity.
+- **Many agents, one owner.** Create as many agents as you like, each with a role, a model and its own working directory. Only one human user; the design trades multi-tenancy for simplicity.
 - **Real tools.** `run_shell` (foreground or background jobs), `read_file` / `write_file` / `edit_file`, skill scripts that can require your approval, web search and fetch, MCP servers, file sharing, push notifications, multiple-choice questions to you.
 - **Delegation.** Agents hand tasks to each other in named threads, either fire-and-forget or waiting for the answer.
 - **Issue board.** Issues with owners, assignees, priorities and dependency graphs. Each issue gets a dedicated session per agent; new activity is delivered there, finished work goes to you for review (approve / send back, also from the notification).
@@ -22,7 +22,7 @@ Everything is persisted step by step, so a restart never loses or repeats work.
 - **Roles and permissions.** Rules like `use:skill:deploy-*` or `write:path:~/projects/x` decide which tools, skills, MCP servers, secrets and memories each agent gets. Agent commands run in a macOS write sandbox limited to what they are allowed to write.
 - **Secrets vault.** Encrypted secrets injected as environment variables and masked in output. Secrets can also be locked with your passkey (decrypted in your browser only when you approve) or be signing keys that never leave the browser, e.g. for short-lived SSH certificates.
 - **Durable runs.** Every model reply and tool result is saved before moving on. After a crash or restart, sessions resume from the last step; interrupted tool calls are not re-executed blindly, the agent is told to verify first. Transient network failures are retried with backoff for up to ~30 minutes.
-- **Model providers.** Anthropic Messages and OpenAI Responses protocols (and compatible services), streaming, thinking levels, images, prompt-cache-friendly context, automatic context compaction, per-provider concurrency limits, token usage accounting.
+- **Model providers.** Anthropic Messages and OpenAI Responses protocols (and compatible services), streaming, images, prompt-cache-friendly context, automatic context compaction, per-provider concurrency limits, token usage accounting.
 - **Mobile.** Installable PWA with Web Push notifications, voice input (speech-to-text), and agent-built pages you can open inside the UI.
 - **Work history.** Append-only log of what each agent did, daily activity overviews, and a timeline reader agents can use to review past sessions.
 

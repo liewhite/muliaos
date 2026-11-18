@@ -82,10 +82,10 @@
 
 ## 模型接入与外部服务（models 模块）
 - **配置**：`[models]` 必填：`default_model = "<服务商>:<模型名>"`，`[models.providers.<名字>]` 写 `protocol`（`anthropic` / `openai-responses`）、`base_url`（Anthropic 不带 `/v1`，OpenAI 带）、`api_key`、`max_concurrency`（默认 4）、`max_output_tokens`（可选）；`idle_timeout_seconds`（默认 180）是回复流多久没数据算断。`[web]`（`api_key`、`base_url`）与 `[transcription]`（`api_key`、`model`、`base_url`、`max_bytes`、`vocabulary`、`language_hints`）可选。
-- **请求模型**：`Models.request(ModelRef, ModelRequest)` 得到 `ZStream[ReplyEvent]`，最后一个是 `Finished(reply)`；用 `ReplyBuilder` 折叠事件得到到目前为止的各段（被打断时保存已生成的部分）。不重试：`AppError.Unavailable` 由调用方退避重试整步。回复各段的 `Seal` 是协议要回传的数据，只在收完的段上有，回传时只发同协议的：被打断的、别家协议的思考自然不发回。
+- **请求模型**：`Models.request(ModelRef, ModelRequest)` 得到 `ZStream[ReplyEvent]`，最后一个是 `Finished(reply)`；用 `ReplyBuilder` 折叠事件得到到目前为止的各段（被打断时保存已生成的部分）。不重试：`AppError.Unavailable` 由调用方退避重试整步。回复各段的 `Seal` 是协议要回传的数据，只在收完的段上有，回传时只发同协议的。不用思考：请求不带思考设置（新模型如 opus-5-5 关不掉思考，发 `disabled` 会被拒），两种协议回来的思考/推理块都在读流时丢掉，所以 `ReplyPart` 只有正文和工具调用两种。
 - **图片**：发给模型前在 `Models.request` 里统一整理（长图切段、超限缩小、坏图换成说明、超过张数上限的较早图片换成说明），会话历史存原件。
 - **MCP**：`McpConnector.connectAll(servers, secrets, launch)` 在调用方的 scope 里连接，得到工具（`<server>_<工具名>`）与没连上的原因；`SecretLookup` 由资源领域按使用者权限实现，`Launch` 给出 stdio server 的工作目录与写沙箱。
-- **测试**：协议读流用真实服务商录下的响应（`modules/models/src/test/resources/fixtures/`，录制脚本 `record_fixtures.py` 在同一目录，密钥从本机配置读、不打印）。对真实服务商各跑一次：`sbt "models/Test/runMain muliao.models.LiveCheck <配置文件> claude:<模型>@high,openai:<模型> <录音> audio/mp4"`（两轮工具调用验证回传思考、模型列表、网页搜索与抓取、语音转写）。
+- **测试**：协议读流用真实服务商录下的响应（`modules/models/src/test/resources/fixtures/`，录制脚本 `record_fixtures.py` 在同一目录，密钥从本机配置读、不打印）。对真实服务商各跑一次：`sbt "models/Test/runMain muliao.models.LiveCheck <配置文件> claude:<模型>,openai:<模型> <录音> audio/mp4"`（两轮工具调用验证回传、模型列表、网页搜索与抓取、语音转写）。
 
 ## 资源、agent 与权限（resources，#866）
 - 资源目录的文件格式与布局与现有 `~/.muliao/assets` 兼容（agent 目录名就是 agent 名；`platform/access.toml` 里 `[agents.<编号>]`；secret 是 Fernet 密文，主密钥在配置 `[vault] key`）。SKILL.md 的 frontmatter 用 snakeyaml-engine 解析。
@@ -137,7 +137,7 @@
 - **只追加**：表 `history_entry` 上的触发器拒绝 UPDATE / DELETE（库级），程序里也没有改、删的入口。一批在一个事务里写，任一条不合法（`NewEntry.make`：标题、摘要不空，日期不在今天之后；重要程度 1–3）整批不记。
 - **检索**：不用 FTS（中文分词、trigram 对两个字的词无效）；SQL 先按 agent、日期、重要程度和最长的那个词（`instr`）筛，再由纯函数 `Search.rank` 要求每个词都出现、按相关度（标题与引用里出现的权重 3、摘要里 1，乘出现次数）排，同分按重要程度、日期。没有关键字时按日期倒序直接在 SQL 里取。
 - **活动回顾**：按配置时区把一天换成 [from, to)，从会话领域 `Sessions.activity`（有来信/回复或运行的会话、来源为用户的来信、最终失败的运行）、看板 `Board.activity`（该 agent 做的，加用户在它当前负责或被指派的 issue 上做的；不给 agent 是用户与全部 agent 的；平台记的不算）和本领域当天的历史取数，文字由纯函数 `OverviewText` 写，按行分页（`Pages`，每次约 4 万字符，最后一行说明 offset）。
-- **读会话**：`Sessions.find` 按编号或唯一前缀找会话，`Sessions.timeline` 的投影经纯函数 `Reading.items` 变成带标签的条目（USER/TRIGGER/ISSUE/DELEGATION/EVENT、ASSISTANT、`call <工具>`、`result <工具>`、`error <工具>`、CONTEXT、COMPACTION、`NOTICE <种类>`；思考不读出），`ReadFilter` 按标签、正则（不分大小写）、时刻筛选，用户与回答正文不截、其余按 clip 截，按条分页。
+- **读会话**：`Sessions.find` 按编号或唯一前缀找会话，`Sessions.timeline` 的投影经纯函数 `Reading.items` 变成带标签的条目（USER/TRIGGER/ISSUE/DELEGATION/EVENT、ASSISTANT、`call <工具>`、`result <工具>`、`error <工具>`、CONTEXT、COMPACTION、`NOTICE <种类>`），`ReadFilter` 按标签、正则（不分大小写）、时刻筛选，用户与回答正文不截、其余按 clip 截，按条分页。
 - **测试**：`PureSpec`（相关度、记录校验、分页、读会话的条目与筛选、回顾的写法）、`HistorySpec`（真库、真会话/看板/通知领域、假模型：四个工具经模型调用、整批拒绝、库级拒绝改删、按天汇总单个与全部 agent 及别的日子、前缀与筛选与续读、HTTP）。
 
 ## 触发器领域的接法（#872，给组装入口与迁移）

@@ -11,8 +11,8 @@ import java.util.Base64
 /** Anthropic Messages 协议（https://docs.anthropic.com/en/api/messages）。
   *
   *   - 三个缓存断点：固定说明、工具定义（最后一个工具）、消息末尾（最后一块），让每次原样重发的前缀命中提示缓存（5 分钟档）；
-  *   - 思考档位：`adaptive` 并 `display: summarized` 要回摘要，力度放 `output_config.effort`；
-  *   - 历史里的思考块只发本协议签过名的（带签名或 redacted 数据，见 [[Seal]]）：Anthropic 拒收没签名的思考块。
+  *   - 不提思考：不发 `thinking`，各模型按自己的默认（老模型不想；新模型如 opus-5-5 关不掉，发 `disabled` 会被拒）；
+  *     回来的思考块读流时丢掉，不存也不回传（实测服务端接受工具循环里不带思考块的回传）。
   */
 object AnthropicWire extends Wire:
   val protocol: Protocol = Protocol.Anthropic
@@ -49,20 +49,13 @@ object AnthropicWire extends Wire:
       case None                 => messages
     val tools = req.tools.map(t => obj("name" -> s(t.name), "description" -> s(t.description), "input_schema" -> t.inputSchema))
     val toolsCached = tools.lastOption.fold(tools)(last => tools.dropRight(1) :+ last.withField("cache_control", cache))
-    val summarized  = obj("type" -> s("adaptive"), "display" -> s("summarized"))
-    val (thinking, effort) = req.thinking match
-      case Thinking.Default => (summarized, None)
-      case Thinking.Off     => (obj("type" -> s("disabled")), None)
-      case other            => (summarized, Some(obj("effort" -> s(other.label))))
     objOpt(
       "model"         -> Some(s(model)),
       "max_tokens"    -> Some(n(maxTokens.getOrElse(DefaultMaxTokens).toLong)),
       "stream"        -> Some(b(true)),
       "system"        -> Option.when(req.system.nonEmpty)(arr(List(obj("type" -> s("text"), "text" -> s(req.system), "cache_control" -> cache)))),
       "tools"         -> Option.when(toolsCached.nonEmpty)(arr(toolsCached)),
-      "messages"      -> Some(arr(withLastCached.map((role, blocks) => obj("role" -> s(role), "content" -> arr(blocks))))),
-      "thinking"      -> Some(thinking),
-      "output_config" -> effort
+      "messages"      -> Some(arr(withLastCached.map((role, blocks) => obj("role" -> s(role), "content" -> arr(blocks)))))
     )
 
   /** 相邻同一方的消息并成一条（跳过空消息后可能出现）。 */
@@ -95,12 +88,6 @@ object AnthropicWire extends Wire:
 
   private def assistantBlocks(parts: Chunk[ReplyPart]): Chunk[Json] = parts.flatMap {
     case ReplyPart.Text(t, _) => Chunk.fromIterable(text(t))
-    case ReplyPart.Thinking(t, Some(Seal(Protocol.Anthropic, data))) =>
-      Chunk.fromIterable(
-        data.at("signature").str.map(sig => obj("type" -> s("thinking"), "thinking" -> s(t), "signature" -> s(sig)))
-          .orElse(data.at("redacted").str.map(r => obj("type" -> s("redacted_thinking"), "data" -> s(r))))
-      )
-    case _: ReplyPart.Thinking => Chunk.empty // 被打断的、别家协议的思考不发
     case ReplyPart.ToolCall(id, name, args, _) =>
       // 参数不是 JSON 对象（模型生成坏了，执行时已按「请重试」处理）时发空对象：Anthropic 只收对象
       val input = parse(args).toOption.collect { case o: Json.Obj => o }.getOrElse(Json.Obj())
@@ -111,8 +98,8 @@ object AnthropicWire extends Wire:
 
   final case class State(
       emitted: Emitted,
-      /** Anthropic 的块序号 → 我们的段序号 */
-      index: Map[Long, Int],
+      /** Anthropic 的块序号 → 我们的段序号；丢掉的思考块是 None */
+      index: Map[Long, Option[Int]],
       model: String,
       id: Option[String],
       usage: Map[String, Long],
@@ -129,9 +116,6 @@ object AnthropicWire extends Wire:
     case Json.Obj(fs) => fs.collect { case (k, Json.Num(v)) => k -> v.longValue }.toMap
     case _            => Map.empty
 
-  private def signature(sig: String): Option[Seal] =
-    Option.when(sig.nonEmpty)(Seal(Protocol.Anthropic, obj("signature" -> s(sig))))
-
   def step(st: State, e: SseEvent): Either[AppError, (State, Chunk[ReplyEvent])] =
     val fresh = st.copy(emitted = st.emitted.copy(events = Chunk.empty))
     parse(e.data).left.map(why => Wire.outOfProtocol(s"事件不是 JSON（$why）")).flatMap { v =>
@@ -141,35 +125,29 @@ object AnthropicWire extends Wire:
           ok(fresh.copy(model = m.at("model").strOr(), id = m.at("id").str, usage = usageOf(m.at("usage"))))
         case "content_block_start" =>
           val block = v.at("content_block")
-          val part: Either[AppError, ReplyPart] = block.at("type").strOr() match
-            case "text"              => Right(ReplyPart.Text(block.at("text").strOr()))
-            case "thinking"          => Right(ReplyPart.Thinking(block.at("thinking").strOr(), signature(block.at("signature").strOr())))
-            case "redacted_thinking" => Right(ReplyPart.Thinking("", Some(Seal(Protocol.Anthropic, obj("redacted" -> block.at("data"))))))
-            case "tool_use"          => Right(ReplyPart.ToolCall(block.at("id").strOr(), block.at("name").strOr(), ""))
-            case other               => Left(Wire.outOfProtocol(s"不支持的内容块类型 $other"))
+          val at    = v.at("index").long.getOrElse(0L)
+          val part: Either[AppError, Option[ReplyPart]] = block.at("type").strOr() match
+            case "text"                           => Right(Some(ReplyPart.Text(block.at("text").strOr())))
+            case "tool_use"                       => Right(Some(ReplyPart.ToolCall(block.at("id").strOr(), block.at("name").strOr(), "")))
+            case "thinking" | "redacted_thinking" => Right(None)
+            case other                            => Left(Wire.outOfProtocol(s"不支持的内容块类型 $other"))
           val ours = fresh.emitted.parts.size
-          part.flatMap(p => fresh.emitted.emit(ReplyEvent.Started(ours, p)))
-            .map(em => fresh.copy(emitted = em, index = fresh.index + (v.at("index").long.getOrElse(0L) -> ours)))
-            .map(done)
+          part.flatMap {
+            case Some(p) => fresh.emitted.emit(ReplyEvent.Started(ours, p)).map(em => done(fresh.copy(emitted = em, index = fresh.index + (at -> Some(ours)))))
+            case None    => ok(fresh.copy(index = fresh.index + (at -> None)))
+          }
         case "content_block_delta" =>
           val at = v.at("index").long.getOrElse(0L)
-          fresh.index.get(at).toRight(Wire.outOfProtocol(s"第 $at 块没开始就有增量")).flatMap { ours =>
-            val d = v.at("delta")
-            def grow(g: Growth, t: String) =
-              if t.isEmpty then ok(fresh) else fresh.emitted.emit(ReplyEvent.Grew(ours, g, t)).map(em => done(fresh.copy(emitted = em)))
-            d.at("type").strOr() match
-              case "text_delta"       => grow(Growth.Text, d.at("text").strOr())
-              case "thinking_delta"   => grow(Growth.Thinking, d.at("thinking").strOr())
-              case "input_json_delta" => grow(Growth.ToolArgs, d.at("partial_json").strOr())
-              case "signature_delta" =>
-                fresh.emitted.parts(ours) match
-                  case t: ReplyPart.Thinking =>
-                    // 签名可能分几段到，接在已有的后面
-                    val before = t.seal.flatMap(_.data.at("signature").str).getOrElse("")
-                    val part   = t.copy(seal = signature(before + d.at("signature").strOr()))
-                    fresh.emitted.emit(ReplyEvent.Replaced(ours, part)).map(em => done(fresh.copy(emitted = em)))
-                  case other => Left(Wire.outOfProtocol(s"签名增量指向非思考块 ${other.getClass.getSimpleName}"))
-              case _ => ok(fresh) // 引用等用不到的增量
+          fresh.index.get(at).toRight(Wire.outOfProtocol(s"第 $at 块没开始就有增量")).flatMap {
+            case None => ok(fresh) // 丢掉的思考块
+            case Some(ours) =>
+              val d = v.at("delta")
+              def grow(g: Growth, t: String) =
+                if t.isEmpty then ok(fresh) else fresh.emitted.emit(ReplyEvent.Grew(ours, g, t)).map(em => done(fresh.copy(emitted = em)))
+              d.at("type").strOr() match
+                case "text_delta"       => grow(Growth.Text, d.at("text").strOr())
+                case "input_json_delta" => grow(Growth.ToolArgs, d.at("partial_json").strOr())
+                case _                  => ok(fresh) // 引用等用不到的增量
           }
         case "message_delta" =>
           // message_delta 的用量是到此为止的累计，覆盖 message_start 里的同名字段

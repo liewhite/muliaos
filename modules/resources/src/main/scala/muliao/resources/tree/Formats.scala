@@ -1,6 +1,5 @@
 package muliao.resources.tree
 
-import muliao.contract.Thinking
 import muliao.toolkit.McpTransport
 import zio.Chunk
 import org.snakeyaml.engine.v2.api.{Load, LoadSettings}
@@ -14,28 +13,23 @@ object Formats:
 
   // ---- agent.toml ----
 
-  private val agentKeys = Set("description", "model", "thinking", "group")
+  private val agentKeys = Set("description", "model", "group")
 
   def parseAgent(text: String): Either[String, AgentProfile] =
     for
-      t        <- TomlFile.parse(text).map(TomlFile.fields)
-      _        <- t.only(agentKeys)
-      desc     <- t.requiredString("description")
-      _        <- Either.cond(desc.trim.nonEmpty, (), "description 不能为空")
-      model    <- t.requiredString("model")
-      _        <- Either.cond(model.trim.nonEmpty, (), "model 不能为空")
-      thinkingS <- t.string("thinking")
-      thinking <- thinkingS.fold(Right(Thinking.Default))(s =>
-                    Thinking.parse(s)
-                  )
+      t     <- TomlFile.parse(text).map(TomlFile.fields)
+      _     <- t.only(agentKeys)
+      desc  <- t.requiredString("description")
+      _     <- Either.cond(desc.trim.nonEmpty, (), "description 不能为空")
+      model <- t.requiredString("model")
+      _     <- Either.cond(model.trim.nonEmpty, (), "model 不能为空")
       group <- t.string("group")
-    yield AgentProfile(desc, model, thinking, group.filter(_.nonEmpty))
+    yield AgentProfile(desc, model, group.filter(_.nonEmpty))
 
   def renderAgent(p: AgentProfile): String =
     val lines = List(
       Some(s"description = ${TomlFile.str(p.description)}"),
       Some(s"model = ${TomlFile.str(p.model)}"),
-      Some(s"thinking = ${TomlFile.str(p.thinking.label)}"),
       p.group.map(g => s"group = ${TomlFile.str(g)}")
     )
     lines.flatten.mkString("", "\n", "\n")

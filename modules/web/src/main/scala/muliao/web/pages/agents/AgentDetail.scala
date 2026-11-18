@@ -153,7 +153,6 @@ object AgentDetail:
     )
 
   private def editForm(id: AgentId, d: Signal[AgentDetail]): HtmlElement =
-    val thinkings = Remote(ResourcesApi.agentDefaults)(()).map(_.map(_.thinking))
     Draft.form(d, AgentForm.of) { draft =>
       val act = new Action
       def save(): Unit =
@@ -165,7 +164,7 @@ object AgentDetail:
           .foreach(_ => ())
       div(
         cls := "flex flex-col gap-4",
-        Ui.loading(thinkings)(ts => child <-- ts.distinct.map(t => div(cls := "flex flex-col gap-4", AgentForm.fields(Some(id), draft.value, t)))),
+        AgentForm.fields(Some(id), draft.value),
         act.errorView(),
         div(
           cls := "flex flex-wrap gap-2",

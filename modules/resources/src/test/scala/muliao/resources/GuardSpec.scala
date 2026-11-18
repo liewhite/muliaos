@@ -150,7 +150,7 @@ object GuardSpec extends ZIOSpecDefault:
         a    <- guard(Actor.User, f, "description = \"x\"\nmodel = \"claude:y\"\nid = \"1\"\n").either
         b    <- guard(Actor.User, f, "description = \" \"\nmodel = \"claude:y\"\n").either
         c    <- guard(Actor.User, f, "description = \"x\"\nmodel = \"nope:y\"\n").either
-        d    <- guard(Actor.User, f, "description = \"x\"\nmodel = \"claude:y\"\nthinking = \"off\"\n").either
+        d    <- guard(Actor.User, f, "description = \"x\"\nmodel = \"claude:y\"\ngroup = \"g\"\n").either
       yield assertTrue(reason(a).contains("id"), reason(b).contains("description"), reason(c).contains("nope:y"), d.isRight)
     },
     test("access.toml：新规则至少匹配一项；只拦新出现的问题，原有的问题不挡路") {

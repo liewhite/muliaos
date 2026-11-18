@@ -77,7 +77,7 @@ muliao 只读一个 TOML 文件，路径在命令行给出（`muliao serve <文�
 | `max_concurrency` | `4` | 对这个服务商同时最多几个请求，全部 agent 共享，超出的排队 |
 | `max_output_tokens` | 无 | 回复最多多少 token。Anthropic 必须给：不配时发 128000，模型上限更小就配小一点；OpenAI 不配时用模型自己的默认 |
 
-走 `anthropic` 协议时 muliao 请求 adaptive thinking 并要回思考摘要（思考档位 `off` 时关闭），所以模型必须支持 adaptive thinking。
+muliao 不用模型的思考：请求里不带任何思考设置（各模型按自己的默认），模型回的思考、推理块直接丢掉（不存、不显示、不回传）。模型在工具调用之间写的文字照常保留。
 
 ## `[sessions]`
 
@@ -176,7 +176,6 @@ skill、MCP server、共享记忆的名字只用小写字母、数字和 `-`（�
 ```toml
 description = "Keeps an eye on this Mac: disk space, backups, long-running jobs."
 model = "claude:claude-sonnet-5-5"
-thinking = "default"     # default、off、low、medium、high、xhigh
 group = "infra"          # 可选
 ```
 

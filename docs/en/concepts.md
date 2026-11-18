@@ -11,7 +11,7 @@ An agent is a long-lived worker with:
 
 - a **name** (unique, case-insensitive, renameable; `user` and `platform` are reserved) and a permanent internal id,
 - a **description** of what it is responsible for (other agents read it to decide whom to delegate to),
-- a **model** (`<provider>:<model>`) and a **thinking level** (`default`, `off`, `low`, `medium`, `high`, `xhigh`),
+- a **model** (`<provider>:<model>`),
 - an optional **group** for the agent list, **roles** and extra allow/deny **rules** (see [Roles and permissions](#roles-and-permissions)),
 - a private **memory**, its own **skills**, MCP servers and secrets, and a **workspace** directory where its commands run.
 
