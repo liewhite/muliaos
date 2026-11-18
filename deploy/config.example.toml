@@ -28,7 +28,7 @@ cookie_secret = "CHANGE ME"              # at least 32 characters: openssl rand 
 key = "CHANGE ME"
 
 [models]
-default_model = "claude:claude-sonnet-4-5"   # "<provider>:<model>", provider = a name under [models.providers]
+default_model = "claude:claude-sonnet-5-5"   # "<provider>:<model>", provider = a name under [models.providers]
 
 [models.providers.claude]
 protocol = "anthropic"                   # "anthropic" (Messages API) or "openai-responses"
