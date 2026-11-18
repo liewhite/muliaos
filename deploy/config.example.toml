@@ -1,0 +1,54 @@
+# muliao configuration example. Copy to ~/.muliao-scala/config.toml, fill in the values marked CHANGE ME,
+# and keep the file private (chmod 600): it holds the login password, the vault key and model API keys.
+#
+# Unknown sections or keys stop the server at startup, so a typo is caught immediately.
+# Sections whose keys all have defaults may be omitted. Paths may start with "~/".
+# Full reference: docs/en/configuration.md (中文：docs/zh-CN/configuration.md)
+
+[general]
+data_dir = "~/.muliao-scala/data"        # database, agent workspaces, attachments
+assets_dir = "~/.muliao-scala/assets"    # memories, skills, MCP servers, secrets, agent configs, roles
+timezone = "Asia/Shanghai"               # used for daily stats and cron triggers
+
+[log]
+level = "INFO"
+file = "~/.muliao-scala/muliao.log"      # omit to log to stdout
+
+[server]
+host = "127.0.0.1"
+port = 1080                              # keep in sync with MULIAO_PORT if you change it (deploy scripts default to 1080)
+# public_url = "https://muliao.example.com"   # HTTPS address behind a reverse proxy; used in notification links
+password = "CHANGE ME"                   # web login password; changing it signs out every device
+cookie_secret = "CHANGE ME"              # at least 32 characters: openssl rand -hex 32
+
+[vault]
+# Fernet key that encrypts secrets (URL-safe base64 of 32 random bytes):
+#   python3 -c 'import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())'
+# Losing it means every stored secret has to be set again.
+key = "CHANGE ME"
+
+[models]
+default_model = "claude:claude-sonnet-4-5"   # "<provider>:<model>", provider = a name under [models.providers]
+
+[models.providers.claude]
+protocol = "anthropic"                   # "anthropic" (Messages API) or "openai-responses"
+base_url = "https://api.anthropic.com"   # Anthropic: without /v1
+api_key = "CHANGE ME"
+# max_concurrency = 4                    # concurrent requests shared by all agents
+
+# [models.providers.openai]
+# protocol = "openai-responses"
+# base_url = "https://api.openai.com/v1" # OpenAI: with /v1
+# api_key = "CHANGE ME"
+
+[push]
+vapid_subject = "mailto:you@example.com" # contact in Web Push (VAPID); key pair is generated on first start
+
+# Optional: web_search / web_fetch tools (DeepSeek search and fetch service). Omit the section to disable them.
+# [web]
+# api_key = "CHANGE ME"
+
+# Optional: voice input (Alibaba Cloud Bailian / DashScope speech recognition). Omit to hide the mic button.
+# [transcription]
+# api_key = "CHANGE ME"
+# model = "CHANGE ME"
