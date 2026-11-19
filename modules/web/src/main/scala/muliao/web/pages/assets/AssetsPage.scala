@@ -37,11 +37,14 @@ object AssetsPage:
           child.maybe <-- idx.map(i => Option.when(i.problems.nonEmpty)(problems(i.problems))),
           div(
             cls := "max-w-xs",
-            Fields.select[String](
+            AgentPicker[Option[String]](
               "归属",
-              owner.map(o => Some(o.getOrElse("all"))),
-              o => edits.emit((t, _) => (t, Option.when(o != "all")(o))),
-              agents.map(as => Opt("all", "全部") :: Opt(AssetUi.Platform, "平台") :: as.map(a => Opt(a.name.value, a.name.value)))
+              owner.map(Some(_)),
+              o => edits.emit((t, _) => (t, o)),
+              agents,
+              a => Some(a.name.value),
+              fixed = List(Opt(None, "全部"), Opt(Some(AssetUi.Platform), "平台")),
+              archived = AgentPicker.Archived.Listed
             )
           ),
           Tabs[AssetTab](

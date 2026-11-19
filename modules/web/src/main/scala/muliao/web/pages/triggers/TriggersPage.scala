@@ -326,13 +326,7 @@ object NewForm:
         Val(TriggerKind.values.toList.map(k => Opt(k, k.title, Some(k.summary))))
       ),
       Fields.text("名称", name, hint = Some("小写字母、数字和 -，如 daily-report"), mono = true),
-      Fields.select[AgentId](
-        "Agent",
-        agent.signal,
-        a => agent.set(Some(a)),
-        agents.combineWith(agent.signal).map((as, keep) => AgentsData.selectable(as, keep).map(a => Opt(a.id, a.name.value))),
-        placeholderText = "选择 agent"
-      ),
+      AgentPicker[AgentId]("Agent", agent.signal, a => agent.set(Some(a)), agents, _.id),
       child <-- config.signal.map(_.kind).distinct.map(_ => Editors.config(config)),
       Editors.precheck(precheck),
       Fields.area(

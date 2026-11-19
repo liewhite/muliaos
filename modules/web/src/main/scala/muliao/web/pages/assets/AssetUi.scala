@@ -26,17 +26,16 @@ object AssetUi:
 
   def ownerLabel(owner: String): String = if owner == Platform then "平台" else owner
 
-  /** 归属下拉：平台或某个 agent。`withArchived`：也列出归档的（转移时资源可能正归它们）。 */
+  /** 归属下拉：平台或某个 agent（值是 agent 名）。`withArchived`：也列出归档的（转移时资源可能正归它们）。 */
   def ownerSelect(value: Signal[String], onPick: String => Unit, agents: Signal[List[AgentSummary]], withArchived: Boolean = false): HtmlElement =
-    Fields.select[String](
+    AgentPicker[String](
       "归属（owner）",
       value.map(Some(_)),
       onPick,
-      agents.map(as =>
-        Opt(Platform, "平台") :: as
-          .filter(a => withArchived || !AgentsData.archived(a))
-          .map(a => Opt(a.name.value, if AgentsData.archived(a) then s"${a.name.value}（已归档）" else a.name.value))
-      ),
+      agents,
+      _.name.value,
+      fixed = List(Opt(Platform, "平台")),
+      archived = if withArchived then AgentPicker.Archived.Listed else AgentPicker.Archived.Hidden,
       hint = Some(child.text <-- value.map {
         case Platform => "归平台的资源要收录进某个角色（如 base）才有 agent 能用"
         case _        => "这个 agent 自己总能用；要给别的 agent，把它收录进角色"

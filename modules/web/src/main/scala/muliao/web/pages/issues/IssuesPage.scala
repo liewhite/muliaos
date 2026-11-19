@@ -84,17 +84,24 @@ object IssuesPage:
       ),
       div(
         cls := "grid grid-cols-1 gap-3 sm:grid-cols-2",
-        Fields.select[Option[AgentId]](
+        AgentPicker[Option[AgentId]](
           "负责项目",
           filters.map(f => Some(f.owner)),
           o => edit.onNext(_.copy(owner = o)),
-          agents.map(as => Opt(Option.empty[AgentId], "所有项目") :: ownerOptions(as, None, assignable = false).map(o => o.copy(id = Some(o.id))))
+          agents,
+          a => Some(a.id),
+          fixed = List(Opt(None, "所有项目")),
+          archived = AgentPicker.Archived.Listed,
+          prefix = ownerPrefix
         ),
-        Fields.select[Option[Assignee]](
+        AgentPicker[Option[Assignee]](
           "指派给",
           filters.map(f => Some(f.assignee)),
           a => edit.onNext(_.copy(assignee = a)),
-          agents.map(as => Opt(Option.empty[Assignee], "所有人") :: Opt(Some(Assignee.User), "我") :: as.map(a => Opt(Some(Assignee.Agent(a.id)), a.name.value)))
+          agents,
+          a => Some(Assignee.Agent(a.id)),
+          fixed = List(Opt(None, "所有人"), Opt(Some(Assignee.User), "我")),
+          archived = AgentPicker.Archived.Listed
         )
       ),
       statusFilter(filters, edit),
@@ -155,10 +162,10 @@ object IssuesPage:
       Fields.area("描述（Markdown）", desc, rowsN = 4),
       div(
         cls := "grid grid-cols-1 gap-3 sm:grid-cols-2",
-        Fields.select[AgentId]("负责项目（owner）", owner.signal, o => owner.set(Some(o)), agents.combineWith(owner.signal).map((as, o) => ownerOptions(as, o, assignable = true)), hint = Some("转派给别人做也不变")),
+        AgentPicker[AgentId]("负责项目（owner）", owner.signal, o => owner.set(Some(o)), agents, _.id, prefix = ownerPrefix, hint = Some("转派给别人做也不变")),
         Fields.select[IssueStatus]("状态", status.signal.map(Some(_)), status.set, Val(statusOptions)),
         Fields.select[Priority]("优先级", priority.signal.map(Some(_)), priority.set, Val(priorityOptions)),
-        Fields.select[AssigneeChoice]("指派给", assignee.signal.map(Some(_)), assignee.set, agents.combineWith(assignee.signal).map(assigneeOptions))
+        AgentPicker[AssigneeChoice]("指派给", assignee.signal.map(Some(_)), assignee.set, agents, a => AssigneeChoice.Agent(a.id), fixed = assigneeFixed)
       ),
       Fields.text("依赖的 issue（编号，逗号分隔，可不填）", deps),
       child.maybe <-- parsed.map(r => Option.when(r.isEmpty)(p(cls := "text-xs text-danger", "只能填 issue 编号，如 #12, #15"))),

@@ -32,18 +32,11 @@ object IssueParts:
     case Some(h) => Seq(cls := "owner-color border-l-(--owner-fg)", styleAttr := ownerStyle(h))
     case None    => Seq(cls := "border-l-transparent")
 
-  /** 负责项目的选项：每个 agent 前带它的色点。`assignable` 时是在给 issue 定 owner（不是筛选）：归档的不列，当前值除外。 */
-  def ownerOptions(agents: List[AgentSummary], keep: Option[AgentId], assignable: Boolean): List[Opt[AgentId]] =
-    val listed = if assignable then AgentsData.selectable(agents, keep) else agents
-    listed.map(a => Opt(a.id, a.name.value, prefix = Some(() => ownerDot(ownerHue(agents, Some(a.id))))))
+  /** 选负责项目时每个 agent 前的色点。 */
+  val ownerPrefix: Option[(List[AgentSummary], AgentSummary) => HtmlElement] = Some((all, a) => ownerDot(ownerHue(all, Some(a.id))))
 
-  /** 指派人选项：未指派、我、各个 agent。归档的不能被指派，只在它就是当前指派人时留着以便显示。 */
-  def assigneeOptions(agents: List[AgentSummary], current: AssigneeChoice): List[Opt[AssigneeChoice]] =
-    val keep = current match
-      case AssigneeChoice.Agent(id) => Some(id)
-      case _                        => None
-    Opt(AssigneeChoice.Nobody, "未指派") :: Opt(AssigneeChoice.Me, "我") ::
-      AgentsData.selectable(agents, keep).map(a => Opt(AssigneeChoice.Agent(a.id), a.name.value))
+  /** 指派人里 agent 以外的两项。归档的 agent 不能被指派（选择器不列，当前指派人归档了仍显示在按钮上）。 */
+  val assigneeFixed: List[Opt[AssigneeChoice]] = List(Opt(AssigneeChoice.Nobody, "未指派"), Opt(AssigneeChoice.Me, "我"))
 
   def statusOptions: List[Opt[IssueStatus]] = Opt.of(Statuses)
 

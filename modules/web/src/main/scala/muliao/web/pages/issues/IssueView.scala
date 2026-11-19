@@ -55,11 +55,13 @@ object IssueView:
       },
       div(
         cls := "grid grid-cols-2 gap-3 sm:grid-cols-4",
-        Fields.select[AgentId](
+        AgentPicker[AgentId](
           "负责项目（owner）",
           summary.map(_.owner),
           o => patchIf(_.owner.contains(o))(IssuePatch(owner = Some(o))),
-          agents.combineWith(summary).map((as, s) => ownerOptions(as, s.owner, assignable = true)),
+          agents,
+          _.id,
+          prefix = ownerPrefix,
           placeholderText = "无负责项目",
           disabledIf = change.busy.signal
         ),
@@ -77,11 +79,13 @@ object IssueView:
           Val(priorityOptions),
           disabledIf = change.busy.signal
         ),
-        Fields.select[AssigneeChoice](
+        AgentPicker[AssigneeChoice](
           "指派给",
           summary.map(s => Some(AssigneeChoice.of(s.assignee))),
           a => patchIf(s => AssigneeChoice.of(s.assignee) == a)(assigneePatch(a)),
-          agents.combineWith(summary).map((as, s) => assigneeOptions(as, AssigneeChoice.of(s.assignee))),
+          agents,
+          a => AssigneeChoice.Agent(a.id),
+          fixed = assigneeFixed,
           disabledIf = change.busy.signal
         )
       ),

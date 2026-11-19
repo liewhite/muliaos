@@ -28,13 +28,5 @@ object AgentsData:
     if q.isEmpty then Nil
     else agents.filter(a => a.name.value.toLowerCase.contains(q) || a.description.exists(_.toLowerCase.contains(q)))
 
-  /** 可以选来派活（新会话、指派、负责、触发器）的：不含归档的；`keep` 是当前已选的值，归档了也留着以便显示。 */
-  def selectable(agents: List[AgentSummary], keep: Option[AgentId] = None): List[AgentSummary] =
-    agents.filter(a => !archived(a) || keep.contains(a.id))
-
   /** 按编号显示名字；还没加载完或已删除时显示编号。 */
   def label(agents: List[AgentSummary], id: AgentId): String = agents.find(_.id == id).fold(id.value)(_.name.value)
-
-  /** 下拉框的选项。 */
-  def options(agents: List[AgentSummary]): List[Opt[AgentId]] =
-    agents.map(a => Opt(a.id, a.name.value, a.description.map(_.linesIterator.nextOption().getOrElse(""))))

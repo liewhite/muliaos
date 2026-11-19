@@ -76,7 +76,7 @@ object Fields:
       )
     )
 
-  /** 下拉单选（HeroUI 的 Select 外观：按钮 + 弹出的选项列表，选项可带说明）。 */
+  /** 下拉单选：按钮 + 弹出的选项列表，选项可带说明。选 agent 用 [[AgentPicker]]（分组、可搜索）。 */
   def select[T](
       labelText: String,
       value: Signal[Option[T]],
@@ -86,65 +86,35 @@ object Fields:
       placeholderText: String = "请选择",
       disabledIf: Signal[Boolean] = Val(false)
   ): HtmlElement =
-    val open = Var(false)
-    val id   = nextId()
     val current = value.combineWith(options).map((v, os) => v.flatMap(x => os.find(_.id == x)))
-    def optionBody(o: Opt[T]) =
-      div(
-        cls := "flex flex-col text-left",
-        span(cls := "flex items-center gap-2", o.prefix.map(_()), o.label),
-        o.description.map(d => span(cls := "text-xs text-muted", d))
-      )
-    div(
-      cls := "select select--full-width select--secondary relative",
-      dataAttr("slot") := "select",
-      span(cls := "label", dataAttr("slot") := "label", idAttr := s"$id-l", labelText),
-      button(
-        tpe := "button",
-        cls := "select__trigger select__trigger--full-width",
-        dataAttr("slot") := "select-trigger",
-        aria.labelledBy := s"$id-l",
-        Ui.attr("aria-haspopup") := "listbox",
-        aria.expanded <-- open.signal,
-        dataAttr("open") <-- open.signal.map(_.toString),
-        disabled <-- disabledIf,
-        onClick --> (_ => open.update(!_)),
-        span(
-          cls := "select__value",
-          dataAttr("slot") := "select-value",
-          dataAttr("placeholder") <-- current.map(_.isEmpty.toString),
-          child <-- current.map {
-            case Some(o) => optionBody(o)
-            case None    => span(placeholderText)
-          }
-        ),
-        Icon("ChevronDown", "select__indicator size-4")
-      ),
-      hint.map(h => div(cls := "description", dataAttr("slot") := "description", h)),
-      child.maybe <-- open.signal.map(o =>
-        Option.when(o)(
-          div(
-            cls := "absolute left-0 right-0 top-full z-50 mt-1 max-h-72 overflow-y-auto rounded-xl bg-overlay p-1 shadow-lg ring-1 ring-separator",
-            role := "listbox",
-            // 点到外面就收起
-            documentEvents(_.onClick.filter(e => !e.target.asInstanceOf[dom.Element].closest(s"[data-sel='$id']").isInstanceOf[dom.Element])) --> (_ => open.set(false)),
-            children <-- options.combineWith(value).map((os, v) =>
-              os.map { o =>
-                button(
-                  tpe := "button",
-                  role := "option",
-                  cls := "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-default",
-                  aria.selected := v.contains(o.id),
-                  onClick --> { _ => onPick(o.id); open.set(false) },
-                  div(cls := "flex-1", optionBody(o)),
-                  Option.when(v.contains(o.id))(Icon("Check", "size-4 text-accent"))
-                )
-              }
-            )
-          )
+    Dropdown(labelText, current.map(_.map(optionBody)), placeholderText, hint, disabledIf, "")(close =>
+      Seq(
+        div(
+          cls := "max-h-72 min-h-0 overflow-y-auto p-1",
+          role := "listbox",
+          children <-- options.combineWith(value).map((os, v) => os.map(o => optionButton(o, v.contains(o.id), () => { onPick(o.id); close() })))
         )
-      ),
-      dataAttr("sel") := id
+      )
+    )
+
+  /** 选项的显示：前缀、标签、小字说明。 */
+  private[ui] def optionBody[T](o: Opt[T]): HtmlElement =
+    div(
+      cls := "flex min-w-0 flex-col text-left",
+      span(cls := "flex items-center gap-2", o.prefix.map(_()), o.label),
+      o.description.map(d => span(cls := "text-xs text-muted", d))
+    )
+
+  /** 弹层里的一个选项，选中的打勾。 */
+  private[ui] def optionButton[T](o: Opt[T], selected: Boolean, pick: () => Unit): HtmlElement =
+    button(
+      tpe := "button",
+      role := "option",
+      cls := "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-default",
+      aria.selected := selected,
+      onClick --> (_ => pick()),
+      div(cls := "flex-1", optionBody(o)),
+      Option.when(selected)(Icon("Check", "size-4 shrink-0 text-accent"))
     )
 
   /** 单选切换（列表筛选等）。`showLabel` 时显示可见标签，否则 `labelText` 只作读屏名称。 */
