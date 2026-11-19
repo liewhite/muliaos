@@ -143,7 +143,7 @@ Present: the message box shows a microphone button for voice input. Uses the Ali
 | Path | Contents |
 |---|---|
 | `muliao.db` | SQLite database: agents, sessions, runs, issues, triggers, notifications, history, usage |
-| `workspaces/<agent id>/` | each agent's working directory (its commands run here; background job logs in `jobs/`, pages in `site/`) |
+| `workspaces/<agent id>/` | each agent's working directory (its commands run here, with its path in the `MULIAO_WORKSPACE` environment variable; background job logs in `jobs/`, pages in `site/`) |
 | `files/` | uploaded attachments, stored by content hash |
 | `resources/` | the last valid `access.toml` (used when the current one is broken) |
 | `vapid_private.pem` | Web Push private key (unless `push.vapid_key_file` points elsewhere) |

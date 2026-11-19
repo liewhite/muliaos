@@ -119,7 +119,7 @@
 
 ## 工作区领域的接法（#869，给下游领域与组装入口）
 - **组装**：`Workspace.layer`（要 `PageSigner.fromSecret(server.cookieSecret)`）起全部服务；`Workspace.contribution` 给出 8 个工具（静态定义在 `Workspace.specs`）、skill 脚本的批准执行者 `skill_run`、agent 忙碌判断与删除清理；`Workspace.jobControl` 是会话等后台任务时的状态与取消。启动顺序：`Sessions.start` 之后调 `Jobs.recover`（上次没收尾的后台任务标为被中断、不盲杀，补交结局）。接口 `WorkspaceHttp(...).routes`，其中页面文件 `/site/<agent>/<page>/<签名>/<文件>` 不要登录，带隔离响应头（CSP sandbox、nosniff、允许跨源读取）。
-- **以 agent 身份起命令**：一律经 `AgentExec.command(agent, program, secrets, SecretUse)` 得到 `CommandSpec`（工作目录、写沙箱、secret 注入），再 `Exec.run/follow`；输出可经 `annotate` 补写沙箱拦截说明。它在资源领域（#892），工作区的命令与后台任务、触发器的前置检查与常驻命令都用它，不自己算可写范围。agent 的工作目录只经 `ResourcePaths.ensureWorkspace` 建。
+- **以 agent 身份起命令**：一律经 `AgentExec.command(agent, program, secrets, SecretUse)` 得到 `CommandSpec`（工作目录及指向它的环境变量 `MULIAO_WORKSPACE`、写沙箱、secret 注入），再 `Exec.run/follow`；输出可经 `annotate` 补写沙箱拦截说明。它在资源领域（#892），工作区的命令与后台任务、触发器的前置检查与常驻命令都用它，不自己算可写范围。agent 的工作目录只经 `ResourcePaths.ensureWorkspace` 建。
 - **文件读写**：`FileAccess` 按可写范围检查（平台私有文件对非 admin 读写都不行），每次写先经 `AssetGuard.check` 得到 `Vetted`（只有它能造）：`Plain` 是资源目录外的文件、照写，`Asset` 交给 `AssetStore.commit`；平台自己生成的资源文件用 `AssetStore.write(资源文件, 内容)`。读过的文本文件都记指纹；`WriteMode.Overwrite` 要求本次运行读过（读过的指纹按运行记在内存里），`Patch` 不要求。`AssetStore` 写文件覆盖已有文件时沿用原权限位（skill 脚本不丢可执行位）。
 - **后台任务**：输出在工作目录 `jobs/<编号>.log`；每个任务是一个 daemon fiber，登记在 `Jobs` 的 registry 里（结束时自己删登记），`job_kill` 经它的 `stop` 结束（记被结束）；关停时 layer 的 finalizer 并行中断登记里的全部 fiber、进程由 `Exec.follow` 结束，标被中断，结局下次启动补交（表 `job` 的 `reported`）。不用并行策略的子 scope 做 `forkIn`：fiber 自己结束时关子 scope 会另起 fiber 去中断它自己而互等，留下永远挂着的 root fiber，关停卡到 launchd 强杀（#897）。边界：Jobs 的 finalizer 跑完后、会话关闭前才起的任务不在快照里，可能留在「运行中」，下次启动 `recover` 补成被中断。
 

@@ -15,7 +15,7 @@ final case class AgentCommand(spec: CommandSpec, scope: Sandbox.Confined)
   * 保证工作目录、写沙箱与 secret 权限只有一种算法。
   */
 trait AgentExec:
-  /** 算出命令规格：在 agent 的工作目录执行（不存在就建），写沙箱是它的可写范围，`secrets` 按用途检查权限后作为环境变量注入。
+  /** 算出命令规格：在 agent 的工作目录执行（不存在就建），环境变量 [[AgentExec.WorkspaceVar]] 是这个目录，写沙箱是它的可写范围，`secrets` 按用途检查权限后作为环境变量注入。
     * `purpose`：哪个会话、拿去跑什么；passkey secret 等授权时给用户看（会话里的在那个会话页批准）。
     */
   def command(agent: AgentId, program: Program, secrets: List[String], use: SecretUse, purpose: AskPurpose): IO[AppError, AgentCommand]
@@ -24,6 +24,9 @@ trait AgentExec:
   def annotate(agent: AgentId, scope: Sandbox.Confined, output: String): UIO[String]
 
 object AgentExec:
+  /** 命令环境里的工作目录路径：先 cd 到别处的命令也能找到工作目录里的东西（如 ssh 配置按它找证书，#961）。 */
+  val WorkspaceVar = "MULIAO_WORKSPACE"
+
   val layer: URLayer[Resources & Vault & ResourcePaths, AgentExec] = ZLayer.derive[Live]
 
   /** 给用户看的命令：脚本原文，或程序与参数。 */
@@ -49,7 +52,7 @@ object AgentExec:
         scope  <- resources.writableScope(agent)
         values <- if secrets.isEmpty then ZIO.succeed(Map.empty[String, String]) else vault.reveal(agent, secrets.distinct, use, purpose)
         env     = Chunk.fromIterable(secrets.distinct.flatMap(k => values.get(k).map(SecretEnv(k, _))))
-      yield AgentCommand(CommandSpec(program, dir, scope, secrets = env), scope)
+      yield AgentCommand(CommandSpec(program, dir, scope, Map(AgentExec.WorkspaceVar -> dir.toString), env), scope)
 
     def annotate(agent: AgentId, scope: Sandbox.Confined, output: String): UIO[String] =
       ZIO

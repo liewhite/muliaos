@@ -141,7 +141,7 @@ muliao 没有思考设置：请求里不带思考参数，各模型按自己的�
 | 路径 | 内容 |
 |---|---|
 | `muliao.db` | SQLite 数据库：agent、会话、运行、issue、触发器、通知、历史、用量 |
-| `workspaces/<agent 编号>/` | 每个 agent 的工作目录（命令在这里跑；后台任务日志在 `jobs/`，页面在 `site/`） |
+| `workspaces/<agent 编号>/` | 每个 agent 的工作目录（命令在这里跑，环境变量 `MULIAO_WORKSPACE` 是它的路径；后台任务日志在 `jobs/`，页面在 `site/`） |
 | `files/` | 上传的附件，按内容哈希存 |
 | `resources/` | 上一份有效的 `access.toml`（当前那份写坏时用它） |
 | `vapid_private.pem` | Web Push 私钥（`push.vapid_key_file` 没指到别处时） |

@@ -130,7 +130,7 @@ object WorkspaceSpec extends ZIOSpecDefault:
     test("setuid 程序按文件权限位认出（它们在沙箱里报的 Operation not permitted 与写权限无关）") {
       assertTrue(AgentExec.setuid(Path.of("/bin/ps")), !AgentExec.setuid(Path.of("/bin/echo")), !AgentExec.setuid(Path.of("/no/such")))
     },
-    test("写沙箱：文件工具写不了范围外、读不了平台私有文件，命令被拦时补说明") {
+    test("写沙箱：文件工具写不了范围外、读不了平台私有文件，命令被拦时补说明；命令环境带工作目录路径") {
       for
         d    <- S.dirs
         m    <- model(PartialFunction.empty)
@@ -143,7 +143,7 @@ object WorkspaceSpec extends ZIOSpecDefault:
                    w     <- call("write_file", args("path" -> str(s"/tmp/$mark"), "content" -> str("x")), ctx)
                    r     <- call("read_file", args("path" -> str(priv.toString)), ctx)
                    sh    <- call("run_shell", args("command" -> str(s"touch /tmp/$mark; echo done"), "timeout" -> Json.Num(20)), ctx)
-                   own   <- call("run_shell", args("command" -> str("echo hi > own.txt && cat own.txt"), "timeout" -> Json.Num(20)), ctx)
+                   own   <- call("run_shell", args("command" -> str("echo hi > own.txt && cd / && cat \"$MULIAO_WORKSPACE/own.txt\""), "timeout" -> Json.Num(20)), ctx)
                  yield (text(w), text(r), text(sh), text(own))
                }
         (w, r, sh, own) = out
