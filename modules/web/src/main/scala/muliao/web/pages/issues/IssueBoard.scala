@@ -20,7 +20,7 @@ object IssueBoard:
       Option.when(i.priority != Priority.Unset)(
         Ui.chip(i.priority.shown, if i.priority == Priority.Urgent then Tone.Danger else Tone.Default, ChipLook.Secondary)()
       ),
-      i.owner.map(o => ownerChip(ownerHue(agents, Some(o)), AgentsData.label(agents, o, i.ownerName))),
+      i.owner.map(o => ownerChip(ownerHue(agents, Some(o)), i.ownerName.getOrElse(o.value))),
       Some(Ui.chip(s"→ ${assigneeLabel(i)}")()),
       Option.when(i.waitingOn.nonEmpty)(Ui.chip(s"等待 ${refs(i.waitingOn)}")()),
       handling(i).map {

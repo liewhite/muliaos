@@ -122,7 +122,7 @@ object Rules:
 /** 能用的工具与资源（服务端按与运行时同一套规则算出，带凭哪条规则）。 */
 object Grants:
   private def secondaryChip(mods: Modifier[HtmlElement]*): HtmlElement =
-    span(cls := "chip chip--default chip--sm chip--secondary", mods)
+    span(cls := s"chip chip--default chip--sm ${ChipLook.Secondary.cls}", mods)
 
   /** 精简版（预览）：资源直接列出，工具（较多）折叠。 */
   def compact(result: Signal[PreviewResult], what: String): HtmlElement =

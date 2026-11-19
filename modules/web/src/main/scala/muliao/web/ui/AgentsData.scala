@@ -28,9 +28,8 @@ object AgentsData:
     if q.isEmpty then Nil
     else agents.filter(a => a.name.value.toLowerCase.contains(q) || a.description.exists(_.toLowerCase.contains(q)))
 
-  /** 按编号显示名字；还没加载完或已删除时显示 `fallback`（默认编号）。 */
-  def label(agents: List[AgentSummary], id: AgentId, fallback: Option[String] = None): String =
-    agents.find(_.id == id).map(_.name.value).orElse(fallback).getOrElse(id.value)
+  /** 按编号显示名字；还没加载完或已删除时显示编号。 */
+  def label(agents: List[AgentSummary], id: AgentId): String = agents.find(_.id == id).fold(id.value)(_.name.value)
 
   /** 按名字找（资源归属、角色成员记的是名字）。 */
   def byName(agents: List[AgentSummary], name: String): Option[AgentSummary] = agents.find(_.name.value == name)

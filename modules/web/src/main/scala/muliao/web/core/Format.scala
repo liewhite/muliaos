@@ -1,10 +1,8 @@
 package muliao.web.core
 
-import com.raquo.airstream.core.{EventStream, Signal}
-
 import scala.scalajs.js
 
-/** 界面上数字、时间、模型名的写法：每种只写一份（纯函数，`time`/`clock` 按浏览器本地时区）。 */
+/** 界面上数字、时间、模型名的写法：每种只写一份（`time`/`clock` 按浏览器本地时区，`relative` 相对此刻）。 */
 object Format:
   private val dateFormat = js.Dynamic.newInstance(js.Dynamic.global.Intl.DateTimeFormat)(js.undefined, js.Dynamic.literal(month = "numeric", day = "numeric", hour = "2-digit", minute = "2-digit"))
 
@@ -54,7 +52,3 @@ object Format:
   def modelLabel(m: String): String = m.split(":", 2) match
     case Array(p, n) => s"$p · $n"
     case _           => m
-
-/** 每隔一段时间一跳的当前时刻（毫秒），给运行中的计时用；没人订阅时不跳。 */
-object Clock:
-  def every(ms: Int): Signal[Double] = EventStream.periodic(ms).map(_ => js.Date.now()).toSignal(js.Date.now())
