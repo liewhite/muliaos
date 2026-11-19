@@ -4,8 +4,8 @@ import com.raquo.laminar.api.L.*
 import muliao.web.core.*
 import org.scalajs.dom
 
-/** 选项：`id` 是值，`label` 是显示的字，`description` 是小字说明，`prefix` 显示在标签前（如色点）。 */
-final case class Opt[T](id: T, label: String, description: Option[String] = None, prefix: Option[() => HtmlElement] = None)
+/** 选项：`id` 是值，`label` 是显示的字，`description` 是小字说明。 */
+final case class Opt[T](id: T, label: String, description: Option[String] = None)
 
 object Opt:
   /** 枚举的选项：显示文字取自它的 [[Shown]]。 */
@@ -14,7 +14,8 @@ object Opt:
 /** 表单字段。表单都放在卡片或底部栏（surface 背景）上，统一用 secondary 变体（primary 的背景与 surface 同色看不出边界）。 */
 object Fields:
   private var counter = 0
-  private def nextId(): String =
+  /** 页面内唯一的元素编号（label 与控件关联用）。 */
+  private[ui] def nextId(): String =
     counter += 1
     s"f$counter"
 
@@ -97,11 +98,11 @@ object Fields:
       )
     )
 
-  /** 选项的显示：前缀、标签、小字说明。 */
+  /** 选项的显示：标签、小字说明。 */
   private[ui] def optionBody[T](o: Opt[T]): HtmlElement =
     div(
       cls := "flex min-w-0 flex-col text-left",
-      span(cls := "flex items-center gap-2", o.prefix.map(_()), o.label),
+      span(o.label),
       o.description.map(d => span(cls := "text-xs text-muted", d))
     )
 

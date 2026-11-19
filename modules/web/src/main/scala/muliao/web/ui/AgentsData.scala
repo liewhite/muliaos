@@ -4,7 +4,7 @@ import com.raquo.laminar.api.L.*
 import muliao.contract.{AgentId, AgentState, AgentSummary, ResourcesApi}
 import muliao.web.core.*
 
-/** 多个页面共用的 agent 列表：显示名、分组、可选来派活的。 */
+/** 多个页面共用的 agent 列表：显示名、分组、搜索。 */
 object AgentsData:
   /** 全部 agent（含归档的），全站共用一份：登录后的外壳一直订阅着（失败时由外壳在顶上提示），随接口声明的主题刷新。 */
   val all: Signal[Load[List[AgentSummary]]] = Remote(ResourcesApi.listAgents)(())

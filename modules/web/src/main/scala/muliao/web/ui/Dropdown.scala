@@ -4,14 +4,13 @@ import com.raquo.laminar.api.L.*
 import muliao.web.core.*
 import org.scalajs.dom
 
-/** 下拉的壳（HeroUI 的 Select 外观）：标签、显示当前值的按钮、点开的弹层；点到外面、按 Esc 或窗口改尺寸时收起。
+/** 下拉的壳（HeroUI 的 Select 外观）：标签、显示当前值的按钮、点开的弹层；点到外面或按 Esc 收起。
   * 下拉单选 [[Fields.select]] 和选 agent 的 [[AgentPicker]] 共用，各自只给弹层里的内容。
   * 弹层挂在 body 上、fixed 定位跟着按钮（页面滚动时跟着走）：不被卡片、折叠区的 overflow 裁掉，也不被它们的层叠上下文
   * 压在后面的卡片下；下方放不下时翻到上方。
   */
 object Dropdown:
-  private var counter = 0
-  private val Gap     = 4.0
+  private val Gap = 4.0
 
   /** @param shown 按钮上显示的当前值，None 时显示 `placeholderText`
     * @param panelCls 弹层的宽度等附加类；弹层是竖排的 flex，高度不超过可用空间，内容里能滚动的那块要带 `min-h-0`
@@ -25,8 +24,7 @@ object Dropdown:
       disabledIf: Signal[Boolean],
       panelCls: String
   )(panel: (() => Unit) => Seq[Modifier[HtmlElement]]): HtmlElement =
-    counter += 1
-    val id   = s"dd$counter"
+    val id   = Fields.nextId()
     val open = Var(false)
     // 冒泡经过本组件的最近一次点击：document 收到的点击不是它就是点在外面。
     // 不按目标元素的祖先判断：点弹层里的分组会重画列表，被点的元素已离开 DOM。
@@ -39,7 +37,8 @@ object Dropdown:
     // 弹层里的点击和按键不冒泡经过组件（它挂在 body 上），弹层自己也记一份
     val ownEvents: Seq[Modifier[HtmlElement]] = Seq(
       onClick --> (e => inside = Some(e)),
-      onKeyDown.filter(_.key == "Escape") --> (_ => open.set(false))
+      // 只在开着时拦住 Esc：否则外层弹窗也跟着关、丢草稿；关着时照常交给弹窗
+      onKeyDown.filter(e => e.key == "Escape" && open.now()) --> { e => e.stopPropagation(); open.set(false) }
     )
     def floatingPanel(): HtmlElement =
       div(
@@ -47,7 +46,7 @@ object Dropdown:
         ownEvents,
         onMountUnmountCallback(ctx => { floating = Some(ctx.thisNode.ref); reposition() }, _ => floating = None),
         documentEvents(_.onClick).filter(e => !inside.contains(e)) --> (_ => open.set(false)),
-        windowEvents(_.onResize) --> (_ => open.set(false)),
+        windowEvents(_.onResize) --> (_ => reposition()),
         // 任一层滚动都可能挪动按钮；弹层自己里面的滚动不用管
         documentEvents(_.onScroll.useCapture).filter(e => !floating.exists(_.contains(e.target.asInstanceOf[dom.Node]))) --> (_ => reposition()),
         panel(() => open.set(false))

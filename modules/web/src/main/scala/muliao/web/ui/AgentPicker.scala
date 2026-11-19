@@ -33,23 +33,16 @@ object AgentPicker:
       placeholderText: String = "选择 agent",
       disabledIf: Signal[Boolean] = Val(false)
   ): HtmlElement =
-    val choice: Signal[Option[Choice[T]]] = agents.combineWith(value).map((all, v) =>
-      v.flatMap(x => fixed.find(_.id == x).map(Choice.Fixed(_)).orElse(all.find(a => key(a) == x).map(Choice.Agent(_))))
-    )
-    val shown = choice.combineWith(agents).map((c, all) =>
-      c.map {
-        case Choice.Fixed(o) => Fields.optionBody(o)
-        case Choice.Agent(a) => agentLine(all, a, prefix, showGroup = true, firstLine = false)
-      }
+    // 当前值对应的 agent：在全部（含归档的）里找，归档了也显示得出
+    val chosen = agents.combineWith(value).map((all, v) => all.find(a => v.contains(key(a))))
+    val shown = value.combineWith(chosen, agents).map((v, c, all) =>
+      fixed.find(o => v.contains(o.id)).map(Fields.optionBody).orElse(c.map(agentLine(all, _, prefix, showGroup = true, firstLine = false)))
     )
     Dropdown(labelText, shown, placeholderText, hint, disabledIf, "w-[min(28rem,90vw)]") { close =>
       val query   = Var("")
       // 点过的组；当前值所在的组默认展开，点它是收起
       val toggled = Var(Set.empty[String])
-      val current = choice.map {
-        case Some(Choice.Agent(a)) => folderOf(a)
-        case _                     => None
-      }
+      val current = chosen.map(_.flatMap(folderOf))
       def pick(x: T): Unit =
         onPick(x)
         close()
@@ -114,10 +107,6 @@ object AgentPicker:
         )
       )
     }
-
-  private enum Choice[T]:
-    case Fixed(opt: Opt[T])
-    case Agent(agent: AgentSummary)
 
   private val ArchivedGroup = "已归档"
 
