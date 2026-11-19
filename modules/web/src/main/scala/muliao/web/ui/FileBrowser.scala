@@ -4,8 +4,7 @@ import com.raquo.laminar.api.L.*
 import muliao.web.core.*
 
 import scala.concurrent.Future
-import scala.scalajs.js
-import scala.util.{Failure as TryFailure, Success, Try}
+import scala.util.{Failure as TryFailure, Success}
 
 import Http.ec
 
@@ -210,7 +209,7 @@ object FileBrowser:
       div(
         cls := "flex flex-wrap items-center gap-2 text-sm",
         code(cls := "min-w-0 break-all font-mono", path),
-        span(cls := "text-muted", (entry.size.map(formatSize) ++ entry.modifiedAt.map(Ui.formatTime)).mkString(" · ")),
+        span(cls := "text-muted", (entry.size.map(formatSize) ++ entry.modifiedAt.map(Format.time)).mkString(" · ")),
         a(
           href := url,
           Ui.attr("download") := entry.name,
@@ -245,9 +244,6 @@ object FileBrowser:
 
   /** 代码高亮：认不出语言或太长时按纯文本显示。highlight.js 的输出已转义，可以直接插入。 */
   def highlighted(text: String, language: Option[String]): HtmlElement =
-    val html = language.filter(l => text.length <= MaxHighlightChars && Hljs.getLanguage(l).isDefined).flatMap { l =>
-      Try(Hljs.highlight(text, js.Dynamic.literal(language = l, ignoreIllegals = true)).value.asInstanceOf[String]).toOption
-    }
-    html match
+    language.filter(_ => text.length <= MaxHighlightChars).flatMap(Highlight.html(text, _)) match
       case Some(h) => pre(cls := s"$Code hljs", inContext(el => { el.ref.innerHTML = h; emptyMod }))
       case None    => pre(cls := Code, text)

@@ -70,18 +70,7 @@ object AgentPicker:
           Icon(if isOpen then "ChevronDown" else "ChevronRight", "size-4 text-muted")
         ) :: (if isOpen then members.map(a => agentItem(all, a, showGroup = false, sel).amend(cls := "pl-8")) else Nil)
       Seq(
-        div(
-          cls := "relative p-2",
-          Icon("Search", "pointer-events-none absolute top-1/2 left-5 size-4 -translate-y-1/2 text-muted"),
-          input(
-            tpe := "search",
-            cls := "input input--secondary input--full-width pl-9",
-            placeholder := "搜索名称或描述",
-            aria.label := s"搜索 $labelText",
-            onMountFocus,
-            controlled(com.raquo.laminar.api.L.value <-- query.signal, onInput.mapToValue --> query)
-          )
-        ),
+        div(cls := "p-2", Fields.search(s"搜索 $labelText", query, "搜索名称或描述", focusOnMount = true)),
         div(
           cls := "max-h-96 min-h-0 overflow-y-auto p-1",
           role := "listbox",

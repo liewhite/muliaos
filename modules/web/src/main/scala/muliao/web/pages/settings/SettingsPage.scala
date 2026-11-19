@@ -6,7 +6,6 @@ import muliao.web.core.*
 import muliao.web.pwa.{Push, PushState}
 import muliao.web.ui.*
 
-import scala.concurrent.Future
 import scala.scalajs.js
 
 import Http.ec
@@ -37,16 +36,16 @@ object SettingsPage:
       pushCard(act),
       ScriptGrants.view(),
       act.errorView(),
-      div(Ui.btn(Variant.DangerSoft)(Icon("LogOut"), "退出登录", disabled <-- act.busy.signal, onClick --> (_ => logout(act))))
+      div(Ui.btn(Variant.DangerSoft, disabledIf = act.busy.signal)(Icon("LogOut"), "退出登录", onClick --> (_ => logout(act))))
     )
 
   private def logout(act: Action): Unit =
     Confirm.ask("退出登录？", confirmLabel = "退出").foreach { ok =>
       if ok then
         // 服务端会话失效才是退出的核心，先做；退出后锁屏上不该再出现 agent 的回复：再取消本设备的订阅，失败只提示、不挡住退出
-        act.run(Auth.logout().map { _ =>
+        act.fire(Auth.logout().map { _ =>
           Push.unsubscribe().failed.foreach(e => Toast.danger(s"取消本设备的推送失败：${Http.messageOf(e)}"))
-        }).foreach(_ => ())
+        })
     }
 
   private def pushCard(act: Action): HtmlElement =
@@ -57,9 +56,7 @@ object SettingsPage:
         case scala.util.Success(s) => state.set(Some(s))
         case scala.util.Failure(e) => act.error.set(Some(s"读取推送状态失败：${Http.messageOf(e)}"))
       }
-    div(
-      cls := "card card--default",
-      dataAttr("slot") := "card",
+    Ui.card(
       onMountCallback(_ => refresh()),
       div(
         cls := "card__header",
@@ -73,10 +70,9 @@ object SettingsPage:
               cls := "card__footer flex gap-2",
               Ui.btn(size = Size.Sm, pending = act.busy.signal)(label, onClick --> (_ => act.run(Push.enable()).foreach(_ => refresh()))),
               Option.when(canTest)(
-                Ui.btn(Variant.Secondary, Size.Sm)(
+                Ui.btn(Variant.Secondary, Size.Sm, disabledIf = act.busy.signal)(
                   "发送测试通知",
-                  disabled <-- act.busy.signal,
-                  onClick --> (_ => act.run(Http.call(NotificationsApi.test)(()).map(_ => Toast.success("测试通知已发出"))).foreach(_ => ()))
+                  onClick --> (_ => act.fire(Http.call(NotificationsApi.test)(()).map(_ => Toast.success("测试通知已发出"))))
                 )
               )
             )
@@ -90,9 +86,7 @@ object ScriptGrants:
   def view(): HtmlElement =
     val grants = Remote(WorkspaceApi.listGrants)(())
     val act    = new Action
-    div(
-      cls := "card card--default",
-      dataAttr("slot") := "card",
+    Ui.card(
       div(
         cls := "card__header",
         div(cls := "card__title flex items-center gap-2", Icon("ShieldCheck"), "始终允许的脚本"),
@@ -110,10 +104,8 @@ object ScriptGrants:
       )
     )
 
-  private def revoke(g: ScriptGrantView, act: Action): Future[Unit] =
-    Confirm.ask("撤销这条始终允许？", confirmLabel = "撤销").flatMap { ok =>
-      if ok then act.run(Http.call(WorkspaceApi.revokeGrant)(g.id)).map(_ => ()) else Future.unit
-    }
+  private def revoke(g: ScriptGrantView, act: Action): Unit =
+    Confirm.ask("撤销这条始终允许？", confirmLabel = "撤销").foreach(ok => if ok then act.fire(Http.call(WorkspaceApi.revokeGrant)(g.id)))
 
   private def row(g: ScriptGrantView, act: Action): HtmlElement =
     div(
@@ -131,7 +123,7 @@ object ScriptGrants:
           if g.args.isEmpty then "（无参数）" else g.args.map(a => js.JSON.stringify(a)).mkString(" "),
           Option.when(g.secrets.nonEmpty)(s" · secrets: ${g.secrets.mkString(", ")}")
         ),
-        span(cls := "text-xs text-muted", s"${Ui.formatTime(g.createdAt)} 允许")
+        span(cls := "text-xs text-muted", s"${Format.time(g.createdAt)} 允许")
       ),
-      Ui.iconBtn("Trash2", "撤销", iconCls = "size-4")(disabled <-- act.busy.signal, onClick --> (_ => revoke(g, act).foreach(_ => ())))
+      Ui.iconBtn("Trash2", "撤销", iconCls = "size-4", disabledIf = act.busy.signal)(onClick --> (_ => revoke(g, act)))
     )

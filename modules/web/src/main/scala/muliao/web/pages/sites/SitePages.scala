@@ -46,12 +46,11 @@ object SitePages:
     // 键是 agent 下的页面名，地址不会变
     Ui.appLink(Route.Single(Page.Site(first.agent, first.page)).url)(
       cls := "rounded-3xl outline-none focus-visible:ring-2 focus-visible:ring-accent",
-      div(
-        cls := "card card--default h-full gap-1 transition-shadow hover:shadow-md",
-        dataAttr("slot") := "card",
+      Ui.card(
+        cls := "h-full gap-1 transition-shadow hover:shadow-md",
         div(cls := "truncate font-medium", child.text <-- p.map(_.page)),
         code(cls := "truncate font-mono text-xs text-muted", child.text <-- p.map(x => s"site/${x.page}")),
-        div(cls := "text-xs text-muted", child.text <-- p.map(x => s"更新于 ${Ui.relativeTime(x.modifiedAt)}"))
+        div(cls := "text-xs text-muted", child.text <-- p.map(x => s"更新于 ${Format.relative(x.modifiedAt)}"))
       )
     )
 

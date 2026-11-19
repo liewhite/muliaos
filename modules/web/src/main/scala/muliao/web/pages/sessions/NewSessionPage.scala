@@ -28,11 +28,10 @@ object NewSessionPage:
       if !action.busy.now() && canNow.now() then
         agentNow.now().foreach { a =>
           action
-            .run(
+            .fire(
               Http.call(SessionsApi.create)(NewSession(a, prompt.now().trim, uploads.done.map(_._2.id))).map(c => Router.update(Route.session(c.id))),
               leave = Some(() => ())
             )
-            .foreach(_ => ())
         }
     Ui.page("新会话", back = Some(Route.home))(
       canStart --> canNow,

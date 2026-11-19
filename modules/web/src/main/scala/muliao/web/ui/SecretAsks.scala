@@ -64,7 +64,7 @@ object SecretAsks:
         Icon("KeyRound", "size-4 shrink-0 text-warning"),
         child.text <-- agents.map(as => s"${AgentsData.label(as, a.agent)} $head"),
         code(cls := "font-mono", a.key),
-        span(cls := "text-muted", Ui.relativeTime(a.since))
+        span(cls := "text-muted", Format.relative(a.since))
       ),
       body,
       act.errorView(),

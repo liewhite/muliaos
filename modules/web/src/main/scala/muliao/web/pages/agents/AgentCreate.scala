@@ -28,11 +28,10 @@ object AgentCreate:
     val act   = new Action
     def submit(): Unit =
       act
-        .run(Http.call(ResourcesApi.createAgent)(AgentForm.create(value.now())).map { d =>
+        .fire(Http.call(ResourcesApi.createAgent)(AgentForm.create(value.now())).map { d =>
           Toast.success("已创建")
           Router.update(Route.agent(d.summary.id))
         })
-        .foreach(_ => ())
     div(
       cls := "flex flex-col gap-4",
       AgentForm.fields(None, value),

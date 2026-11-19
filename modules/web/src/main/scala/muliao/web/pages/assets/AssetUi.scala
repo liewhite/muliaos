@@ -5,27 +5,8 @@ import muliao.contract.*
 import muliao.web.core.*
 import muliao.web.ui.*
 
-/** 资源页各部分共用的小组件：提交按钮、归属下拉、归属与使用者、转移归属、记忆编辑。 */
+/** 资源页各部分共用的小组件：归属下拉、归属与使用者、转移归属、可展开编辑的文件条目、记忆编辑。 */
 object AssetUi:
-  val Platform = "platform"
-
-  /** 主按钮：执行中转圈，`enabled` 为假时禁用。 */
-  def submit(text: String, pending: Signal[Boolean], enabled: Signal[Boolean] = Val(true), variant: Variant = Variant.Primary, size: Size = Size.Md)(
-      mods: Modifier[Button]*
-  ): Button =
-    button(
-      tpe := "button",
-      cls := Ui.buttonCls(variant, size),
-      dataAttr("slot") := "button",
-      disabled <-- pending.combineWith(enabled).map((p, e) => p || !e),
-      dataAttr("pending") <-- pending.map(_.toString),
-      child.maybe <-- pending.map(p => Option.when(p)(Ui.spinner("spinner--sm spinner--current"))),
-      text,
-      mods
-    )
-
-  def ownerLabel(owner: String): String = if owner == Platform then "平台" else owner
-
   /** 归属下拉：平台或某个 agent（值是 agent 名）。`withArchived`：也列出归档的（转移时资源可能正归它们）。 */
   def ownerSelect(value: Signal[String], onPick: String => Unit, agents: Signal[List[AgentSummary]], withArchived: Boolean = false): HtmlElement =
     AgentPicker[String](
@@ -34,21 +15,12 @@ object AssetUi:
       onPick,
       agents,
       _.name.value,
-      fixed = List(Opt(Platform, "平台")),
+      fixed = List(Opt(Owner.Platform, "平台")),
       archived = if withArchived then AgentPicker.Archived.Listed else AgentPicker.Archived.Hidden,
       hint = Some(child.text <-- value.map {
-        case Platform => "归平台的资源要收录进某个角色（如 base）才有 agent 能用"
+        case Owner.Platform => "归平台的资源要收录进某个角色（如 base）才有 agent 能用"
         case _        => "这个 agent 自己总能用；要给别的 agent，把它收录进角色"
       })
-    )
-
-  /** agent 名链到它的详情页（找不到编号时只显示名字）。 */
-  def agentChip(name: String, agents: Signal[List[AgentSummary]], tone: Tone = Tone.Accent): HtmlElement =
-    span(
-      child <-- agents.map(_.find(_.name.value == name)).map {
-        case Some(a) => Ui.appLink(Route.agent(a.id).url)(Ui.chip(name, tone)())
-        case None    => Ui.chip(name, tone)()
-      }
     )
 
   /** 能转移归属的种类。 */
@@ -62,13 +34,13 @@ object AssetUi:
       div(
         cls := "flex flex-wrap items-center gap-1.5 text-xs",
         child <-- item.map(_.owner).distinct.map {
-          case Platform => span(cls := "chip chip--default chip--sm chip--secondary", "平台")
-          case o        => agentChip(o, agents)
+          case Owner.Platform => Ui.chip("平台", look = ChipLook.Secondary)()
+          case o        => AgentChip(o)
         },
         child <-- item.map(_.usedBy).distinct.map {
           case Nil => Ui.chip("没有 agent 在用", Tone.Warning)()
           case us =>
-            span(cls := "contents", span(cls := "text-muted", "被这些 agent 使用"), us.map(u => agentChip(u.value, agents, Tone.Default)))
+            span(cls := "contents", span(cls := "text-muted", "被这些 agent 使用"), us.map(u => AgentChip(u.value, Tone.Default)))
         },
         child.maybe <-- item.map(i => transferable(i.kind)).distinct.map(t =>
           Option.when(t)(
@@ -93,7 +65,8 @@ object AssetUi:
       item --> (i => now.set(Some(i))),
       ownerSelect(target.signal.combineWith(item).map((t, i) => t.getOrElse(i.owner)), o => target.set(Some(o)), agents, withArchived = true),
       div(
-        submit("转移", act.busy.signal, target.signal.combineWith(item).map((t, i) => t.exists(_ != i.owner)), size = Size.Sm)(
+        Ui.btn(size = Size.Sm, pending = act.busy.signal, disabledIf = target.signal.combineWith(item).map((t, i) => !t.exists(_ != i.owner)))(
+          "转移",
           onClick --> { _ =>
             for i <- now.now(); to <- target.now() do
               i.kind.asset.foreach(k => act.run(Http.call(ResourcesApi.transferAsset)((k, i.name, AssetTransfer(to)))).foreach(ok => if ok then done())(using Http.ec))
@@ -101,6 +74,29 @@ object AssetUi:
         )
       ),
       act.errorView()
+    )
+
+  /** 一个可以展开编辑的文件条目（记忆、配置文件）：左边展开箭头，中间标题，右边附加操作，下面是 `below` 与展开后才挂上的编辑器。 */
+  def fileRow(title: Modifier[HtmlElement], actions: Modifier[HtmlElement] = emptyMod, below: Modifier[HtmlElement] = emptyMod)(
+      editor: => HtmlElement
+  ): HtmlElement =
+    val open = Var(false)
+    Ui.card(
+      div(
+        cls := "card__content flex flex-col gap-2",
+        div(
+          cls := "flex flex-row items-center gap-3",
+          Ui.iconBtn("ChevronRight", "编辑")(
+            aria.expanded <-- open.signal,
+            cls <-- open.signal.map(o => if o then "[&_svg]:rotate-90" else ""),
+            onClick --> (_ => open.update(!_))
+          ),
+          div(cls := "min-w-0 flex-1", title),
+          actions
+        ),
+        below,
+        child.maybe <-- open.signal.map(o => Option.when(o)(editor))
+      )
     )
 
 /** 记忆的编辑：字数提示（上限由服务端配置，超了保存会被拒绝并说明）。 */

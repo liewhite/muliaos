@@ -16,8 +16,7 @@ enum Window(val label: String, val days: Int) extends Shown.Self:
 final case class Totals(requests: Long, input: Long, output: Long, cacheRead: Long, cacheWrite: Long):
   def +(o: Totals): Totals = Totals(requests + o.requests, input + o.input, output + o.output, cacheRead + o.cacheRead, cacheWrite + o.cacheWrite)
 
-  /** 缓存命中比例（整数百分比）；没有输入时为 0。 */
-  def cacheHitPercent: Int = if input == 0 then 0 else math.round(cacheRead.toDouble / input * 100).toInt
+  def cacheHitPercent: Int = Format.cacheHitPercent(input, cacheRead)
 
 object Totals:
   val zero: Totals = Totals(0, 0, 0, 0, 0)
@@ -53,14 +52,6 @@ object Report:
     since.setDate(since.getDate() - (days - 1))
     (since.getTime().toLong, nowMs.toLong)
 
-/** token 数量按千/百万缩写：几十万的数字逐位读没有意义。 */
-object Tokens:
-  def format(n: Long): String =
-    if n >= 1000000 then f"${n / 1e6}%.1fM"
-    else if n >= 10000 then s"${math.round(n / 1000.0)}K"
-    else if n >= 1000 then f"${n / 1e3}%.1fK"
-    else n.toString
-
 object UsagePage:
   def view(): HtmlElement =
     val window = Var(Window.Week)
@@ -77,9 +68,8 @@ object UsagePage:
     )
 
   private def sections(r: Report): List[HtmlElement] = List(
-    div(
-      cls := "card card--default p-0",
-      dataAttr("slot") := "card",
+    Ui.card(
+      cls := "p-0",
       row("合计", r.total),
       div(cls := "border-t border-separator px-4 py-2 text-xs text-muted", s"输入 token 已包含缓存读写；这段时间缓存命中 ${r.total.cacheHitPercent}%")
     ),
@@ -89,7 +79,7 @@ object UsagePage:
   )
 
   private def stat(label: String, value: Long): HtmlElement =
-    div(cls := "flex flex-col", span(cls := "text-[11px] text-muted", label), span(cls := "font-mono text-sm tabular-nums", Tokens.format(value)))
+    div(cls := "flex flex-col", span(cls := "text-[11px] text-muted", label), span(cls := "font-mono text-sm tabular-nums", Format.tokens(value)))
 
   private def row(label: String, t: Totals): HtmlElement =
     div(
@@ -103,9 +93,8 @@ object UsagePage:
     )
 
   private def titled(title: String)(content: HtmlElement): HtmlElement =
-    div(
-      cls := "card card--default p-0",
-      dataAttr("slot") := "card",
+    Ui.card(
+      cls := "p-0",
       div(cls := "border-b border-separator px-4 py-2 text-sm font-medium text-muted", title),
       content
     )
@@ -136,7 +125,7 @@ object UsagePage:
                   div(cls := "h-full bg-accent", styleAttr := s"width:${d.totals.cacheHitPercent}%")
                 )
               ),
-              span(cls := "w-12 shrink-0 text-right font-mono text-[11px] tabular-nums", Tokens.format(d.totals.input))
+              span(cls := "w-12 shrink-0 text-right font-mono text-[11px] tabular-nums", Format.tokens(d.totals.input))
             )
           }
         )

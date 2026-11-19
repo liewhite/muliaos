@@ -17,7 +17,6 @@ object RolesPage:
 
   def view(): HtmlElement =
     val roles      = Remote(ResourcesApi.listRoles)(())
-    val agents     = AgentsData.list
     val candidates = Rules.candidates()
     // 建好一个后换一份空表单
     val formKey = Var(0)
@@ -26,12 +25,12 @@ object RolesPage:
         cls := "text-sm text-muted",
         "角色把工具与 AI 资源（skill、MCP、secret、记忆）的权限打包分给 agent：写 动作:种类:名字（动作 use 用、write 改，可用通配符），禁止优先。base 每个 agent 都有，收录进 base 的人人可用；其余角色在 agent 配置里勾选，从它的下一次运行起生效。新规则至少要匹配一个现有的工具或资源。"
       ),
-      Ui.collapsibleForm("新建角色")(child <-- formKey.signal.map(_ => createForm(candidates, () => formKey.update(_ + 1)))),
+      Ui.collapsibleCard("新建角色")(child <-- formKey.signal.map(_ => createForm(candidates, () => formKey.update(_ + 1)))),
       Ui.loading(roles)(list =>
         div(
           cls := "flex flex-col gap-2",
           child.maybe <-- list.map(l => Option.when(l.isEmpty)(Ui.emptyHint("没有角色"))),
-          children <-- list.splitSeq(_.name)(r => card(r, agents, candidates))
+          children <-- list.splitSeq(_.name)(r => card(r, candidates))
         )
       )
     )
@@ -68,17 +67,16 @@ object RolesPage:
       div(Ui.btn(pending = act.busy.signal)("保存", onClick --> (_ => save())))
     )
 
-  private def secondaryChip(text: String): HtmlElement =
-    span(cls := "chip chip--default chip--sm chip--secondary font-mono", text)
+  private def secondaryChip(text: String): HtmlElement = Ui.chip(text, look = ChipLook.Secondary)(cls := "font-mono")
 
-  private def card(r: StrictSignal[RoleView], agents: Signal[List[AgentSummary]], candidates: Signal[List[String]]): HtmlElement =
+  private def card(r: StrictSignal[RoleView], candidates: Signal[List[String]]): HtmlElement =
     val name    = r.now().name
     val editing = Var(false)
     val act     = new Action
     def remove(): Unit =
       Confirm
         .ask(s"删除角色「${name.value}」？", Some("删掉的角色也从各 agent 身上去掉，它们从下一次运行起失去这些权限。"), "删除", danger = true)
-        .foreach(ok => if ok then act.run(Http.call(ResourcesApi.deleteRole)(name)): Unit)
+        .foreach(ok => if ok then act.fire(Http.call(ResourcesApi.deleteRole)(name)))
     Ui.card(
       div(
         cls := "card__header",
@@ -107,7 +105,7 @@ object RolesPage:
               div(
                 cls := "flex flex-wrap items-center gap-1.5",
                 span(cls := "text-muted", s"匹配到（${ms.size}）"),
-                ms.map(m => span(cls := "chip chip--default chip--sm chip--soft font-mono", m))
+                ms.map(m => Ui.chip(m)(cls := "font-mono"))
               )
             )
           ),
@@ -119,15 +117,10 @@ object RolesPage:
           div(
             cls := "flex flex-wrap items-center gap-1.5",
             span(cls := "text-muted", "分给"),
-            children <-- r.map(x => (x.name.value, x.members)).combineWith(agents).map {
-              case ("base", _, _) => List(span(cls := "text-muted", "每个 agent"))
-              case (_, Nil, _)    => List(span(cls := "text-muted", "还没有 agent（在 agent 配置里勾选）"))
-              case (_, ms, as) =>
-                ms.map(m =>
-                  as.find(_.name == m) match
-                    case Some(a) => Ui.appLink(Route.agent(a.id).url)(Ui.chip(m.value, Tone.Accent)())
-                    case None    => Ui.chip(m.value, Tone.Accent)()
-                )
+            children <-- r.map(x => (x.name.value, x.members)).map {
+              case ("base", _) => List(span(cls := "text-muted", "每个 agent"))
+              case (_, Nil)    => List(span(cls := "text-muted", "还没有 agent（在 agent 配置里勾选）"))
+              case (_, ms)     => ms.map(m => AgentChip(m.value))
             }
           )
         ),

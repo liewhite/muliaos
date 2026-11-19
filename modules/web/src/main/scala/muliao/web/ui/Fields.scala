@@ -15,7 +15,7 @@ object Opt:
 object Fields:
   private var counter = 0
   /** 页面内唯一的元素编号（label 与控件关联用）。 */
-  private[ui] def nextId(): String =
+  def nextId(): String =
     counter += 1
     s"f$counter"
 
@@ -48,6 +48,21 @@ object Fields:
         placeholder := placeholderText,
         autoFocus := autoFocusOn,
         disabled <-- disabledIf,
+        controlled(Laminar.value <-- value.signal, onInput.mapToValue --> value)
+      )
+    )
+
+  /** 搜索框：左边放大镜，没有可见标签（`labelText` 是读屏名称）。 */
+  def search(labelText: String, value: Var[String], placeholderText: String, focusOnMount: Boolean = false): HtmlElement =
+    div(
+      cls := "relative",
+      Icon("Search", "pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted"),
+      input(
+        tpe := "search",
+        cls := "input input--secondary input--full-width pl-9",
+        aria.label := labelText,
+        placeholder := placeholderText,
+        Option.when(focusOnMount)(onMountFocus),
         controlled(Laminar.value <-- value.signal, onInput.mapToValue --> value)
       )
     )

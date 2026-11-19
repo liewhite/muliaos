@@ -5,8 +5,6 @@ import muliao.contract.*
 import muliao.web.core.*
 import muliao.web.ui.*
 
-import scala.concurrent.Future
-
 import Http.ec
 
 /** agent 的工作历史（只读）：agent 每天自进化时自己写，一件事一条，写了就不能改。 */
@@ -34,7 +32,7 @@ object AgentHistory:
         cls := "flex items-end gap-2",
         onSubmit.preventDefault --> (_ => query.set(input.now().trim)),
         div(cls := "flex-1", Fields.text("关键词（空格分隔，全部出现）", input)),
-        button(tpe := "submit", cls := Ui.buttonCls(Variant.Secondary), Icon("Search"), "搜索")
+        Ui.btn(Variant.Secondary)(tpe := "submit", Icon("Search"), "搜索")
       ),
       child <-- query.signal.distinct.map { q =>
         val list = Remote(HistoryApi.list)(HistorySearch(agent = Some(id), q = Option(q).filter(_.nonEmpty), limit = Some(200)))
@@ -66,7 +64,7 @@ object AgentHistory:
           importance(e.importance).map((t, tone) => Ui.chip(t, tone)())
         ),
         p(cls := "whitespace-pre-wrap text-muted", e.summary),
-        Option.when(e.refs.nonEmpty)(div(cls := "flex flex-wrap gap-1", e.refs.map(r => code(cls := "rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs", r)))),
+        Option.when(e.refs.nonEmpty)(div(cls := "flex flex-wrap gap-1", e.refs.map(r => Ui.inlineCode(cls := "text-xs", r)))),
         e.session.map(s => div(Ui.appLink(Route.session(s).url)(cls := "text-xs text-accent", "记下它的会话")))
       )
     )
@@ -108,7 +106,7 @@ object AgentJobs:
     def kill(): Unit =
       Confirm
         .ask(s"结束后台任务「${j.now().label}」？", Some("结束它的整个进程树；结局作为事件回到发起它的会话。"), "结束", danger = true)
-        .foreach(ok => if ok then act.run(Http.call(WorkspaceApi.killJob)(jobId), toast = Some("结束任务")): Unit)
+        .foreach(ok => if ok then act.fire(Http.call(WorkspaceApi.killJob)(jobId), toast = Some("结束任务")))
     Ui.card(
       div(
         cls := "card__content flex flex-col gap-2 text-sm",
@@ -120,7 +118,7 @@ object AgentJobs:
         ),
         div(
           cls := "flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted",
-          span(child.text <-- j.map(x => s"#${x.id.value} · 开始于 ${Ui.formatTime(x.startedAt)}" + x.endedAt.fold("")(e => s" · 结束于 ${Ui.formatTime(e)}"))),
+          span(child.text <-- j.map(x => s"#${x.id.value} · 开始于 ${Format.time(x.startedAt)}" + x.endedAt.fold("")(e => s" · 结束于 ${Format.time(e)}"))),
           Ui.appLink(Route.session(j.now().session).url)(cls := "text-accent", "发起它的会话"),
           span(cls := "font-mono break-all", child.text <-- j.map(_.log))
         ),
@@ -129,23 +127,8 @@ object AgentJobs:
           Ui.btn(Variant.Ghost, Size.Sm)(Icon("ScrollText"), child.text <-- showLog.signal.map(if _ then "收起日志" else "看日志"), onClick --> (_ => showLog.update(!_))),
           child.maybe <-- state.map(s => Option.when(s == State.Running)(Ui.btn(Variant.DangerSoft, Size.Sm, pending = act.busy.signal)(Icon("Square"), "结束", onClick --> (_ => kill()))))
         ),
-        child.maybe <-- showLog.signal.map(on => Option.when(on)(log(jobId, state)))
+        child.maybe <-- showLog.signal.map(on =>
+          Option.when(on)(JobLog.view(jobId, 200, child.maybe <-- state.map(s => Option.when(s == State.Running)(span("（运行中）")))))
+        )
       )
     )
-
-  /** 日志的最后 200 行：随接口声明的主题刷新，也可以手动刷新。 */
-  private def log(id: JobId, state: Signal[State]): HtmlElement =
-    val reload = new EventBus[Unit]
-    val text   = Remote.following(WorkspaceApi.jobLog, reload.events)(fetch(id))
-    div(
-      cls := "flex flex-col gap-1",
-      div(
-        cls := "flex items-center gap-2 text-xs text-muted",
-        span("最后 200 行"),
-        child.maybe <-- state.map(s => Option.when(s == State.Running)(span("（运行中）"))),
-        Ui.btn(Variant.Ghost, Size.Sm)(Icon("RefreshCw"), "刷新", onClick --> (_ => reload.emit(())))
-      ),
-      Ui.loading(text)(t => pre(cls := Ui.CodeBlock, child.text <-- t.map(s => if s.isEmpty then "（还没有输出）" else s)))
-    )
-
-  private def fetch(id: JobId): Future[String] = Http.call(WorkspaceApi.jobLog)((id, Some(200)))

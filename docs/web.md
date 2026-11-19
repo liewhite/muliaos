@@ -12,8 +12,8 @@ Scala.js + Laminar，外观沿用现有 muliao 界面（HeroUI v3 的样式类 +
 ## 结构
 | 包 | 内容 |
 |---|---|
-| `core` | `Http`（调接口的唯一入口，失败归为 `Failure`，401 回登录页；`Http.href(接口)(输入)` 给浏览器自己取的地址：下载、图片、实时连接）、`Auth`（登录状态）、`Live`（实时连接：`Live.frames(contract 里的 Feed)(输入)`，ready/ping、看门狗、后台一分钟断开，事件已解码）、`Events`（全局「数据变了」；`outdated`：重连时 ready 帧带的服务端版本和第一次连上时不同，外壳顶上提示刷新）、`Remote`/`Load`（随主题刷新的远端数据）、`Router`/`Route`（地址与页面，按布局分层：会话分屏、agent 分屏、整页 `Page`；参数是类型化的，`Route.parse`/`url` 互逆，有往返测试）、`Markdown`、`Js` 门面 |
-| `ui` | 组件：`Ui`（按钮、卡片、Chip、页面框架 `page`、折叠、`loading`、时间格式、复制）、`Fields`（输入框、文本域、下拉、分段切换、开关）、`AgentPicker`（所有选 agent 的地方：分组、可搜索，值类型由调用方定，可加「平台」「我」等固定项）、`Dropdown`（上两者共用的下拉壳：按钮、弹层、点外面或 Esc 收起）、`Overlay`（确认弹窗 `Confirm.ask`、`Toast`、模态框、抽屉、底部面板）、`Action`（用户操作：busy、错误、成功后刷新）、`AgentsData`（全站一份的 agent 列表 `all`/`list`，外壳一直订阅着、失败时外壳顶上提示） |
+| `core` | `Http`（调接口的唯一入口，失败归为 `Failure`，401 回登录页；`Http.href(接口)(输入)` 给浏览器自己取的地址：下载、图片、实时连接）、`Auth`（登录状态）、`Live`（实时连接：`Live.frames(contract 里的 Feed)(输入)`，ready/ping、看门狗、后台一分钟断开，事件已解码）、`Events`（全局「数据变了」；`outdated`：重连时 ready 帧带的服务端版本和第一次连上时不同，外壳顶上提示刷新）、`Remote`/`Load`（随主题刷新的远端数据）、`Router`/`Route`（地址与页面，按布局分层：会话分屏、agent 分屏、整页 `Page`；参数是类型化的，`Route.parse`/`url` 互逆，有往返测试）、`Markdown`、`Highlight`（代码高亮）、`Format`（时间、时长、token 缩写、模型名的写法，每种只写一份）、`Clock`（每隔一段时间一跳的当前时刻）、`Js` 门面 |
+| `ui` | 组件：`Ui`（按钮、卡片与可点的列表卡片 `linkCard`、Chip、行内代码、页面框架 `page`、折叠与可折叠卡片 `collapsibleCard`、提示框 `alert`、`loading`、复制）、`Fields`（输入框、搜索框、文本域、下拉、分段切换、开关）、`AgentPicker`（所有选 agent 的地方：分组、可搜索，值类型由调用方定，可加「平台」「我」等固定项）、`Dropdown`（上两者共用的下拉壳：按钮、弹层、点外面或 Esc 收起）、`Dialog`（居中的弹窗，详情与确认共用）、`Overlay`（确认弹窗 `Confirm.ask`、`Toast`、左侧抽屉）、`Fold`（虚线折叠块与展开箭头）、`JobLog`（后台任务日志尾部）、`Action`（用户操作：busy、错误、成功后刷新；不关心结果用 `fire`）、`AgentsData`（全站一份的 agent 列表 `all`/`list`，外壳一直订阅着、失败时外壳顶上提示；按编号/名字取 agent 都走它）与 `AgentChip`（链到详情的 agent 名）、`Owner`（资源归属的平台/agent 名）、`Problems`（没加载的资源文件） |
 | `shell` | 登录页、登录后的外壳（导航、管理菜单、列表+详情分屏、按 Route 选页面） |
 | `pwa` | Service Worker 注册、推送订阅、点通知跳转（SwNavigate）、应用角标 |
 | `pages/<领域>` | 各页面；外壳只调用每页的入口（`XxxPage.view()` 等，见 `shell/Shell.scala`） |

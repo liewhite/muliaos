@@ -31,27 +31,11 @@ final class TranscriptView:
   private def open(key: String): Var[Boolean] = expanded.getOrElseUpdate(key, Var(false))
 
   /** 每秒一跳的当前时间（运行中步骤的计时）。 */
-  private val now: Signal[Double] = EventStream.periodic(1000).map(_ => scala.scalajs.js.Date.now()).toSignal(scala.scalajs.js.Date.now())
+  private val now: Signal[Double] = Clock.every(1000)
 
-  /** 虚线框、默认收起的一块；`lead` 放在展开按钮之前、自己可以点（如指向 thread 的链接）。 */
+  /** 虚线折叠块，展开状态按条目的键记在页面里。 */
   private def collapsible(key: String, title: Modifier[HtmlElement], lead: Modifier[HtmlElement] = emptyMod, extra: String = "max-w-[88%] self-start")(body: => Modifier[HtmlElement]): HtmlElement =
-    val o = open(key)
-    div(
-      cls := s"rounded-xl border border-dashed border-separator px-3 py-1.5 text-sm text-muted $extra",
-      div(
-        cls := "flex items-center gap-2",
-        lead,
-        button(
-          tpe := "button",
-          cls := "flex min-w-0 flex-1 items-center gap-2 text-left",
-          aria.expanded <-- o.signal,
-          onClick --> (_ => o.update(!_)),
-          title,
-          child <-- o.signal.map(x => Icon("ChevronDown", "size-4 shrink-0 transition-transform " + (if x then "rotate-180" else "")))
-        )
-      ),
-      child.maybe <-- o.signal.map(x => Option.when(x)(div(cls := "pt-1", body)))
-    )
+    Fold.dashed(open(key), title, lead, extra)(body)
 
   // ---- 工具调用 ----
 
@@ -153,7 +137,7 @@ final class TranscriptView:
         case _                      => "thread"),
       span(cls := "truncate text-muted", t.agentName),
       Option.when(t.unread)(span(cls := "size-2 shrink-0 rounded-full bg-accent", aria.label := "未读")),
-      span(cls := "ml-auto shrink-0 text-xs text-muted", Ui.formatTime(t.updatedAt))
+      span(cls := "ml-auto shrink-0 text-xs text-muted", Format.time(t.updatedAt))
     )
 
   /** 连续的工具调用收成一组，默认折叠；标题汇总步骤数与状态。交给用户的文件、开出的 thread 是成果，显示在组下方。 */
@@ -260,7 +244,7 @@ final class TranscriptView:
   private def approvalBlock(entry: Long, c: CallView, ctx: TranscriptCtx): HtmlElement =
     val pendingNow = c.state == CallState.Suspended
     val action     = new Action
-    def decide(ok: Boolean, always: Boolean): Unit = action.run(ctx.answer(entry, c.id, AnswerIn(approved = Some(ok), always = always))): Unit
+    def decide(ok: Boolean, always: Boolean): Unit = action.fire(ctx.answer(entry, c.id, AnswerIn(approved = Some(ok), always = always)))
     val stateText = c.state match
       case CallState.Suspended      => "这次调用要你批准才执行"
       case CallState.Approved       => "已批准"
@@ -320,9 +304,9 @@ final class TranscriptView:
     case Block.CheckIns(k, checks) =>
       collapsible(
         key,
-        span(cls := "truncate", s"仍在进行 · 已检查 ${checks.size} 次 · 最近 ${Ui.formatTime(checks.last._2)}"),
+        span(cls := "truncate", s"仍在进行 · 已检查 ${checks.size} 次 · 最近 ${Format.time(checks.last._2)}"),
         lead = Seq(Icon("BellDot", "size-3.5 shrink-0"), span(cls := "shrink-0 text-foreground", eventKind(k)))
-      )(div(cls := "flex flex-col gap-2", checks.map((t, at) => div(cls := "flex flex-col gap-1", span(cls := "text-xs", Ui.formatTime(at)), pre(cls := Ui.CodeBlock, t)))))
+      )(div(cls := "flex flex-col gap-2", checks.map((t, at) => div(cls := "flex flex-col gap-1", span(cls := "text-xs", Format.time(at)), pre(cls := Ui.CodeBlock, t)))))
     case Block.Assistant(text) =>
       div(cls := "max-w-[88%] self-start rounded-2xl rounded-bl-md bg-surface px-3.5 py-2.5 shadow-sm", Markdown.view(text))
     case Block.Process(steps)        => process(key, steps, live, ctx)
@@ -336,15 +320,15 @@ final class TranscriptView:
           tpe := "button",
           cls := "flex w-full items-center justify-center gap-2",
           onClick --> (_ => o.update(!_)),
-          s"以上内容已压缩 · ${Ui.formatTime(at)}",
-          child <-- o.signal.map(x => Icon("ChevronDown", "size-4 transition-transform " + (if x then "rotate-180" else "")))
+          s"以上内容已压缩 · ${Format.time(at)}",
+          Fold.chevron(o.signal)
         ),
         child.maybe <-- o.signal.map(x => Option.when(x)(div(cls := "pt-2 text-foreground", Markdown.view(summary))))
       )
     case Block.Notice(kind, text, at) =>
       kind match
         case NoticeKind.Stopped => note("CircleStop", if text.isEmpty then "已停止" else text)
-        case NoticeKind.Failed  => div(cls := "flex flex-col gap-1 self-stretch rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground", div(s"运行失败了（${Ui.formatTime(at)}）"), pre(cls := Ui.CodeBlock, text))
+        case NoticeKind.Failed  => div(cls := "flex flex-col gap-1 self-stretch rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground", div(s"运行失败了（${Format.time(at)}）"), pre(cls := Ui.CodeBlock, text))
         case NoticeKind.Info    => note("Info", text)
     case Block.Interrupted => note("CircleStop", "已停止（生成到一半）")
 

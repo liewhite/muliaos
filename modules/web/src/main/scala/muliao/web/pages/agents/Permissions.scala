@@ -37,8 +37,6 @@ object Rules:
         case rules => Http.stream(Http.call(ResourcesApi.checkRules)(RulesRequest(rules))).collect { case scala.util.Success(cs) => cs.map(c => c.rule -> c).toMap }.toSignal(Map.empty)
       }
 
-  private var counter = 0
-
   /** 一组规则：已有的是可删的标签（带校验结果），输入框从候选里补全，也可以直接写通配符，回车加入。
     * @param showMatches 每条下面列出它匹配到的工具与资源（角色页）；否则只在标签上标出错与没匹配到
     */
@@ -50,8 +48,7 @@ object Rules:
       candidates: Signal[List[String]],
       showMatches: Boolean = false
   ): HtmlElement =
-    counter += 1
-    val listId = s"rules-$counter"
+    val listId = Fields.nextId()
     val text   = Var("")
     val current = Var(List.empty[String])
     def add(): Unit =
@@ -181,7 +178,7 @@ object Grants:
       div(
         cls := "flex flex-wrap items-center gap-1.5",
         span(cls := "me-1 font-mono text-sm font-medium", child.text <-- g.map(_.name)),
-        child.maybe <-- g.map(_.owner.map(o => Ui.chip(if o == "platform" then "平台" else o, if o == "platform" then Tone.Default else Tone.Accent)()))
+        child.maybe <-- g.map(_.owner.map(o => Ui.chip(Owner.label(o), if o == Owner.Platform then Tone.Default else Tone.Accent)()))
       ),
       div(cls := "text-xs text-muted", "用：", child.text <-- g.map(_.use)),
       child.maybe <-- g.map(_.write.map(w => div(cls := "text-xs text-warning", s"改：$w")))
@@ -222,9 +219,9 @@ object PermissionsInput:
               Fields.switch(
                 name,
                 value.map(_.roles.contains(role)),
-                on => onChange(v => v.copy(roles = if on then (v.roles :+ role).distinct else v.roles.filterNot(_ == role)))
+                on => onChange(v => v.copy(roles = if on then (v.roles :+ role).distinct else v.roles.filterNot(_ == role))),
+                showLabel = true
               ),
-              span(cls := "font-mono", name),
               span(cls := "truncate text-xs text-muted", child.text <-- r.map(_.description))
             )
           )

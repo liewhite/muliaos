@@ -94,21 +94,21 @@ object AgentDetail:
           "删除",
           danger = true
         )
-        .foreach(ok => if ok then act.run(Http.call(ResourcesApi.deleteAgent)(id), leave = Some(() => Router.go(Route.agents))): Unit)
+        .foreach(ok => if ok then act.fire(Http.call(ResourcesApi.deleteAgent)(id), leave = Some(() => Router.go(Route.agents))))
 
     div(
       cls := "flex flex-col gap-3",
       d --> (x => now.set(Some(x))),
       Ui.errorAlert(d.map(_.profileError), "配置未加载，不能运行"),
       Ui.errorAlert(d.map(_.accessBroken), "权限文件 access.toml 写坏了（沿用上一份有效的）"),
-      child.maybe <-- d.map(_.problems).map(ps => Option.when(ps.nonEmpty)(problemsView(ps))),
+      child.maybe <-- d.map(_.problems).map(ps => Option.when(ps.nonEmpty)(Problems.alert(ps))),
       Ui.card(
         div(
           cls := "card__content flex flex-col gap-2 text-sm",
           div(
             cls := "flex flex-wrap items-center gap-2",
             span(cls := "text-muted", "编号"),
-            code(cls := "select-all rounded bg-surface-secondary px-1.5 py-0.5 font-mono", id.value),
+            Ui.inlineCode(cls := "select-all", id.value),
             Ui.btn(Variant.Ghost, Size.Sm)(Icon("Copy"), "复制", onClick --> (_ => Ui.copyText(id.value, "编号")))
           ),
           div(
@@ -157,44 +157,21 @@ object AgentDetail:
       val act = new Action
       def save(): Unit =
         act
-          .run(Http.call(ResourcesApi.updateAgent)((id, AgentForm.patch(draft))).map { saved =>
+          .fire(Http.call(ResourcesApi.updateAgent)((id, AgentForm.patch(draft))).map { saved =>
             draft.saved(AgentForm.of(saved))
             Toast.success("已保存")
           })
-          .foreach(_ => ())
       div(
         cls := "flex flex-col gap-4",
         AgentForm.fields(Some(id), draft.value),
         act.errorView(),
         div(
           cls := "flex flex-wrap gap-2",
-          button(
-            tpe := "button",
-            cls := Ui.buttonCls(),
-            disabled <-- draft.dirty.combineWith(act.busy.signal).map((dirty, b) => !dirty || b),
-            child.maybe <-- act.busy.signal.map(b => Option.when(b)(Ui.spinner("spinner--sm spinner--current"))),
-            "保存",
-            onClick --> (_ => save())
-          ),
+          Ui.btn(pending = act.busy.signal, disabledIf = draft.dirty.map(!_))("保存", onClick --> (_ => save())),
           child.maybe <-- draft.dirty.map(dirty => Option.when(dirty)(Ui.btn(Variant.Ghost)("放弃修改", onClick --> (_ => draft.discard()))))
         )
       )
     }
-
-  def problemsView(ps: List[ProblemView]): HtmlElement =
-    div(
-      cls := "alert alert--warning",
-      role := "alert",
-      div(cls := "alert__indicator", Icon("TriangleAlert", "size-5")),
-      div(
-        cls := "alert__content",
-        div(cls := "alert__title", s"有 ${ps.size} 个资源文件没加载"),
-        div(
-          cls := "alert__description flex flex-col gap-1",
-          ps.map(p => div(span(cls := "font-mono break-all", p.path), "：", p.reason))
-        )
-      )
-    )
 
   // ---- 资源 ----
 

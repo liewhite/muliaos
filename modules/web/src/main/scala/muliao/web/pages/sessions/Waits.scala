@@ -18,47 +18,30 @@ object Waits:
     Option(dom.document.getElementById(id)).foreach(_.asInstanceOf[js.Dynamic].scrollIntoView(js.Dynamic.literal(behavior = "smooth")))
 
   /** 已经等了多久 / 还有多久到点。 */
-  private def since(createdAt: Long, now: Double): String = s"已等 ${Model.formatDuration((now - createdAt).max(0), whole = true)}"
+  private def since(createdAt: Long, now: Double): String = s"已等 ${Format.duration((now - createdAt).max(0), whole = true)}"
   private def until(due: Long, now: Double): String =
-    if due <= now then "就要到了" else s"${Model.formatDuration(due - now, whole = true)} 后（${Ui.formatTime(due)}）"
+    if due <= now then "就要到了" else s"${Format.duration(due - now, whole = true)} 后（${Format.time(due)}）"
 
   private def row(mods: Modifier[HtmlElement]*): HtmlElement = div(cls := "flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5", mods)
 
   /** 一个后台任务：命令说明、日志最后几行（展开时取）、结束任务。 */
   private def job(w: WaitItem, id: JobId, now: Signal[Double], action: Action): HtmlElement =
-    val open = Var(false)
-    div(
-      cls := "rounded-xl border border-dashed border-separator px-3 py-1.5",
-      div(
-        cls := "flex items-center gap-2",
-        Icon("SquareTerminal", "size-3.5 shrink-0"),
-        button(
-          tpe := "button",
-          cls := "flex min-w-0 flex-1 items-center gap-2 text-left",
-          onClick --> (_ => open.update(!_)),
-          span(cls := "truncate font-mono text-foreground", w.label),
-          span(cls := "shrink-0 text-muted", child.text <-- now.map(since(w.createdAt, _))),
-          child <-- open.signal.map(o => Icon("ChevronDown", "size-4 shrink-0 transition-transform " + (if o then "rotate-180" else "")))
-        )
+    Fold.dashed(
+      Var(false),
+      Seq[Modifier[HtmlElement]](
+        span(cls := "truncate font-mono text-foreground", w.label),
+        span(cls := "shrink-0", child.text <-- now.map(since(w.createdAt, _)))
       ),
-      child.maybe <-- open.signal.map(o =>
-        Option.when(o)(
-          div(
-            cls := "flex flex-col gap-2 pt-1",
-            {
-              val log = Remote(WorkspaceApi.jobLog)((id, Some(40)))
-              Seq[Modifier[HtmlElement]](
-                div(cls := "text-xs text-muted", "日志最后几行："),
-                Ui.loading(log)(l => pre(cls := Ui.CodeBlock, child.text <-- l.map(t => if t.isEmpty then "（还没有输出）" else t))),
-                Ui.btn(Variant.DangerSoft, Size.Sm, disabledIf = action.busy.signal)(
-                  cls := "self-start",
-                  Icon("Square", "size-3.5"),
-                  "结束任务",
-                  onClick --> (_ => action.fire(Http.call(WorkspaceApi.killJob)(id)))
-                )
-              )
-            }
-          )
+      lead = Icon("SquareTerminal", "size-3.5 shrink-0")
+    )(
+      div(
+        cls := "flex flex-col gap-2",
+        JobLog.view(id, 40),
+        Ui.btn(Variant.DangerSoft, Size.Sm, disabledIf = action.busy.signal)(
+          cls := "self-start",
+          Icon("Square", "size-3.5"),
+          "结束任务",
+          onClick --> (_ => action.fire(Http.call(WorkspaceApi.killJob)(id)))
         )
       )
     )
@@ -114,7 +97,7 @@ object Waits:
       )
 
   def panel(detail: Signal[SessionDetail], action: Action): HtmlElement =
-    val now = EventStream.periodic(1000).map(_ => js.Date.now()).toSignal(js.Date.now())
+    val now = Clock.every(1000)
     div(
       child.maybe <-- detail.map(d => (d.waits, d.pending)).distinct.map { (ws, ps) =>
         Option.when(ws.nonEmpty || ps.nonEmpty)(

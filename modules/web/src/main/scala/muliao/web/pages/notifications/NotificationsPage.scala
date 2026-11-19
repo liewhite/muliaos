@@ -36,9 +36,8 @@ object NotificationsPage:
   private def item(n: NotificationView, seen: Signal[Boolean]): HtmlElement =
     val unread = seen.map(_ || n.unread)
     def body(hover: Boolean) =
-      div(
-        cls := "card card--default" + (if hover then " transition-colors hover:bg-surface-hover" else ""),
-        dataAttr("slot") := "card",
+      Ui.card(
+        Option.when(hover)(cls := "transition-colors hover:bg-surface-hover"),
         div(
           cls := "card__content flex flex-row items-start gap-3",
           div(
@@ -51,7 +50,7 @@ object NotificationsPage:
               span(cls := "truncate", n.title)
             ),
             div(cls := "mt-1 line-clamp-6 whitespace-pre-wrap break-words text-sm text-muted", n.body),
-            div(cls := "mt-1 text-xs text-muted", Ui.formatTime(n.createdAt))
+            div(cls := "mt-1 text-xs text-muted", Format.time(n.createdAt))
           ),
           Option.when(hover)(Icon("ChevronRight", "mt-0.5 size-4 shrink-0 text-muted"))
         )

@@ -1,6 +1,7 @@
 package muliao.web.pages.sessions
 
 import muliao.contract.*
+import muliao.web.core.Format
 
 import scala.scalajs.js
 import scala.util.Try
@@ -176,47 +177,15 @@ object Model:
 
   // ---- 时间 ----
 
-  /** 4.2s、42s、1m23s、1h02m；whole：每秒刷新的计时只到整秒。 */
-  def formatDuration(ms: Double, whole: Boolean = false): String =
-    val s = ms / 1000
-    if s < 10 && !whole then f"$s%.1fs"
-    else if s < 60 then s"${s.toInt}s"
-    else
-      val m = (s / 60).toInt
-      if m < 60 then f"${m}m${(s % 60).toInt}%02ds" else f"${m / 60}h${m % 60}%02dm"
-
-  /** 本地时间 HH:MM:SS；不是今天的前面加上 M-D。 */
-  def formatClock(at: Double, now: Double): String =
-    val d = new js.Date(at)
-    def p(n: Double) = f"${n.toInt}%02d"
-    val time = s"${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}"
-    if new js.Date(now).toDateString() == d.toDateString() then time else s"${d.getMonth().toInt + 1}-${d.getDate().toInt} $time"
-
   /** 一次调用或一组调用的时间：运行中「已运行 1m23s」，结束后「13:05:12 · 4.2s」（组的耗时是各调用耗时之和）。 */
   def spanLabel(calls: List[CallView], running: CallView => Boolean, now: Double): Option[String] =
     val started = calls.flatMap(c => c.startedAt.map(c -> _))
     started.map(_._2).minOption.map { start =>
       val spent = started.map { (c, s) => c.finishedAt.map(f => (f - s).max(0L).toDouble).getOrElse(if running(c) then (now - s).max(0) else 0.0) }.sum
-      if started.exists((c, _) => running(c)) then s"已运行 ${formatDuration(spent, whole = true)}"
-      else if started.exists((c, _) => c.finishedAt.isEmpty) then formatClock(start.toDouble, now)
-      else s"${formatClock(start.toDouble, now)} · ${formatDuration(spent)}"
+      if started.exists((c, _) => running(c)) then s"已运行 ${Format.duration(spent, whole = true)}"
+      else if started.exists((c, _) => c.finishedAt.isEmpty) then Format.clock(start.toDouble, now)
+      else s"${Format.clock(start.toDouble, now)} · ${Format.duration(spent)}"
     }
-
-  // ---- 用量 ----
-
-  /** token 数按千/百万缩写。 */
-  def formatTokens(n: Long): String =
-    if n >= 1000000 then f"${n / 1e6}%.1fM"
-    else if n >= 10000 then s"${math.round(n / 1000.0)}K"
-    else if n >= 1000 then f"${n / 1000.0}%.1fK"
-    else n.toString
-
-  def cacheHitPercent(input: Long, cacheRead: Long): Long = if input == 0 then 0 else math.round(cacheRead * 100.0 / input)
-
-  /** 模型名（去掉服务商前缀）。 */
-  def modelName(m: String): String = m.indexOf(':') match
-    case -1 => m
-    case i  => m.substring(i + 1)
 
   /** 把转写出的文字接到已经输入的内容后面。 */
   def appendTranscript(draft: String, text: String): String =

@@ -21,14 +21,14 @@ object IssueView:
     val remove  = new Action
     def delete(): Unit =
       Confirm.ask(s"删除 #$id？", Some("评论与时间线一起删除，agent 的会话保留。"), "删除", danger = true).foreach { ok =>
-        if ok then remove.run(Http.call(BoardApi.delete)(issueId), toast = Some("删除"), leave = Some(() => Router.go(Route.issues()))): Unit
+        if ok then remove.fire(Http.call(BoardApi.delete)(issueId), toast = Some("删除"), leave = Some(() => Router.go(Route.issues())))
       }
     Ui.page(
       s"#$id",
       back = Some(Route.issues()),
       actions = Seq(
         Ui.iconBtn("Pencil", "编辑", iconCls = "size-4")(onClick --> (_ => editing.set(true))),
-        Ui.iconBtn("Trash2", "删除", iconCls = "size-4")(disabled <-- remove.busy.signal, onClick --> (_ => delete()))
+        Ui.iconBtn("Trash2", "删除", iconCls = "size-4", disabledIf = remove.busy.signal)(onClick --> (_ => delete()))
       )
     )(
       // 看到了 issue 就看到了请你审核它的通知
@@ -44,7 +44,7 @@ object IssueView:
     // 页面上正显示的那份：下拉框选了当前值不提交
     val shown   = Var(Option.empty[IssueSummary])
     def patchIf(same: IssueSummary => Boolean)(p: IssuePatch): Unit =
-      if !shown.now().exists(same) then change.run(Http.call(BoardApi.update)((id, p))): Unit
+      if !shown.now().exists(same) then change.fire(Http.call(BoardApi.update)((id, p)))
     Seq(
       summary --> (s => shown.set(Some(s))),
       // 标题下面先放属性、审核与关联会话（打开页面最常看、最常改的），再放正文；编辑时标题和正文一起在编辑器里
@@ -125,7 +125,7 @@ object IssueView:
         child.maybe <-- summary.map(startable).distinct.map(_.hint.map { hint =>
           span(
             cls := "flex items-center gap-2",
-            Ui.btn(size = Size.Sm, pending = change.busy.signal)(Icon("Play"), "开始", onClick --> (_ => change.run(Http.call(BoardApi.start)(id)): Unit)),
+            Ui.btn(size = Size.Sm, pending = change.busy.signal)(Icon("Play"), "开始", onClick --> (_ => change.fire(Http.call(BoardApi.start)(id)))),
             span(cls := "text-xs text-muted", hint)
           )
         }),
@@ -161,7 +161,7 @@ object IssueView:
         act.errorView(),
         div(
           cls := "flex gap-2",
-          Ui.btn(Variant.Danger, pending = act.busy.signal)("确认叫停", disabled <-- ready.combineWith(act.busy.signal).map((r, b) => !r || b), onClick --> (_ => submit())),
+          Ui.btn(Variant.Danger, pending = act.busy.signal, disabledIf = ready.map(!_))("确认叫停", onClick --> (_ => submit())),
           Ui.btn(Variant.Ghost)("取消", onClick --> (_ => close()))
         )
       )
@@ -226,12 +226,8 @@ object IssueView:
         act.errorView(),
         div(
           cls := "flex gap-2",
-          Ui.btn(pending = act.busy.signal)("通过", onClick --> (_ => act.run(Http.call(BoardApi.approve)(id)): Unit)),
-          Ui.btn(Variant.DangerSoft, pending = act.busy.signal)(
-            "打回",
-            disabled <-- reason.signal.combineWith(act.busy.signal).map((r, b) => r.trim.isEmpty || b),
-            onClick --> (_ => sendBack())
-          )
+          Ui.btn(pending = act.busy.signal)("通过", onClick --> (_ => act.fire(Http.call(BoardApi.approve)(id)))),
+          Ui.btn(Variant.DangerSoft, pending = act.busy.signal, disabledIf = reason.signal.map(_.trim.isEmpty))("打回", onClick --> (_ => sendBack()))
         )
       )
     )
@@ -264,7 +260,7 @@ object IssueView:
                     cls := "flex items-center gap-2 text-xs text-muted",
                     span(cls := "font-medium text-foreground", e.actor),
                     span(e.text),
-                    span(Ui.formatTime(e.at)),
+                    span(Format.time(e.at)),
                     sourceSession(e.session)
                   ),
                   Markdown.view(body)
@@ -277,7 +273,7 @@ object IssueView:
               span(cls := "size-1.5 shrink-0 rounded-full bg-muted", aria.hidden := true),
               span(cls := "font-medium text-foreground", e.actor),
               span(cls := "min-w-0 break-words", e.text),
-              span(cls := "ml-auto shrink-0", Ui.formatTime(e.at)),
+              span(cls := "ml-auto shrink-0", Format.time(e.at)),
               sourceSession(e.session)
             )
       }
@@ -296,11 +292,7 @@ object IssueView:
         Fields.area("评论", text, rowsN = 3, onSubmit = Some(() => post())),
         act.errorView(),
         div(
-          Ui.btn(pending = act.busy.signal)(
-            "发表评论",
-            disabled <-- text.signal.combineWith(act.busy.signal).map((t, b) => t.trim.isEmpty || b),
-            onClick --> (_ => post())
-          )
+          Ui.btn(pending = act.busy.signal, disabledIf = text.signal.map(_.trim.isEmpty))("发表评论", onClick --> (_ => post()))
         )
       )
     )
@@ -332,12 +324,11 @@ object IssueView:
         cls := "card__content flex flex-col gap-3",
         Fields.text("标题", title),
         Fields.area("描述（Markdown）", desc, rowsN = 8),
-        Fields.text("依赖的 issue（编号，逗号分隔；全部完成或取消后才交给被指派的 agent）", deps),
-        child.maybe <-- parsed.map(r => Option.when(r.isEmpty)(p(cls := "text-xs text-danger", "只能填 issue 编号，如 #12, #15"))),
+        depsField("依赖的 issue（编号，逗号分隔；全部完成或取消后才交给被指派的 agent）", deps),
         act.errorView(),
         div(
           cls := "flex gap-2",
-          Ui.btn(pending = act.busy.signal)("保存", disabled <-- ready.combineWith(act.busy.signal).map((r, b) => !r || b), onClick --> (_ => save())),
+          Ui.btn(pending = act.busy.signal, disabledIf = ready.map(!_))("保存", onClick --> (_ => save())),
           Ui.btn(Variant.Ghost)("取消", onClick --> (_ => done()))
         )
       )

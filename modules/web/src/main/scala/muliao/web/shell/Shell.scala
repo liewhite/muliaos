@@ -235,7 +235,7 @@ object Login:
     val action   = new Action
     def submit(): Unit =
       if password.now().nonEmpty then
-        action.run(Auth.login(password.now()), leave = Some(() => Router.update(Route.home))).foreach(_ => ())
+        action.fire(Auth.login(password.now()), leave = Some(() => Router.update(Route.home)))
     div(
       cls := "flex h-full items-center justify-center p-6",
       Ui.card(
@@ -252,13 +252,7 @@ object Login:
             onSubmit.preventDefault --> (_ => submit()),
             Fields.text("密码", password, inputType = "password", autoFocusOn = true),
             action.errorView(),
-            button(
-              tpe := "submit",
-              cls := Ui.buttonCls() + " button--full-width",
-              disabled <-- password.signal.map(_.isEmpty).combineWith(action.busy.signal).map(_ || _),
-              child.maybe <-- action.busy.signal.map(b => Option.when(b)(Ui.spinner("spinner--sm spinner--current"))),
-              "登录"
-            )
+            Ui.btn(pending = action.busy.signal, disabledIf = password.signal.map(_.isEmpty))(tpe := "submit", cls := "button--full-width", "登录")
           )
         )
       )

@@ -60,11 +60,7 @@ object Editors:
     div(
       cls := "flex flex-col gap-2 rounded-xl border border-separator p-3",
       on.signal.combineWith(command.signal, fireWhen.signal, secrets.signal).updates --> ((o, c, f, s) => draft.set(PrecheckDraft(o, c, f, s))),
-      div(
-        cls := "flex items-center gap-2 text-sm",
-        Fields.switch("前置检查", on.signal, on.set),
-        span(cls := "cursor-pointer", onClick --> (_ => on.update(!_)), "前置检查：先跑一条命令，有事才调用 agent")
-      ),
+      Fields.switch("前置检查：先跑一条命令，有事才调用 agent", on.signal, on.set, showLabel = true),
       child.maybe <-- on.signal.map(o =>
         Option.when(o)(
           div(

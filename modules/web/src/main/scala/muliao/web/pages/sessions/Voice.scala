@@ -108,7 +108,7 @@ final class Voice(onText: String => Unit):
 
   private def buttonEl(disabledIf: Signal[Boolean]): HtmlElement =
     val outside  = Var(false)
-    val now      = EventStream.periodic(500).map(_ => js.Date.now()).toSignal(js.Date.now())
+    val now      = Clock.every(500)
     val disabled = disabledIf.combineWith(phase.signal).map((d, p) => d || p == Phase.Transcribing)
     val disabledNow = Var(false)
     def inside(el: dom.Element, e: dom.PointerEvent): Boolean =

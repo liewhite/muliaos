@@ -42,11 +42,6 @@ object IssueModel:
       case Some(Assignee.User)       => Me
       case Some(Assignee.Agent(id))  => Agent(id)
 
-  def assigneeLabel(agents: List[AgentSummary], a: Option[Assignee]): String = a match
-    case None                     => "未指派"
-    case Some(Assignee.User)      => "我"
-    case Some(Assignee.Agent(id)) => agents.find(_.id == id).fold(id.value)(_.name.value)
-
   /** 列表里一条 issue 的指派人名字：接口给的名字（用户显示「我」）。 */
   def assigneeLabel(i: IssueSummary): String = i.assignee match
     case None                => "未指派"
@@ -120,10 +115,6 @@ object IssueModel:
 
   /** 配合 owner-color 类（styles.css）得到 --owner-fg / --owner-bg。 */
   def ownerStyle(hue: Int): String = s"--owner-hue: $hue"
-
-  def ownerLabel(agents: List[AgentSummary], owner: Option[AgentId], name: Option[String] = None): String = owner match
-    case None    => "无负责项目"
-    case Some(o) => agents.find(_.id == o).map(_.name.value).orElse(name).getOrElse(o.value)
 
   // ---- 筛选（地址查询参数，见 Route） ----
 

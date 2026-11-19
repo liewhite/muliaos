@@ -33,6 +33,11 @@ enum Tone(val name: String):
   case Warning extends Tone("warning")
   case Danger  extends Tone("danger")
 
+/** Chip 的底色：按状态色的浅底，或中性的灰底（标签、分类）。 */
+enum ChipLook(val cls: String):
+  case Soft      extends ChipLook("chip--soft")
+  case Secondary extends ChipLook("chip--secondary")
+
 object Ui:
   /** 代码/日志块的统一样式。 */
   val CodeBlock = "my-1 max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-surface-secondary p-2 font-mono text-xs text-foreground"
@@ -100,12 +105,27 @@ object Ui:
   def card(mods: Modifier[HtmlElement]*): HtmlElement =
     div(cls := "card card--default", dataAttr("slot") := "card", mods)
 
-  def chip(text: String, tone: Tone = Tone.Default, soft: Boolean = true, size: Size = Size.Sm)(mods: Modifier[HtmlElement]*): HtmlElement =
+  /** 整张可点、打开详情的列表卡片；`active`（右侧正打开的就是它）时加强调色环。 */
+  def linkCard(url: String, active: Signal[Boolean])(mods: Modifier[HtmlElement]*): Anchor =
+    appLink(url, withFrom = false)(
+      cls := "block",
+      card(
+        cls := "transition-colors hover:bg-surface-hover",
+        cls <-- active.map(on => if on then "ring-2 ring-accent" else ""),
+        mods
+      )
+    )
+
+  def chip(text: String, tone: Tone = Tone.Default, look: ChipLook = ChipLook.Soft, size: Size = Size.Sm)(mods: Modifier[HtmlElement]*): HtmlElement =
     span(
-      cls := s"chip chip--${tone.name} chip--${size.suffix}" + (if soft then " chip--soft" else ""),
+      cls := s"chip chip--${tone.name} chip--${size.suffix} ${look.cls}",
       span(cls := "chip__label", text),
       mods
     )
+
+  /** 行内的一小段代码（编号、cron、引用）：灰底等宽字。 */
+  def inlineCode(mods: Modifier[HtmlElement]*): HtmlElement =
+    code(cls := "rounded bg-surface-secondary px-1.5 py-0.5 font-mono", mods)
 
   // ---- 页面布局 ----
 
@@ -195,19 +215,23 @@ object Ui:
       span(cls := "chip chip--default chip--sm chip--soft", span(cls := "chip__label", child.text <-- count.map(_.toString)))
     )(body)
 
-  /** 卡片里可折叠的「新建 xxx」表单。 */
-  def collapsibleForm(title: String, expanded: Var[Boolean] = Var(false))(body: => Modifier[HtmlElement]): HtmlElement =
-    card(disclosure(expanded, "flex w-full items-center gap-2 px-1 font-medium", "flex flex-col gap-4 pt-4")(Icon("Plus"), title)(body))
+  /** 可折叠的一张卡片（「新建 xxx」表单、「已结束」的列表）：默认收起，内容展开时才挂上。 */
+  def collapsibleCard(title: String, icon: String = "Plus")(body: => Modifier[HtmlElement]): HtmlElement =
+    card(disclosure(Var(false), "flex w-full items-center gap-2 px-1 font-medium", "flex flex-col gap-4 pt-4")(Icon(icon), title)(body))
 
   // ---- 状态展示 ----
 
-  def errorAlert(title: String, message: String): HtmlElement =
+  /** 提示框：图标、标题、说明。 */
+  def alert(tone: Tone, icon: String, title: String)(description: Modifier[HtmlElement]*): HtmlElement =
     div(
-      cls := "alert alert--danger",
+      cls := s"alert alert--${tone.name}",
       role := "alert",
-      div(cls := "alert__indicator", Icon("CircleAlert", "size-5")),
-      div(cls := "alert__content", div(cls := "alert__title", title), div(cls := "alert__description whitespace-pre-wrap break-words", message))
+      div(cls := "alert__indicator", Icon(icon, "size-5")),
+      div(cls := "alert__content", div(cls := "alert__title", title), div(cls := "alert__description", description))
     )
+
+  def errorAlert(title: String, message: String): HtmlElement =
+    alert(Tone.Danger, "CircleAlert", title)(cls := "whitespace-pre-wrap break-words", message)
 
   def errorAlert(error: Signal[Option[String]], title: String = "出错了"): Modifier[HtmlElement] =
     child.maybe <-- error.map(_.map(errorAlert(title, _)))
@@ -235,19 +259,6 @@ object Ui:
 
   /** 任意 HTML 属性（字符串值）。 */
   def attr(name: String): HtmlAttr[String] = htmlAttr(name, com.raquo.laminar.codecs.Codec.stringAsIs)
-
-  // ---- 时间 ----
-
-  private val dateFormat = js.Dynamic.newInstance(js.Dynamic.global.Intl.DateTimeFormat)(js.undefined, js.Dynamic.literal(month = "numeric", day = "numeric", hour = "2-digit", minute = "2-digit"))
-
-  def formatTime(ms: Long): String = dateFormat.format(new js.Date(ms.toDouble)).asInstanceOf[String]
-
-  def relativeTime(ms: Long): String =
-    val diff = (js.Date.now() - ms) / 1000
-    if diff < 60 then "刚刚"
-    else if diff < 3600 then s"${(diff / 60).toInt} 分钟前"
-    else if diff < 86400 then s"${(diff / 3600).toInt} 小时前"
-    else formatTime(ms)
 
   /** 复制到剪贴板。剪贴板只在 HTTPS 等安全上下文可用；不可用时如实报错。 */
   def copyText(text: String, what: String): Unit =

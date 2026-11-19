@@ -103,9 +103,7 @@ object Markdown:
           code = ((token: js.Dynamic) =>
             val code = token.text.asInstanceOf[String]
             val lang = token.lang.asInstanceOf[js.UndefOr[String]].toOption.map(_.trim.split("\\s+").head).filter(_.nonEmpty)
-            val html = lang.filter(l => Hljs.getLanguage(l).isDefined) match
-              case Some(l) => Hljs.highlight(code, js.Dynamic.literal(language = l)).value.asInstanceOf[String]
-              case None    => escape(code)
+            val html = lang.flatMap(Highlight.html(code, _)).getOrElse(escape(code))
             s"""<pre><code class="hljs">$html</code></pre>"""
           ): js.Function1[js.Dynamic, String]
         )

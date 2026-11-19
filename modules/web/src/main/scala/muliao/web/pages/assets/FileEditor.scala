@@ -63,7 +63,7 @@ object FileEditor:
       Ui.errorAlert(error.signal, "保存失败"),
       div(
         cls := "flex flex-wrap gap-2",
-        AssetUi.submit(saveLabel, busy.signal, draft.dirty)(onClick --> (_ => save())),
+        Ui.btn(pending = busy.signal, disabledIf = draft.dirty.map(!_))(saveLabel, onClick --> (_ => save())),
         child.maybe <-- draft.dirty.map(d =>
           Option.when(d)(Ui.btn(Variant.Ghost)("放弃修改", onClick --> { _ => draft.discard(); error.set(None) }))
         ),

@@ -1,7 +1,7 @@
 package muliao.web.pages.sessions
 
 import muliao.contract.*
-import muliao.web.core.MathText
+import muliao.web.core.{Format, MathText}
 import zio.test.*
 
 import Model.*
@@ -66,10 +66,10 @@ object SessionModelSpec extends ZIOSpecDefault:
     },
     test("token 缩写与转写拼接") {
       assertTrue(
-        formatTokens(999) == "999",
-        formatTokens(1500) == "1.5K",
-        formatTokens(23456) == "23K",
-        formatTokens(2300000) == "2.3M",
+        Format.tokens(999) == "999",
+        Format.tokens(1500) == "1.5K",
+        Format.tokens(23456) == "23K",
+        Format.tokens(2300000) == "2.3M",
         appendTranscript("你好  ", "世界") == "你好 世界",
         appendTranscript("", "世界") == "世界"
       )

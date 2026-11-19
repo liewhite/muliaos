@@ -39,43 +39,37 @@ object SessionList:
 
   /** 一张会话卡片；`withAgent` 时（置顶区）带上 agent 名与它现在配置的模型。 */
   private def card(id: SessionId, s: Signal[SessionSummary], withAgent: Boolean, models: Signal[Map[AgentId, String]]): HtmlElement =
-    Ui.appLink(Route.session(id).url, withFrom = false)(
-      cls := "block",
+    Ui.linkCard(Route.session(id).url, Router.location.map(_.route.contains(Route.session(id))))(
+      cls <-- s.map(x => stateCard(x.state)),
       div(
-        cls <-- s.combineWith(Router.location).map((x, l) =>
-          s"card card--default transition-colors hover:bg-surface-hover ${stateCard(x.state)} " +
-            (if l.route.contains(Route.session(id)) then "ring-2 ring-accent" else "")
-        ),
+        cls := "card__content flex flex-row items-center gap-3",
         div(
-          cls := "card__content flex flex-row items-center gap-3",
+          cls := "min-w-0 flex-1",
           div(
-            cls := "min-w-0 flex-1",
-            div(
-              cls := "flex items-center gap-2 font-medium",
-              child.maybe <-- s.map(x =>
-                x.state match
-                  case WorkState.Running => Some(Ui.spinner("spinner--sm spinner--accent"))
-                  case WorkState.Waiting => Some(span(aria.label := "等待中", Icon("Hourglass", "size-4 shrink-0 text-muted")))
-                  case WorkState.Idle    => None
-              ),
-              child.maybe <-- s.map(x => Option.when(x.unread)(span(cls := "size-2 shrink-0 rounded-full bg-accent", aria.label := "未读"))),
-              span(cls := "truncate", child.text <-- s.map(_.title))
+            cls := "flex items-center gap-2 font-medium",
+            child.maybe <-- s.map(x =>
+              x.state match
+                case WorkState.Running => Some(Ui.spinner("spinner--sm spinner--accent"))
+                case WorkState.Waiting => Some(span(aria.label := "等待中", Icon("Hourglass", "size-4 shrink-0 text-muted")))
+                case WorkState.Idle    => None
             ),
-            div(
-              cls := "mt-1 flex flex-wrap gap-1.5",
-              children <-- s.combineWith(models).map { (x, ms) =>
-                (Option.when(withAgent)(x.agentName).toList ++ Option.when(withAgent)(ms.get(x.agent)).flatten.toList ++ List(originTag(x.origin.kind)))
-                  .map(t => Ui.chip(t, soft = false)(cls := "chip--secondary")) ++
-                  (x.state match
-                    case WorkState.Running => List(Ui.chip("运行中", Tone.Accent)())
-                    case WorkState.Waiting => List(Ui.chip("等待中")())
-                    case WorkState.Idle    => Nil
-                  )
-              }
-            )
+            child.maybe <-- s.map(x => Option.when(x.unread)(span(cls := "size-2 shrink-0 rounded-full bg-accent", aria.label := "未读"))),
+            span(cls := "truncate", child.text <-- s.map(_.title))
           ),
-          span(cls := "shrink-0 text-xs text-muted", child.text <-- s.map(x => Ui.relativeTime(x.updatedAt)))
-        )
+          div(
+            cls := "mt-1 flex flex-wrap gap-1.5",
+            children <-- s.combineWith(models).map { (x, ms) =>
+              (Option.when(withAgent)(x.agentName).toList ++ Option.when(withAgent)(ms.get(x.agent)).flatten.toList ++ List(originTag(x.origin.kind)))
+                .map(t => Ui.chip(t, look = ChipLook.Secondary)()) ++
+                (x.state match
+                  case WorkState.Running => List(Ui.chip("运行中", Tone.Accent)())
+                  case WorkState.Waiting => List(Ui.chip("等待中")())
+                  case WorkState.Idle    => Nil
+                )
+            }
+          )
+        ),
+        span(cls := "shrink-0 text-xs text-muted", child.text <-- s.map(x => Format.relative(x.updatedAt)))
       )
     )
 
@@ -87,7 +81,7 @@ object SessionList:
     val query = filter.signal.combineWith(keyword).distinct
     val shown = Var(Option.empty[((Filter, String), Int)])
     def countOf(q: (Filter, String)): Int = shown.now().collect { case (`q`, n) => n }.getOrElse(PageSize)
-    val models = AgentsData.list.map(_.flatMap(a => a.model.map(m => a.id -> modelName(m))).toMap)
+    val models = AgentsData.list.map(_.flatMap(a => a.model.map(m => a.id -> Format.modelName(m))).toMap)
     val sessions: Signal[Load[List[SessionSummary]]] =
       query.flatMapSwitch { q =>
         val more = shown.signal.updates.collect { case Some((`q`, _)) => () }
@@ -100,17 +94,7 @@ object SessionList:
     }
     Ui.page("会话")(
       Fields.segmented("会话分类", filter.signal, filter.set, Filter.values.toList),
-      div(
-        cls := "relative",
-        Icon("Search", "pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted"),
-        input(
-          tpe := "search",
-          cls := "input input--secondary input--full-width pl-9",
-          aria.label := "搜索会话",
-          placeholder := "搜索标题或消息内容",
-          controlled(value <-- text.signal, onInput.mapToValue --> text)
-        )
-      ),
+      Fields.search("搜索会话", text, "搜索标题或消息内容"),
       Ui.loading(sessions) { data =>
         val split = data.map(splitActive)
         div(

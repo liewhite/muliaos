@@ -41,7 +41,7 @@ object SkillEditor:
 
   private def create(): HtmlElement =
     val agents  = AgentsData.list
-    val owner   = Var(AssetUi.Platform)
+    val owner   = Var(Owner.Platform)
     val name    = Var("")
     val content = Var(template("名字"))
     // 正文没动过时跟着名字更新模板
@@ -50,13 +50,12 @@ object SkillEditor:
     def save(): Unit =
       val (o, n) = (owner.now(), name.now().trim)
       act
-        .run(
+        .fire(
           Http.call(ResourcesApi.writeAssetFile)(AssetFileWrite(mainPath(o, n), content.now(), None)).map { _ =>
             Toast.success("skill 已保存")
             Router.update(Route.skill(Some(SkillRef(SkillName.wrap(n), Some(o)))))
           }
         )
-        .foreach(_ => ())
     Ui.page("新建 skill", back = Some(Route.assets()))(
       Ui.card(
         div(
@@ -69,7 +68,7 @@ object SkillEditor:
             Fields.area("SKILL.md", content, hint = Some("开头 --- 包起来的 frontmatter 里 description 必填：何时使用这个 skill"), rowsN = 18, mono = true)
           ),
           act.errorView(),
-          div(AssetUi.submit("保存", act.busy.signal, name.signal.map(_.trim.nonEmpty))(onClick --> (_ => save())))
+          div(Ui.btn(pending = act.busy.signal, disabledIf = name.signal.map(_.trim.isEmpty))("保存", onClick --> (_ => save())))
         )
       )
     )
@@ -94,13 +93,13 @@ object SkillEditor:
     def remove(): Unit =
       Confirm
         .ask(s"删除 skill「$name」？", Some("整个 skill 目录（含附件）都会删除；用它的 agent 从下一次运行起就没有它了。"), "删除", danger = true)
-        .foreach(ok => if ok then act.run(Http.call(ResourcesApi.deleteAsset)((AssetKind.Skill, name)), leave = Some(() => Router.go(SkillsUrl))): Unit)
+        .foreach(ok => if ok then act.fire(Http.call(ResourcesApi.deleteAsset)((AssetKind.Skill, name)), leave = Some(() => Router.go(SkillsUrl))))
     div(
       cls := "flex flex-col gap-4",
       Ui.card(
         div(
           cls := "card__content flex flex-col gap-4",
-          div(cls := "text-sm text-muted", s"归属：${AssetUi.ownerLabel(owner)}"),
+          div(cls := "text-sm text-muted", s"归属：${Owner.label(owner)}"),
           FileEditor.view(
             mainPath(owner, name),
             "SKILL.md",

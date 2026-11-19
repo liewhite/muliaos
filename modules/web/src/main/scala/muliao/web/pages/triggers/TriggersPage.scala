@@ -67,15 +67,15 @@ object Card:
       ),
       div(
         cls := "pointer-events-none flex min-w-0 flex-col gap-1.5",
-        code(cls := "truncate font-mono text-xs text-muted", child.text <-- t.map(Show.summary(_, Ui.formatTime))),
+        code(cls := "truncate font-mono text-xs text-muted", child.text <-- t.map(Show.summary(_, Format.time))),
         child.maybe <-- t.map(_.precheck.map(p => div(cls := "truncate text-xs text-muted", "前置检查：", code(cls := "font-mono", p.command)))),
         p(cls := "line-clamp-3 whitespace-pre-wrap break-words text-sm", child.text <-- t.map(_.prompt)),
         div(
           cls := "text-xs text-muted",
           child.text <-- t.map(x =>
             x.finishedAt
-              .map(f => s"完成 ${Ui.formatTime(f)}")
-              .orElse(x.lastFiredAt.map(l => s"上次触发 ${Ui.formatTime(l)}"))
+              .map(f => s"完成 ${Format.time(f)}")
+              .orElse(x.lastFiredAt.map(l => s"上次触发 ${Format.time(l)}"))
               .getOrElse("还没有触发过")
           )
         )
@@ -91,7 +91,7 @@ object EnableSwitch:
         Fields.switch(
           s"启用触发器「$name」",
           t.map(_.enabled),
-          on => act.run(Http.call(TriggersApi.update)((id, TriggerPatch(enabled = Some(on)))), toast = Some(s"${if on then "启用" else "停用"}「$name」")).foreach(_ => ()),
+          on => act.fire(Http.call(TriggersApi.update)((id, TriggerPatch(enabled = Some(on)))), toast = Some(s"${if on then "启用" else "停用"}「$name」")),
           disabledIf = act.busy.signal
         )
       }
@@ -135,7 +135,7 @@ object Detail:
             child <-- t.map(x => Ui.chip(x.config.kind.title)()),
             child <-- t.map(x => Ui.chip(x.agentName, Tone.Accent)()),
             child <-- t.map(kindStatus),
-            child.maybe <-- t.map(_.finishedAt.map(f => span(s"· 完成 ${Ui.formatTime(f)}")))
+            child.maybe <-- t.map(_.finishedAt.map(f => span(s"· 完成 ${Format.time(f)}")))
           )
         ),
         child.maybe <-- finished.map(f => Option.when(!f)(EnableSwitch.view(t)))
@@ -151,17 +151,17 @@ object Detail:
   private def kindStatus(t: TriggerView): HtmlElement = t.config match
     case TriggerConfig.Schedule(cron) =>
       span(
-        code(cls := "rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs", cron),
-        t.nextAt.map(n => s" · 下次 ${Ui.formatTime(n)}"),
+        Ui.inlineCode(cls := "text-xs", cron),
+        t.nextAt.map(n => s" · 下次 ${Format.time(n)}"),
         Option.when(t.skipped > 0)(span(cls := "text-warning", s" · 已连续跳过 ${t.skipped} 次：上次的会话还没做完"))
       )
-    case TriggerConfig.Once(_) => span(s"计划 ${Show.planned(t, Ui.formatTime)}")
+    case TriggerConfig.Once(_) => span(s"计划 ${Show.planned(t, Format.time)}")
     case TriggerConfig.Stream(command, _, _) =>
       span(
         cls := "flex flex-col gap-1",
-        code(cls := "break-all rounded bg-surface-secondary px-1.5 py-0.5 font-mono text-xs", command),
+        Ui.inlineCode(cls := "break-all text-xs", command),
         span(
-          t.runningSince.fold("未在运行")(s => s"运行中，自 ${Ui.formatTime(s)}"),
+          t.runningSince.fold("未在运行")(s => s"运行中，自 ${Format.time(s)}"),
           " · stderr：",
           code(cls := "font-mono text-xs", Show.stderrLog(t))
         )
@@ -174,7 +174,7 @@ object Detail:
   def facts(t: Signal[TriggerView]): Modifier[HtmlElement] = Seq(
     div(
       cls := "text-xs text-muted",
-      child.text <-- t.map(_.lastFiredAt.fold("还没有触发过")(l => s"上次触发 ${Ui.formatTime(l)}")),
+      child.text <-- t.map(_.lastFiredAt.fold("还没有触发过")(l => s"上次触发 ${Format.time(l)}")),
       child.maybe <-- t.map(_.lastSession.map(s => span(" · ", sessionLink(s, "上次会话"))))
     ),
     children <-- t.map(_.faults.map(f => Ui.errorAlert(f.source.title, f.error)))
@@ -200,13 +200,13 @@ object Detail:
     val fired = Var(Option.empty[FireResult])
     def remove(x: TriggerView): Unit =
       Confirm.ask(s"删除触发器「${x.name.value}」？", confirmLabel = "删除", danger = true).foreach { ok =>
-        if ok then act.run(Http.call(TriggersApi.delete)(x.id)).foreach(_ => ())
+        if ok then act.fire(Http.call(TriggersApi.delete)(x.id))
       }
     def run(x: TriggerView): Unit =
-      act.run(Http.call(TriggersApi.run)(x.id).map { r =>
+      act.fire(Http.call(TriggersApi.run)(x.id).map { r =>
         fired.set(Some(r))
         r.session.fold(Toast.info(r.note))(_ => Toast.success("已触发"))
-      }).foreach(_ => ())
+      })
     div(
       cls := "contents",
       Dialog.body(
@@ -220,13 +220,8 @@ object Detail:
       Dialog.footer(
         cls := "flex flex-wrap justify-start gap-2",
         Ui.btn(Variant.Secondary, Size.Sm)(Icon("Pencil"), "编辑", onClick --> (_ => onEdit())),
-        Ui.btn(Variant.Secondary, Size.Sm, pending = act.busy.signal)(
-          Icon("Play"),
-          "立即运行",
-          disabled <-- act.busy.signal.combineWith(t.map(_.enabled)).map((b, e) => b || !e),
-          onClick(_.sample(t)) --> run
-        ),
-        Ui.btn(Variant.DangerSoft, Size.Sm)(Icon("Trash2"), "删除", disabled <-- act.busy.signal, onClick(_.sample(t)) --> remove)
+        Ui.btn(Variant.Secondary, Size.Sm, pending = act.busy.signal, disabledIf = t.map(!_.enabled))(Icon("Play"), "立即运行", onClick(_.sample(t)) --> run),
+        Ui.btn(Variant.DangerSoft, Size.Sm, disabledIf = act.busy.signal)(Icon("Trash2"), "删除", onClick(_.sample(t)) --> remove)
       )
     )
 
@@ -235,7 +230,7 @@ object Detail:
     val act = new Action
     def remove(x: TriggerView): Unit =
       Confirm.ask(s"删除「${x.name.value}」的记录？", body = Some("它发起的会话不会被删除。"), confirmLabel = "删除", danger = true).foreach { ok =>
-        if ok then act.run(Http.call(TriggersApi.delete)(x.id)).foreach(_ => ())
+        if ok then act.fire(Http.call(TriggersApi.delete)(x.id))
       }
     div(
       cls := "contents",
@@ -251,7 +246,7 @@ object Detail:
       ),
       Dialog.footer(
         cls := "justify-start",
-        Ui.btn(Variant.DangerSoft, Size.Sm)(Icon("Trash2"), "删除记录", disabled <-- act.busy.signal, onClick(_.sample(t)) --> remove)
+        Ui.btn(Variant.DangerSoft, Size.Sm, disabledIf = act.busy.signal)(Icon("Trash2"), "删除记录", onClick(_.sample(t)) --> remove)
       )
     )
 
@@ -282,11 +277,7 @@ object Editor:
       ),
       Dialog.footer(
         cls := "flex flex-wrap justify-start gap-2",
-        Ui.btn(size = Size.Sm, pending = act.busy.signal)(
-          "保存",
-          disabled <-- patch.map(_.isLeft).combineWith(act.busy.signal).map(_ || _),
-          onClick(_.sample(patch)) --> save
-        ),
+        Ui.btn(size = Size.Sm, pending = act.busy.signal, disabledIf = patch.map(_.isLeft))("保存", onClick(_.sample(patch)) --> save),
         Ui.btn(Variant.Tertiary, Size.Sm)("取消", onClick --> (_ => onDone()))
       )
     )
@@ -295,7 +286,7 @@ object Editor:
 object NewForm:
   def view(agents: Signal[List[AgentSummary]]): HtmlElement =
     val generation = Var(0)
-    Ui.collapsibleForm("新建触发器")(
+    Ui.collapsibleCard("新建触发器")(
       child <-- generation.signal.map(_ => fields(agents, () => generation.update(_ + 1)))
     )
 
@@ -337,27 +328,21 @@ object NewForm:
       ),
       act.errorView(),
       div(
-        Ui.btn(pending = act.busy.signal)(
-          "创建",
-          disabled <-- request.map(_.isLeft).combineWith(act.busy.signal).map(_ || _),
-          onClick(_.sample(request)) --> create
-        )
+        Ui.btn(pending = act.busy.signal, disabledIf = request.map(_.isLeft))("创建", onClick(_.sample(request)) --> create)
       )
     )
 
 /** 已结束的触发器：展开时才取，每次展开都是最新的。 */
 object Finished:
   def section(): HtmlElement =
-    Ui.card(
-      Ui.disclosure(Var(false), "flex w-full items-center gap-2 px-1 font-medium", "flex flex-col gap-3 pt-4")(Icon("Archive"), "已结束") {
-        val finished = Remote(TriggersApi.list)(Some(true))
-        val openId   = Var(Option.empty[TriggerId])
-        Ui.loading(finished) { list =>
-          Seq(
-            child.maybe <-- list.map(l => Option.when(l.isEmpty)(Ui.emptyHint("还没有跑完的一次性触发器"))),
-            Ui.cardGrid(children <-- list.splitSeq(_.id)(t => Card.view(t, showAgent = true, () => openId.set(Some(t.now().id))))),
-            Detail.modal(openId, list)
-          )
-        }
+    Ui.collapsibleCard("已结束", icon = "Archive") {
+      val finished = Remote(TriggersApi.list)(Some(true))
+      val openId   = Var(Option.empty[TriggerId])
+      Ui.loading(finished) { list =>
+        Seq(
+          child.maybe <-- list.map(l => Option.when(l.isEmpty)(Ui.emptyHint("还没有跑完的一次性触发器"))),
+          Ui.cardGrid(children <-- list.splitSeq(_.id)(t => Card.view(t, showAgent = true, () => openId.set(Some(t.now().id))))),
+          Detail.modal(openId, list)
+        )
       }
-    )
+    }

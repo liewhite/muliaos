@@ -3,7 +3,7 @@ package muliao.web.ui
 import com.raquo.laminar.api.L.*
 import muliao.web.core.*
 
-/** HeroUI 的 Modal 外观（modal__backdrop / modal__dialog …）的详情弹窗，带右上角关闭按钮。
+/** 居中的弹窗（HeroUI 的 Modal 外观：modal__backdrop / modal__dialog …），带右上角关闭按钮；详情弹窗与确认弹窗（[[Confirm]]）都用它。
   * 点背景不关：误触会丢掉编辑中的草稿；只用 Esc 或关闭按钮。
   */
 object Dialog:
@@ -12,7 +12,8 @@ object Dialog:
     */
   def apply(onClose: () => Unit, labelText: String, size: String = "lg", dialogCls: String = "")(content: Modifier[HtmlElement]*): HtmlElement =
     div(
-      // HeroUI 的层级是 100000，会盖住确认弹窗（Confirm，z-50）与 Toast（z-100）：压到它们下面
+      // HeroUI 的层级是 100000，会盖住 Toast（z-100）与下拉弹层（z-50）：压到它们下面。
+      // 详情里又弹出确认时同层：确认弹窗挂在应用根部、在 DOM 里靠后，压在上面
       cls := "modal__backdrop modal__backdrop--opaque z-40",
       dataAttr("slot") := "modal-backdrop",
       // 外层不经 React Aria，视口高度变量由这里给

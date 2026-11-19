@@ -21,11 +21,6 @@ object AgentList:
       val g = AgentsData.group(all)
       (Part(Section.Plain, g.ungrouped) :: g.groups.map((n, as) => Part(Section.Group(n), as))) :+ Part(Section.Archived, g.archived)
 
-  /** 模型 `<服务商>:<模型名>` 显示成「服务商 · 模型名」。 */
-  def modelLabel(model: String): String = model.split(":", 2) match
-    case Array(p, m) => s"$p · $m"
-    case _           => model
-
   def view(): HtmlElement =
     val agents = AgentsData.all
     val query  = Var("")
@@ -37,13 +32,7 @@ object AgentList:
         val sections = list.combineWith(query.signal).map(parts)
         div(
           cls := "flex flex-col gap-4",
-          input(
-            tpe := "search",
-            cls := "input input--secondary input--full-width",
-            placeholder := "搜索名称或描述",
-            aria.label := "搜索 agent",
-            controlled(value <-- query.signal, onInput.mapToValue --> query)
-          ),
+          Fields.search("搜索 agent", query, "搜索名称或描述"),
           child.maybe <-- list.combineWith(query.signal).map((all, q) =>
             if all.isEmpty then Some(Ui.emptyHint("还没有 agent"))
             else Option.when(q.trim.nonEmpty && AgentsData.search(all, q).isEmpty)(Ui.emptyHint("没有匹配的 agent"))
@@ -63,29 +52,24 @@ object AgentList:
 
   /** 列表按编号复用元素，所以一张卡片的编号不变。 */
   private def card(agent: StrictSignal[AgentSummary]): HtmlElement =
-    val url    = Route.agent(agent.now().id).url
-    val active = Router.location.map(_.path == url)
-    Ui.appLink(url, withFrom = false)(
+    val url = Route.agent(agent.now().id).url
+    Ui.linkCard(url, Router.location.map(_.path == url))(
       div(
-        cls <-- active.map(on => "card card--default transition-colors hover:bg-surface-hover" + (if on then " ring-2 ring-accent" else "")),
-        dataAttr("slot") := "card",
-        div(
-          cls := "card__header",
-          h3(cls := "card__title", child.text <-- agent.map(_.name.value)),
-          p(
-            cls := "card__description truncate",
-            title <-- agent.map(_.description.getOrElse("")),
-            child.text <-- agent.map(_.description.getOrElse("配置未加载，不能运行（原因见详情）"))
-          )
-        ),
-        div(
-          cls := "card__footer flex flex-wrap gap-2",
-          child.maybe <-- agent.map(x => Option.when(x.isDefault)(Ui.chip("默认", Tone.Accent)())),
-          child.maybe <-- agent.map(x => Option.when(AgentsData.archived(x))(Ui.chip("已归档", Tone.Warning)())),
-          child <-- agent.map(_.model).map {
-            case Some(m) => span(cls := "chip chip--default chip--sm chip--secondary", modelLabel(m))
-            case None    => Ui.chip("配置未加载", Tone.Danger)()
-          }
+        cls := "card__header",
+        h3(cls := "card__title", child.text <-- agent.map(_.name.value)),
+        p(
+          cls := "card__description truncate",
+          title <-- agent.map(_.description.getOrElse("")),
+          child.text <-- agent.map(_.description.getOrElse("配置未加载，不能运行（原因见详情）"))
         )
+      ),
+      div(
+        cls := "card__footer flex flex-wrap gap-2",
+        child.maybe <-- agent.map(x => Option.when(x.isDefault)(Ui.chip("默认", Tone.Accent)())),
+        child.maybe <-- agent.map(x => Option.when(AgentsData.archived(x))(Ui.chip("已归档", Tone.Warning)())),
+        child <-- agent.map(_.model).map {
+          case Some(m) => Ui.chip(Format.modelLabel(m), look = ChipLook.Secondary)()
+          case None    => Ui.chip("配置未加载", Tone.Danger)()
+        }
       )
     )

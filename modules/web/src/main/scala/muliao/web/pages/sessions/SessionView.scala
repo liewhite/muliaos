@@ -115,9 +115,9 @@ object SessionView:
     div(
       cls := "flex flex-wrap items-center gap-x-2 px-1 text-xs text-muted",
       span(title := "发给模型的上下文：现在的大小 / 压缩阈值（超过就压缩）",
-        s"上下文 ${if d.contextTokens == 0 then "—" else Model.formatTokens(d.contextTokens)} / ${Model.formatTokens(d.compactionThreshold)}"),
+        s"上下文 ${if d.contextTokens == 0 then "—" else Format.tokens(d.contextTokens)} / ${Format.tokens(d.compactionThreshold)}"),
       span(title := "这个会话累计花掉的 token（每次模型请求完成就记上）",
-        s"累计 输入 ${Model.formatTokens(d.usage.input)} · 输出 ${Model.formatTokens(d.usage.output)} · 缓存命中 ${Model.cacheHitPercent(d.usage.input, d.usage.cacheRead)}%")
+        s"累计 输入 ${Format.tokens(d.usage.input)} · 输出 ${Format.tokens(d.usage.output)} · 缓存命中 ${Format.cacheHitPercent(d.usage.input, d.usage.cacheRead)}%")
     )
 
   /** 最近一次运行没正常结束：在跑（暂时失败在退避重试时说明原因），或最终失败（可重试）。 */
@@ -127,7 +127,7 @@ object SessionView:
         Some(
           div(
             cls := "flex flex-col gap-2 rounded-xl bg-danger-soft p-3 text-sm text-danger-soft-foreground",
-            div(s"运行失败了（${Ui.formatTime(r.finishedAt.getOrElse(r.startedAt))}）"),
+            div(s"运行失败了（${Format.time(r.finishedAt.getOrElse(r.startedAt))}）"),
             pre(cls := Ui.CodeBlock, r.error.getOrElse("")),
             div(cls := "text-xs", "如果是上下文过长，先点右上角「压缩」，完成后再重试。重试从失败的那一步继续。"),
             Ui.btn(Variant.Secondary, Size.Sm)(cls := "self-start", Icon("RotateCcw"), "重试", onClick --> (_ => onRetry()))
@@ -205,7 +205,7 @@ object SessionView:
 
     def remove(): Unit =
       Confirm.ask("删除这个会话？", Some("会话的全部消息都会被删除；它开出的 thread 保留。"), "删除", danger = true).foreach { ok =>
-        if ok then action.run(Http.call(SessionsApi.delete)(id), leave = Some(() => Router.go(backNow.now()))): Unit
+        if ok then action.fire(Http.call(SessionsApi.delete)(id), leave = Some(() => Router.go(backNow.now())))
       }
 
     val active = detail.map(_.data.exists(_.summary.state != WorkState.Idle)).combineWith(compaction.busy.signal).map(_ || _)
@@ -288,7 +288,7 @@ object SessionView:
           div(
             cls := "flex items-center justify-center gap-2",
             child <-- d.map(x => Ui.appLink(Route.agent(x.summary.agent).url)(Ui.chip(x.summary.agentName, Tone.Accent)())),
-            span(cls := "text-xs text-muted", child.text <-- d.map(x => Ui.formatTime(x.summary.createdAt)))
+            span(cls := "text-xs text-muted", child.text <-- d.map(x => Format.time(x.summary.createdAt)))
           ),
           child.maybe <-- d.map(x =>
             x.summary.origin match
@@ -316,7 +316,7 @@ object SessionView:
             )
           },
           div(cls := "flex flex-col gap-3", children <-- d.map(_.queued).splitSeq(_.id)(q => transcript.queued(q.now()))),
-          child.maybe <-- d.map(_.run).distinct.map(r => runStatus(r, () => action.run(Http.call(SessionsApi.retry)(id)): Unit)),
+          child.maybe <-- d.map(_.run).distinct.map(r => runStatus(r, () => action.fire(Http.call(SessionsApi.retry)(id)))),
           // 正在跑的命令要用 passkey secret，在这里批准（#915）
           SecretAsks.forSession(id),
           Waits.panel(d, action)

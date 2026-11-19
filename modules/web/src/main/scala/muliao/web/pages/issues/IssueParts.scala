@@ -41,3 +41,24 @@ object IssueParts:
   def statusOptions: List[Opt[IssueStatus]] = Opt.of(Statuses)
 
   def priorityOptions: List[Opt[Priority]] = Opt.of(Priorities)
+
+  /** 依赖的 issue 编号输入框，写了不是编号的内容时下面提示（解析见 [[IssueModel.parseRefs]]）。 */
+  def depsField(labelText: String, deps: Var[String]): Modifier[HtmlElement] =
+    Seq(
+      Fields.text(labelText, deps),
+      child.maybe <-- deps.signal.map(parseRefs).map(r => Option.when(r.isEmpty)(p(cls := "text-xs text-danger", "只能填 issue 编号，如 #12, #15")))
+    )
+
+  /** 折叠起来的 issue 的展开 / 收起（看板的列、列表的组）；不超过 FoldLimit 个时不显示。 */
+  def foldToggle(total: Signal[Int], expanded: Var[Boolean]): Modifier[HtmlElement] =
+    child.maybe <-- total.combineWith(expanded.signal).map((n, e) =>
+      Option.when(n > FoldLimit)(
+        button(
+          tpe := "button",
+          cls := "self-start px-1 py-1 text-xs text-muted hover:text-foreground",
+          onClick --> (_ => expanded.update(!_)),
+          if e then "收起" else s"展开其余 ${n - FoldLimit} 个"
+        )
+      )
+    )
+
