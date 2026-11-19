@@ -21,6 +21,7 @@ The file contains the login password, the vault key and API keys: keep it readab
 | `data_dir` | required | Data directory: database, agent workspaces, attachments (layout [below](#data-directory)) |
 | `assets_dir` | required | Assets directory: memories, skills, MCP servers, secrets, agent configs, roles (layout [below](#assets-directory)) |
 | `timezone` | `"Asia/Shanghai"` | Time zone for cron triggers, times without a zone and per-day statistics |
+| `offsite_backup_dir` | none | Off-site backup folder (e.g. one in iCloud Drive). The platform never writes there; it only treats it as platform-private. Backup scripts read the path from here |
 
 ## `[log]`
 
@@ -149,7 +150,7 @@ Present: the message box shows a microphone button for voice input. Uses the Ali
 | `vapid_private.pem` | Web Push private key (unless `push.vapid_key_file` points elsewhere) |
 | `.lock` | single-instance lock: a second process on the same data directory exits |
 
-The configuration file, `backups/` in the data directory and the push private key are platform-private: agents without the `admin`
+The configuration file, `backups/` in the data directory, `general.offsite_backup_dir` and the push private key are platform-private: agents without the `admin`
 role can neither read nor write them.
 
 ## Assets directory

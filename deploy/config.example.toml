@@ -9,6 +9,7 @@
 data_dir = "~/.muliao-scala/data"        # database, agent workspaces, attachments
 assets_dir = "~/.muliao-scala/assets"    # memories, skills, MCP servers, secrets, agent configs, roles
 timezone = "Asia/Shanghai"               # CHANGE to your time zone: used for daily stats and cron triggers
+# offsite_backup_dir = "~/Library/Mobile Documents/com~apple~CloudDocs/muliao-backup"  # off-site backups: platform-private, read by backup scripts
 
 [log]
 level = "INFO"

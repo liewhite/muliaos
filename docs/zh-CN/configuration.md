@@ -21,6 +21,7 @@ muliao 只读一个 TOML 文件，路径在命令行给出（`muliao serve <文�
 | `data_dir` | 必填 | 数据目录：数据库、agent 工作目录、附件（结构见[下文](#数据目录)） |
 | `assets_dir` | 必填 | 资源目录：记忆、skill、MCP、secret、agent 配置、角色（结构见[下文](#资源目录)） |
 | `timezone` | `"Asia/Shanghai"` | cron 触发器、不带时区的时刻、按天统计用的时区 |
+| `offsite_backup_dir` | 无 | 异地备份目录（如 iCloud Drive 里的一个文件夹）。平台不往里写，只把它当平台私有文件；备份脚本从这里读路径 |
 
 ## `[log]`
 
@@ -147,7 +148,7 @@ muliao 没有思考设置：请求里不带思考参数，各模型按自己的�
 | `vapid_private.pem` | Web Push 私钥（`push.vapid_key_file` 没指到别处时） |
 | `.lock` | 单实例锁：同一数据目录的第二个进程会退出 |
 
-配置文件、数据目录下的 `backups/` 和推送私钥是平台私有文件：没有 `admin` 角色的 agent 读写都不行。
+配置文件、数据目录下的 `backups/`、`general.offsite_backup_dir` 和推送私钥是平台私有文件：没有 `admin` 角色的 agent 读写都不行。
 
 ## 资源目录
 

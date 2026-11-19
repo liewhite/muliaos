@@ -40,8 +40,8 @@ final case class AppConfig(
       assets = general.assetsDir,
       workspaces = general.dataDir.resolve("workspaces"),
       state = general.dataDir.resolve("resources"),
-      // 平台私有文件：配置（含密码、密钥）、备份、推送私钥
-      privatePaths = List(path, general.dataDir.resolve("backups"), vapidKeyFile)
+      // 平台私有文件：配置（含密码、密钥）、本机与异地备份、推送私钥
+      privatePaths = List(path, general.dataDir.resolve("backups"), vapidKeyFile) ++ general.offsiteBackupDir
     )
 
   def sessionPaths: SessionPaths = SessionPaths(general.dataDir.resolve("files"))

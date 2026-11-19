@@ -180,6 +180,17 @@ object AppSpec extends ZIOSpecDefault:
         e2 <- AppConfig.load(h.config).flip
       yield assertTrue(e1.message.contains("未知的段"), e2.message.contains("log.colour"))
     },
+    test("配置：异地备份目录配了就算平台私有文件") {
+      for
+        h      <- home
+        before <- AppConfig.load(h.config)
+        _      <- ZIO.succeed(JFiles.writeString(h.config, JFiles.readString(h.config).replace("[log]\n", "offsite_backup_dir = \"~/offsite\"\n\n[log]\n")))
+        after  <- AppConfig.load(h.config)
+      yield assertTrue(
+        before.resourcePaths.privatePaths.size == 3,
+        after.resourcePaths.privatePaths.contains(Path.of(java.lang.System.getProperty("user.home"), "offsite"))
+      )
+    },
     test("接口描述：覆盖各领域的接口") {
       val doc = HttpServer.openApi(Main.contractEndpoints, "test")
       assertTrue(List("/api/agents", "/api/sessions", "/api/issues", "/api/triggers", "/api/history", "/api/notifications", "/api/jobs").forall(doc.contains))

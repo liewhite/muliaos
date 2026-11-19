@@ -148,7 +148,7 @@
 - **测试**：`ModelSpec`（纯函数）、`ScheduleSpec`（测试时钟：定时、防重叠、停机补一次、停用不补、一次性、归档）、`CommandSpec`（真实进程：前置检查各模式与失败/超时、常驻流防抖与排队、退避重启与故障、工具、HTTP）。用测试时钟拨时间的测试把资源目录轮询调大（`TestEnv.layer(assetPoll = 1.hour)`），否则拨一次时钟要跑成千上万次轮询。
 
 ## 组装入口（app，#874）
-- **配置**：`AppConfig.load` 一次读出全部段（可选段 `[web]`、`[transcription]` 没配就是 None，对应工具和接口不提供）；允许的段名由平台段（general、log、server、http）加各领域 `Module` 声明的段派生，未知的段、段里未知的键启动即报错。数据目录下的位置：`workspaces/<agent 编号>`、`files/`（附件）、`resources/`（上一份有效的 access.toml）、`backups/`、`vapid_private.pem`；配置文件、备份、推送私钥是平台私有文件。
+- **配置**：`AppConfig.load` 一次读出全部段（可选段 `[web]`、`[transcription]` 没配就是 None，对应工具和接口不提供）；允许的段名由平台段（general、log、server、http）加各领域 `Module` 声明的段派生，未知的段、段里未知的键启动即报错。数据目录下的位置：`workspaces/<agent 编号>`、`files/`（附件）、`resources/`（上一份有效的 access.toml）、`backups/`、`vapid_private.pem`；配置文件、备份（含 `general.offsite_backup_dir` 指的异地备份目录）、推送私钥是平台私有文件。
 - **装配**：`Assembly.layer(cfg, models)` 用 `ZLayer.make` 装全部领域（少了哪个依赖编译期报错）；`models` 默认真实接入，测试换假模型。
 - **内置工具目录**：由各领域静态的工具定义给出（`Assembly.toolSpecs`，每个领域一份 `specs`，网页工具配了 `[web]` 才有），装配时就是定值。实际接进会话领域的工具由 `Assembly.contributions` 给出（每个领域一行）；两者一一对应、没有重名由 `AppSpec` 检查，不在启动时核对。MCP 工具按运行连接，不在目录里。
 - **启动顺序**（`Assembly.boot`）：单实例锁（`Main`，在打开数据库之前）→ 装配（迁移、全局记忆、资源目录轮询）→ 会话启动（交进各领域的贡献与后台任务、未读，续跑）→ agent 启动（交进各领域的 `AgentHook`，接着做没做完的改名与删除；删除要发会话事件、停后台任务，所以排在会话之后）→ 收尾上次的后台任务 → 触发器 → HTTP。关停是相反顺序（scope 后进先出）：HTTP 与实时连接 → 触发器与常驻命令 → 后台任务（结束并标被中断）→ 会话。
