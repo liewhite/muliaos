@@ -20,7 +20,7 @@ trait AgentExec:
     */
   def command(agent: AgentId, program: Program, secrets: List[String], use: SecretUse, purpose: AskPurpose): IO[AppError, AgentCommand]
 
-  /** 命令输出里有写被拦下（Operation not permitted）且路径确实不在可写范围时，补一句被什么拦、找谁授权；没有就原样返回。 */
+  /** 命令输出里有路径被拦下（Operation not permitted）且确实不在可写范围时，补一句被什么拦、找谁授权（平台私有文件读也拒，说明里不提写权限）。没有就原样返回。 */
   def annotate(agent: AgentId, scope: Sandbox.Confined, output: String): UIO[String]
 
 object AgentExec:
@@ -60,7 +60,7 @@ object AgentExec:
           RealPath.resolve(Path.of(p)).flatMap { real =>
             if setuid(real.path) then ZIO.some(s"[沙箱里不能执行 setuid 程序 $p（与写权限无关）；常用的话找 admin（muliao）放进沙箱外执行的名单]")
             else if scope.permits(real) then ZIO.none
-            else resources.explainDenied(agent, Path.of(p)).map(why => Some(s"[写沙箱拦下了 $p：$why]"))
+            else resources.explainDenied(agent, Path.of(p)).map(why => Some(s"[沙箱拦下了 $p：$why]"))
           }
         }
         .map(_.flatten)

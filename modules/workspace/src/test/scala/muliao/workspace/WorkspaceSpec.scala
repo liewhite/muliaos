@@ -144,17 +144,20 @@ object WorkspaceSpec extends ZIOSpecDefault:
                    r     <- call("read_file", args("path" -> str(priv.toString)), ctx)
                    sh    <- call("run_shell", args("command" -> str(s"touch /tmp/$mark; echo done"), "timeout" -> Json.Num(20)), ctx)
                    own   <- call("run_shell", args("command" -> str("echo hi > own.txt && cd / && cat \"$MULIAO_WORKSPACE/own.txt\""), "timeout" -> Json.Num(20)), ctx)
-                 yield (text(w), text(r), text(sh), text(own))
+                   rd    <- call("run_shell", args("command" -> str(s"cat $priv"), "timeout" -> Json.Num(20)), ctx)
+                 yield (text(w), text(r), text(sh), text(own), text(rd))
                }
-        (w, r, sh, own) = out
+        (w, r, sh, own, rd) = out
+        priv = d.data.resolve("private").resolve("key.pem")
         leaked <- ZIO.attemptBlocking(JFiles.exists(Path.of(s"/tmp/$mark"))).orDie
       yield assertTrue(
         w.startsWith("[rejected] 写不了") && w.contains("不在你的可写范围"),
         r.startsWith("[rejected] 读不了") && r.contains("平台私有文件"),
         sh.startsWith("exit_code: 0"),
         sh.contains("Operation not permitted"),
-        sh.contains(s"[写沙箱拦下了 /tmp/$mark：不在你的可写范围"),
+        sh.contains(s"[沙箱拦下了 /tmp/$mark：不在你的可写范围"),
         !leaked,
+        rd.contains(s"[沙箱拦下了 $priv：这是平台私有文件"), // 读被拒也按私有文件说明，不引向 write:path
         own == "exit_code: 0\nhi\n" || own == "exit_code: 0\nhi"
       )
     },

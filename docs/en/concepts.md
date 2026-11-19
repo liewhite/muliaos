@@ -147,7 +147,7 @@ Permissions prevent mistakes and keep each agent's context focused. They are **n
 Agent commands (shell, skill scripts, trigger prechecks and stream commands, local MCP servers) run inside a macOS `sandbox-exec`
 profile that only allows writing to the agent's workspace, common temp/cache/toolchain directories, granted `write:path` directories
 and asset files the agent may edit. Reading and network access are not restricted. Platform-private files (config, backups,
-push keys) are off limits to non-admin agents. When a write is blocked the agent sees the original error plus who to ask for access.
+push keys) are off limits to non-admin agents. When the sandbox blocks a command (a write outside the allowed paths, or reading a platform-private file) the agent sees the original error plus a note on what blocked it and who to ask.
 
 ## Secrets
 
