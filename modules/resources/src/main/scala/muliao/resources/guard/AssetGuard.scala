@@ -143,7 +143,7 @@ object AssetGuard:
       parsed match
         case Parsed.Access(next) =>
           for
-            live <- db.read(AgentRepo.live).map(_.map(_.id).toSet)
+            live <- db.read(AgentRepo.grantable).map(_.map(_.id).toSet)
             snap <- store.snapshot
             before = old.flatMap(o => AccessConfig.parse(o).toOption)
             _ <- ZIO.fromEither(AccessValidation.check(before, next, live, snap, tools.tools.map(_.name))).mapError(refused)

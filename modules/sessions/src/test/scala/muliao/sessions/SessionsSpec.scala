@@ -121,35 +121,47 @@ object SessionsSpec extends ZIOSpecDefault:
         !gateOpen
       )
     },
-    test("运行做完、收尾交回前被重启：启动时补交回（#1046）") {
+    test("运行做完、收尾前被重启：启动时补收尾，有没有回答去向都补（#1046、#1062）") {
       for
         d <- dirs
         p <- probe
         m <- fakeModels(_ => Script.Say(List(text("答完了"))))
-        // 第一次：正常做完，再把回答去向写回库，等同「运行已做完、收尾交回前服务停了」
-        id <- ZIO.scoped(layer(d, m).build.flatMap(env =>
-                (for
-                  _     <- start(p)
-                  alice <- agent("alice")
-                  id    <- userSession(alice, "问")
-                  _     <- idle(id)
-                  _     <- ZIO.serviceWithZIO[Database](_.write(store.Repo.setPendingReply(id, """[{"User":{}}]""")))
-                yield id).provideEnvironment(env)
-              ))
-        // 第二次：启动后补交回，不再请求模型
+        // 第一次：正常做完，再把「待收尾」（和回答去向）写回库，等同「运行已做完、收尾前服务停了」。
+        // a 有回答去向（用户在等）；b 没有（如 issue、触发器会话），以前靠内存标记收尾，重启就丢
+        ids <- ZIO.scoped(layer(d, m).build.flatMap(env =>
+                 (for
+                   _     <- start(p)
+                   alice <- agent("alice")
+                   a     <- userSession(alice, "问")
+                   b     <- userSession(alice, "也问")
+                   _     <- idle(a) *> idle(b)
+                   _ <- ZIO.serviceWithZIO[Database](_.write(
+                          store.Repo.setPendingReply(a, """[{"User":{}}]""") *> store.Repo.setSettleDue(a, true) *> store.Repo.setSettleDue(b, true)
+                        ))
+                 yield (a, b)).provideEnvironment(env)
+               ))
+        (a, b) = ids
+        // 第二次：启动后补收尾，不再请求模型
         r <- ZIO.scoped(layer(d, m).build.flatMap(env =>
                (for
                  events <- recordEvents
                  _      <- start(p)
-                 _ <- eventually("补交回")(events.get)(_.exists {
-                        case SessionEvent.Settled(`id`, _, _, Outcome.Answered("答完了"), true) => true
-                        case _                                                              => false
-                      })
-                 i <- ZIO.serviceWithZIO[Sessions](_.info(id))
-               yield i).provideEnvironment(env)
+                 evs <- eventually("补收尾")(events.get)(es =>
+                          es.exists {
+                            case SessionEvent.Settled(`a`, _, _, Outcome.Answered("答完了"), true) => true
+                            case _                                                             => false
+                          } && es.exists {
+                            case SessionEvent.Settled(`b`, _, _, Outcome.Answered("答完了"), false) => true
+                            case _                                                              => false
+                          }
+                        )
+                 ia <- ZIO.serviceWithZIO[Sessions](_.info(a))
+                 ib <- ZIO.serviceWithZIO[Sessions](_.info(b))
+               yield (ia, ib, evs)).provideEnvironment(env)
              ))
+        (ia, ib, evs) = r
         reqs <- m.requests
-      yield assertTrue(r.pendingReply.isEmpty, reqs.size == 1)
+      yield assertTrue(ia.pendingReply.isEmpty, !ia.settleDue, !ib.settleDue, evs.count(_.isInstanceOf[SessionEvent.Settled]) == 2, reqs.size == 2)
     },
     test("提问与回答；等批准、批准后执行") {
       fresh { req =>

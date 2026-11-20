@@ -43,8 +43,10 @@ trait Sessions:
   def states(ids: List[SessionId]): IO[AppError, Map[SessionId, WorkState]]
   def state(id: SessionId): IO[AppError, WorkState]
 
-  /** 停止（空闲时什么也不做）。 */
-  def stop(id: SessionId): IO[AppError, Unit]
+  /** 停止（连同它开出的、没空闲的 thread，一个事务记下；空闲时不停）。`also`：调用方要和停止同一事务提交的改动，写在停止之后
+    * （投给这个会话的信不会被停止丢弃）；会话空闲时单独提交。
+    */
+  def stop(id: SessionId, also: Tx[Unit] = ZIO.unit): IO[AppError, Unit]
 
   /** 会话开始等一个后台任务（因此「等待中」）；`heartbeat` 给出时定期投检查（状态取自 [[JobControl]]）。 */
   def openJobWait(session: SessionId, job: JobId, label: String, heartbeat: Option[Duration]): IO[AppError, Unit]
@@ -140,13 +142,13 @@ object Sessions:
     def issueSessions(issues: List[IssueId]): IO[AppError, List[IssueSession]] =
       if issues.isEmpty then ZIO.succeed(Nil)
       else
-        db.read(Repo.issueSessions(issues)).flatMap(ZIO.foreach(_)(SessionInfo.decode)).map(_.collect { case SessionInfo(id, agent, Origin.Issue(i), _, _, _, _) =>
+        db.read(Repo.issueSessions(issues)).flatMap(ZIO.foreach(_)(SessionInfo.decode)).map(_.collect { case SessionInfo(id, agent, Origin.Issue(i), _, _, _, _, _) =>
           IssueSession(i, agent, id)
         })
     def info(id: SessionId)          = kernel.info(id)
     def states(ids: List[SessionId]) = workStates.states(ids)
     def state(id: SessionId)         = workStates.state(id)
-    def stop(id: SessionId)          = control.stop(id, byUser = false)
+    def stop(id: SessionId, also: Tx[Unit]) = control.stop(id, byUser = false, also)
     def openJobWait(session: SessionId, job: JobId, label: String, heartbeat: Option[Duration]) =
       waits.open(session, WaitRef.Job(job), label, heartbeat).unit
     def closeJobWait(job: JobId, letter: Option[Letter])        = waits.close(WaitKey.job(job), letter)

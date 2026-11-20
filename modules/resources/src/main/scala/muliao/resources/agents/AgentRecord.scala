@@ -34,6 +34,9 @@ private[resources] object AgentRepo:
   /** 现存的（不含已删除、正在删除的），按创建时间。 */
   val live: Read[List[AgentRecord]] = all.map(_.filter(_.live))
 
+  /** access.toml 里可以有段的 agent（现存的加上正在建的）。 */
+  val grantable: Read[List[AgentRecord]] = all.map(_.filter(_.state.grantable))
+
   def byIds(ids: Set[AgentId]): Read[List[AgentRecord]] =
     Sql.run(agents.filter(a => liftQuery(ids).contains(a.id))).orInternal
 

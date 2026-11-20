@@ -18,6 +18,8 @@ final case class SessionInfo(
     origin: Origin,
     title: String,
     pendingReply: List[ReplyTo],
+    /** 运行做完了、还没收尾（见 [[Delegations.settleTx]]） */
+    settleDue: Boolean,
     createdAt: Long,
     updatedAt: Long
 ):
@@ -28,7 +30,7 @@ private[sessions] object SessionInfo:
     for
       origin  <- ZIO.fromEither(origin(r)).mapError(e => AppError.Internal(s"会话 ${r.id.value} 的来源记录坏了：$e"))
       pending <- Decode.replyTos(r.pendingReply)
-    yield SessionInfo(r.id, r.agentId, origin, r.title, pending, r.createdAt, r.updatedAt)
+    yield SessionInfo(r.id, r.agentId, origin, r.title, pending, r.settleDue, r.createdAt, r.updatedAt)
 
   /** 从库里的种类、引用（触发器名 / issue 号 / thread 名）、发起会话还原来源。 */
   private def origin(r: SessionRow): Either[String, Origin] = (r.origin, r.originRef) match
@@ -44,7 +46,7 @@ private[sessions] object SessionInfo:
       case Origin.Trigger(n)   => (Some(n.value), None)
       case Origin.Issue(i)     => (Some(i.value.toString), None)
       case Origin.Thread(p, n) => (Some(n.value), p)
-    SessionRow(id, agent, origin.kind, ref, parent, title, "[]", now, now)
+    SessionRow(id, agent, origin.kind, ref, parent, title, "[]", false, now, now)
 
 /** 本领域各部分共用的底子：库、「数据变了」广播、实时事件、接进来的东西、配置，以及读会话基本信息。 */
 private[sessions] final case class Kernel(db: Database, bus: ChangeBus, live: LiveHub, ports: Ports, settings: SessionSettings, general: GeneralSettings):

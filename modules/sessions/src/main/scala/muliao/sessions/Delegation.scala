@@ -64,14 +64,15 @@ private[sessions] final case class Delegations(kernel: Kernel, mailbox: Mailbox,
       _ <- doorbell.ring(tracked.thread)
     yield tracked
 
-  /** 一段工作有了结局：在调用方的收尾事务里取走回答去向、把结局交回等着的委派方，提交后发 `Settled`（通知领域据此推送给用户）。
-    * 取走去向与交回在同一个事务里，服务重启不会留下「去向已取走、委派没交回」的半截。
+  /** 一段工作有了结局（收尾）：在调用方的事务里取走回答去向、把结局交回等着的委派方、把 `Settled` 交给订阅方（看板请表态、
+    * 通知领域发通知）、清掉「待收尾」。都在同一个事务里，服务重启不会留下半截；没提交的由启动时补收尾重做。
     */
   def settleTx(i: SessionInfo, outcome: Outcome, t: Long): Tx[Unit] =
     for
       pending <- mailbox.takePendingReply(i.id)
       _       <- finishTx(pending.collect { case ReplyTo.Delegation(d) => d }, i, outcome, t)
-      _       <- afterCommit(ports.emit(SessionEvent.Settled(i.id, i.agent, i.origin, outcome, pending.contains(ReplyTo.User))))
+      _       <- ports.emit(SessionEvent.Settled(i.id, i.agent, i.origin, outcome, pending.contains(ReplyTo.User)))
+      _       <- Repo.setSettleDue(i.id, false)
     yield ()
 
   /** thread 被删除（在删除它的事务里调）：交给它的未完成委派以失败交回发起方。 */

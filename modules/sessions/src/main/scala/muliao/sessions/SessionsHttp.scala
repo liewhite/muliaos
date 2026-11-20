@@ -91,7 +91,7 @@ final case class SessionsHttp(sessions: Sessions, console: SessionConsole, files
       SessionsApi.timeline.secured(sessions.timeline),
       live,
       SessionsApi.send.secured((id, m) => send(id, m)),
-      SessionsApi.stop.secured(sessions.stop),
+      SessionsApi.stop.secured(sessions.stop(_)),
       SessionsApi.retry.secured(console.retry),
       SessionsApi.compact.secured(compact),
       SessionsApi.read.secured(console.markRead),

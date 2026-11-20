@@ -128,7 +128,7 @@ private[triggers] final case class Core(
     agents.get(t.agent).map(_.state).catchAll(_ => ZIO.succeed(AgentState.Deleted)).flatMap {
       case AgentState.Active   => guarded(t, cause)
       case AgentState.Archived => ZIO.succeed(cause.unavailable("agent 已归档"))
-      case AgentState.Deleting | AgentState.Deleted => ZIO.succeed(cause.unavailable("agent 已删除"))
+      case AgentState.Creating | AgentState.Deleting | AgentState.Deleted => ZIO.succeed(cause.unavailable("agent 已删除"))
     }
 
   private def guarded(t: Trigger, cause: Occasion): IO[AppError, Fired] =
@@ -221,18 +221,20 @@ private[triggers] final case class Core(
 
   // ---- 脚本故障 ----
 
-  /** 记下故障（同来源只留最新一条）；从正常变为出错时给所属 agent 开会话告警一次，投不进就推送用户。 */
+  /** 记下故障（同来源只留最新一条）；从正常变为出错时给所属 agent 开会话告警一次，投不进就通知用户。
+    * 告警与记故障同一事务：记下了就一定发了告警（下次不算「从正常变为出错」，不会再补）。
+    */
   def recordFault(t: Trigger, source: FaultSource, error: String): UIO[Unit] =
     (for
       at <- now
-      fresh <- db.write(
-                 for
-                   before <- Repo.faultsOf(List(t.id))
-                   live   <- Repo.get(t.id)
-                   _      <- ZIO.when(live.isDefined)(Repo.putFault(FaultRow(t.id, source, error, at)) *> changed)
-                 yield before.isEmpty && live.isDefined
-               )
-      _ <- ZIO.when(fresh)(alert(t, source, error))
+      _ <- db.write(
+             for
+               before <- Repo.faultsOf(List(t.id))
+               live   <- Repo.get(t.id)
+               _      <- ZIO.when(live.isDefined)(Repo.putFault(FaultRow(t.id, source, error, at)) *> changed)
+               _      <- ZIO.when(before.isEmpty && live.isDefined)(alertTx(t, source, error))
+             yield ()
+           )
     yield ()).catchAll(e => ZIO.logError(s"记录触发器 ${t.name.value} 的脚本故障失败：${e.message}"))
 
   def clearFault(t: Trigger, source: FaultSource): UIO[Unit] =
@@ -240,7 +242,8 @@ private[triggers] final case class Core(
       .catchAll(e => ZIO.logError(s"清除触发器 ${t.name.value} 的脚本故障失败：${e.message}"))
       .unit
 
-  private def alert(t: Trigger, source: FaultSource, error: String): UIO[Unit] =
+  /** 在写事务里投告警信；投不进（agent 已归档等，投信这时还没写任何东西）就改发通知给用户。 */
+  private def alertTx(t: Trigger, source: FaultSource, error: String): Tx[Unit] =
     val what = source match
       case FaultSource.Precheck => "前置检查"
       case FaultSource.Stream   => "常驻命令"
@@ -254,13 +257,12 @@ private[triggers] final case class Core(
          |
          |请排查并修好它。$fix""".stripMargin
     sessions
-      .deliver(Address.Fresh(t.agent, Origin.Trigger(t.name), s"${t.name.value} 的$what 出错"), Letter(Source.Trigger(t.name), text))
+      .deliverIn(Address.Fresh(t.agent, Origin.Trigger(t.name), s"${t.name.value} 的$what 出错"), Source.Trigger(t.name), text)
       .unit
-      .catchAll { e =>
+      .catchSome { case e: AppError.Domain =>
         notifications
-          .notify(Notice(s"触发器 ${t.name.value} 的$what 出错", s"$error\n（没能交给 agent：${e.message}）", Target.Page(Triggers.PageUrl)))
+          .notifyIn(Notice(s"触发器 ${t.name.value} 的$what 出错", s"$error\n（没能交给 agent：${e.message}）", Target.Page(Triggers.PageUrl)))
           .unit
       }
-      .catchAll(e => ZIO.logError(s"触发器 ${t.name.value} 的故障告警发不出去：${e.message}"))
 
   def instant(ms: Long): Instant = Instant.ofEpochMilli(ms)

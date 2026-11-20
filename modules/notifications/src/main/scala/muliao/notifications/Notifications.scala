@@ -36,8 +36,8 @@ trait Notifications:
   /** 这些会话里未读的：有指向它的未读通知。 */
   def unreadSessions(ids: List[SessionId]): IO[AppError, Set[SessionId]]
 
-  /** 会话删了：指向它的通知一并删除。 */
-  def forgetSession(id: SessionId): IO[AppError, Unit]
+  /** 会话删了：在删会话的写事务里把指向它的通知一并删除。 */
+  def forgetSessionIn(id: SessionId): Tx[Unit]
 
   /** 浏览器订阅推送用的服务器公钥。 */
   def publicKey: String
@@ -149,7 +149,8 @@ object Notifications:
     def unreadSessions(ids: List[SessionId]): IO[AppError, Set[SessionId]] =
       if ids.isEmpty then ZIO.succeed(Set.empty) else db.read(Repo.unreadSessions(ids)).map(_.toSet)
 
-    def forgetSession(id: SessionId): IO[AppError, Unit] = mark(Repo.deleteOfSession(id))
+    def forgetSessionIn(id: SessionId): Tx[Unit] =
+      Repo.deleteOfSession(id).flatMap(n => ZIO.when(n > 0)(bus.publishAfterCommit(Topic.Notifications))).unit
 
     def subscribe(s: PushSubscriptionIn): IO[AppError, Unit] =
       for

@@ -16,6 +16,7 @@ final case class SessionRow(
     parentId: Option[SessionId],
     title: String,
     pendingReply: String,
+    settleDue: Boolean,
     createdAt: Long,
     updatedAt: Long
 )
@@ -234,8 +235,11 @@ private[sessions] object Repo:
   /** 有排队来信的会话（启动时续跑）。 */
   val sessionsWithMail: Read[List[SessionId]] = Sql.run(inbox.map(_.sessionId).distinct).orInternal
 
-  /** 还有回答去向（没交回）的会话。 */
-  val sessionsAwaitingReply: Read[List[SessionId]] = Sql.run(sessions.filter(_.pendingReply != "[]").map(_.id)).orInternal
+  /** 运行做完了、还没收尾的会话（启动时补收尾）。 */
+  val sessionsToSettle: Read[List[SessionId]] = Sql.run(sessions.filter(_.settleDue).map(_.id)).orInternal
+
+  def setSettleDue(id: SessionId, due: Boolean): Tx[Unit] =
+    Sql.run(sessions.filter(_.id == lift(id)).update(_.settleDue -> lift(due))).unit.orInternal
 
   def hasQueuedKey(session: SessionId, key: String): Read[Boolean] =
     Sql.run(inbox.filter(i => i.sessionId == lift(session) && i.dedupeKey.exists(_ == lift(key))).nonEmpty).orInternal

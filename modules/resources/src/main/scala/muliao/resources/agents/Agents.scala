@@ -142,7 +142,7 @@ object Agents:
         a.state match
           case AgentState.Active   => ZIO.succeed(a)
           case AgentState.Archived => ZIO.fail(AppError.conflict(s"agent ${a.name.value} 已归档，不接新工作（取消归档后才能用）"))
-          case AgentState.Deleting | AgentState.Deleted => ZIO.fail(AppError.notFound(s"agent ${a.name.value} 已删除"))
+          case AgentState.Creating | AgentState.Deleting | AgentState.Deleted => ZIO.fail(AppError.notFound(s"agent ${a.name.value} 已删除"))
       }
 
     def profile(id: AgentId): IO[AppError, AgentProfile] =
@@ -209,18 +209,17 @@ object Agents:
           _  <- dirFree(name)
           id <- newId
           t  <- now
-          profile = AgentProfile(req.description.trim, model, req.group.map(_.trim).filter(_.nonEmpty))
-          _ <- store.write(AssetPath.AgentFile(name), Formats.renderAgent(profile))
-          _ <- store.write(AssetPath.PrivateMemory(name), "")
-          _ <- paths.ensureWorkspace(id)
-          record = AgentRecord(id, name, AgentRecord.keyOf(name.value), AgentState.Active, false, None, t, t)
-          _ <- db.write(AgentRepo.insert(record) *> publish).tapError(_ => store.delete(dir(name)).ignoreLogged)
-          grants = AgentGrants(req.roles.distinct, allow, deny)
-          _ <- ZIO.unless(grants.isEmpty)(
-                 setGrants(id, _ => grants).mapError(e =>
-                   AppError.Internal(s"agent ${name.value} 已建好，但角色与规则没写进 access.toml：${e.message}；请在 agent 设置里重新配", Some(e))
-                 )
-               )
+          profile  = AgentProfile(req.description.trim, model, req.group.map(_.trim).filter(_.nonEmpty))
+          grants   = AgentGrants(req.roles.distinct, allow, deny)
+          creating = AgentRecord(id, name, AgentRecord.keyOf(name.value), AgentState.Creating, false, None, t, t)
+          // 先在库里记「正在建」，再写资源文件、工作目录、角色，最后改成 active：中途出错当场按删除收拾，中途重启由 [[start]] 收拾
+          _ <- db.write(AgentRepo.insert(creating))
+          _ <- (store.write(AssetPath.AgentFile(name), Formats.renderAgent(profile)) *>
+                 store.write(AssetPath.PrivateMemory(name), "") *>
+                 paths.ensureWorkspace(id) *>
+                 ZIO.unless(grants.isEmpty)(setGrants(id, _ => grants))).tapError(_ => finishDelete(creating).ignoreLogged)
+          record = creating.copy(state = AgentState.Active)
+          _ <- db.write(AgentRepo.update(record) *> publish)
           _ <- ZIO.logInfo(s"建了 agent ${name.value}（${id.value}）")
         yield record
       }
@@ -413,8 +412,11 @@ object Agents:
         for
           all <- db.read(AgentRepo.all)
           _   <- ZIO.foreachDiscard(all.filter(a => a.renamedFrom.isDefined && a.live))(finishRename)
-          _ <- ZIO.foreachDiscard(all.filter(_.state == AgentState.Deleting)) { a =>
-                 ZIO.logInfo(s"接着删除 agent ${a.name.value}（${a.id.value}）") *> finishDelete(a)
+          _ <- ZIO.foreachDiscard(all) { a =>
+                 a.state match
+                   case AgentState.Deleting => ZIO.logInfo(s"接着删除 agent ${a.name.value}（${a.id.value}）") *> finishDelete(a)
+                   case AgentState.Creating => ZIO.logInfo(s"收拾没建完的 agent ${a.name.value}（${a.id.value}）") *> finishDelete(a)
+                   case AgentState.Active | AgentState.Archived | AgentState.Deleted => ZIO.unit
                }
         yield ()
       }

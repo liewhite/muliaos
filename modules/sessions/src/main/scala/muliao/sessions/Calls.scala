@@ -144,16 +144,14 @@ private[sessions] final case class CallRunner(kernel: Kernel, files: Files, dele
             _ <- p match
                    case Pause.AwaitThread(d, _, _) => delegations.linkTx(d, c.key, t1)
                    case _                          => ZIO.unit
+            waiting <- infoTx(i.id).map(_.userWaiting)
+            _ <- p match
+                   case Pause.AskUser(qs)          => ports.emit(SessionEvent.NeedsUser(i.id, i.agent, UserNeed.Answers(qs.size), waiting))
+                   case Pause.Approval(summary, _) => ports.emit(SessionEvent.NeedsUser(i.id, i.agent, UserNeed.Approval(summary), waiting))
+                   case _: Pause.AwaitThread       => ZIO.unit
             _ <- touched(i.id, t1)
           yield ()
-        ) *> info(i.id).map(_.userWaiting).flatMap { waiting =>
-          p match
-            case Pause.AskUser(qs) =>
-              ports.emit(SessionEvent.NeedsUser(i.id, i.agent, UserNeed.Answers(qs.size), waiting))
-            case Pause.Approval(summary, _) =>
-              ports.emit(SessionEvent.NeedsUser(i.id, i.agent, UserNeed.Approval(summary), waiting))
-            case _: Pause.AwaitThread => ZIO.unit
-        }
+        )
 
 private[sessions] object CallRunner:
   val layer: URLayer[Kernel & Files & Delegations, CallRunner] = ZLayer.derive[CallRunner]

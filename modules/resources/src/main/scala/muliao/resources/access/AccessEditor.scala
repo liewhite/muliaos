@@ -58,11 +58,10 @@ object AccessEditor:
                  ZIO.fail(AppError.conflict(s"platform/access.toml 现在写坏了（$r），平台不在它上面改；先把文件修好"))
                )
           next     <- ZIO.fromEither(f(state.config)).mapError(AppError.invalid)
-          agents   <- db.read(AgentRepo.live)
-          live      = agents.map(_.id).toSet
+          agents   <- db.read(AgentRepo.grantable)
           snapshot <- store.snapshot
           _ <- ZIO
-                 .fromEither(AccessValidation.check(Some(state.config), next, live, snapshot, tools.tools.map(_.name)))
+                 .fromEither(AccessValidation.check(Some(state.config), next, agents.map(_.id).toSet, snapshot, tools.tools.map(_.name)))
                  .mapError(AppError.invalid)
           names = agents.map(a => a.id -> a.name).toMap[AgentId, AgentName]
           _    <- store.write(AssetPath.AccessFile, AccessConfig.render(next, names.get))

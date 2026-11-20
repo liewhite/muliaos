@@ -3,6 +3,7 @@ package muliao.sessions
 import muliao.contract.*
 import muliao.models.llm.{ReplyPart, ShownPart, Usage}
 import muliao.platform.AppError
+import muliao.platform.db.Tx
 import muliao.sessions.store.*
 import zio.*
 
@@ -26,56 +27,74 @@ private[sessions] final case class Control(
 
   // ---- 停止 ----
 
-  /** 停止一个会话：保存已生成的部分，没结果的调用补上说明，丢弃排队的信，放弃等待中的工作，逐层停下它开出的 thread。
-    * `byUser`：用户在界面上点的（会话空闲时报错）；内部逐层停止时空闲的直接跳过。
+  /** 停止一个会话连同它开出的、没空闲的 thread（逐层）：先挡住它们的驱动，再在一个事务里记下全部停止的现场（保存已生成的部分，
+    * 没结果的调用补上说明，丢弃排队的信，放弃等待中的工作，交回「被停止」），提交后结束等待中的后台任务。
+    * 一个事务记下整棵，服务在中间重启也不会留下「上面停了、thread 还在跑」。
+    * `byUser`：用户在界面上点的（会话空闲时报错）；空闲时别的调用方什么也不停。
+    * `also`：调用方要和停止一起提交的改动（看板叫停 issue：改状态、投叫停留言），写在停止之后，所以投给这个会话的信不会被丢弃；会话空闲时单独提交。
     */
-  def stop(id: SessionId, byUser: Boolean): IO[AppError, Unit] =
+  def stop(id: SessionId, byUser: Boolean, also: Tx[Unit] = ZIO.unit): IO[AppError, Unit] =
     states.state(id).flatMap {
       case WorkState.Idle if byUser => ZIO.fail(AppError.conflict("会话空闲，没有可停的"))
-      case WorkState.Idle           => ZIO.unit
+      case WorkState.Idle           => db.write(also)
       case _ =>
         for
-          slot <- slots.halt(id)
-          _    <- stopped(id, slot).ensuring(slots.release(id))
-          _    <- ringIfMail(id)
+          held <- Ref.make(List.empty[(SessionId, Slot)])
+          _    <- (haltTree(id, held) *> held.get.flatMap(h => stopped(h.reverse, also))).ensuring(held.get.flatMap(ZIO.foreachDiscard(_)((s, _) => slots.release(s))))
+          _    <- held.get.flatMap(ZIO.foreachDiscard(_)((s, _) => ringIfMail(s)))
         yield ()
     }
 
-  /** 停止的收尾：一个事务里记下停止的现场并交回「被停止」，再放弃等待中的工作、停下 thread。 */
-  private final case class Halted(waits: List[Wait], asked: Int)
-
-  private def stopped(id: SessionId, slot: Slot): IO[AppError, Unit] =
+  /** 挡住会话的驱动，再逐层挡住它开出的、没空闲的 thread；挡住的按先上后下记进 `held`（出错时调用方据此放开）。 */
+  private def haltTree(id: SessionId, held: Ref[List[(SessionId, Slot)]]): IO[AppError, Unit] =
     for
-      partial <- slot.partial.get
-      t       <- now
-      i       <- info(id)
-      text    <- ZIO.succeed(partial.map(p => ModelView.answerText(p.builder.parts)).filter(_.nonEmpty)).someOrElseZIO(lastAnswer(id))
-      h <- db.write(
-             for
-               _     <- ZIO.foreachDiscard(partial.filter(_.builder.parts.exists(visible)))(p => savePartial(id, p, t))
-               open  <- Repo.openCalls(id).flatMap(Decode.calls)
-               _     <- ZIO.foreachDiscard(open)(c => CallTx.finish(c, CallResult.error(stoppedNote(c.status)), t))
-               run   <- Repo.lastRun(id)
-               _     <- ZIO.foreachDiscard(run.filter(_.state.active))(r => Repo.setRunState(r.id, RunState.Stopped, None, Some(t)))
-               _     <- Repo.dropQueued(id)
-               ws    <- waits.dropTx(id)
-               asked <- delegations.abandonTx(id)
-               _     <- noticeTx(id, run.map(_.id), NoticeKind.Stopped, "已停止", t)
-               _     <- delegations.settleTx(i, Outcome.Stopped(text), t)
-               _     <- touched(id, t)
-             yield Halted(ws, asked.size)
-           )
-      _ <- slot.partial.set(None)
-      _ <- live.done(id)
-      // 放弃等待中的工作：后台任务结束；委派的 thread 由下面逐层停下
-      _ <- ZIO.foreachDiscard(h.waits.map(_.ref)) {
+      slot <- slots.halt(id)
+      _    <- held.update((id, slot) :: _)
+      kids <- db.read(Repo.threadsOf(id)).map(_.map(_.id))
+      st   <- states.states(kids)
+      _    <- ZIO.foreachDiscard(kids.filter(k => st.get(k).exists(_ != WorkState.Idle)))(haltTree(_, held))
+    yield ()
+
+  /** 一个要停的会话：挡住时的槽，停止前读好的基本信息和交回的文字。 */
+  private final case class Halting(info: SessionInfo, slot: Slot, partial: Option[Partial], text: String)
+
+  private def stopped(tree: List[(SessionId, Slot)], also: Tx[Unit]): IO[AppError, Unit] =
+    for
+      hs <- ZIO.foreach(tree) { (id, slot) =>
+              for
+                partial <- slot.partial.get
+                i       <- info(id)
+                text    <- ZIO.succeed(partial.map(p => ModelView.answerText(p.builder.parts)).filter(_.nonEmpty)).someOrElseZIO(lastAnswer(id))
+              yield Halting(i, slot, partial, text)
+            }
+      t <- now
+      // 上层先停：它放弃的委派先记成结束，下层 thread 的「被停止」就不再交回给它
+      dropped <- db.write(ZIO.foreach(hs)(stoppedTx(_, t)) <* also)
+      _ <- ZIO.foreachDiscard(hs)(h => h.slot.partial.set(None) *> live.done(h.info.id))
+      // 放弃等待中的工作：后台任务结束；委派的 thread 已一并停下
+      _ <- ZIO.foreachDiscard(dropped.flatten.map(_.ref)) {
              case WaitRef.Job(job)                       => ports.jobs.flatMap(_.cancel(job))
              case WaitRef.Wake(_) | WaitRef.Delegation(_) => ZIO.unit
            }
-      threads <- db.read(Repo.threadsOf(id))
-      _ <- ZIO.foreachDiscard(threads)(th => stop(th.id, byUser = false).catchAll(e => ZIO.logWarning(s"停 thread ${th.id.value} 失败：${e.message}")))
-      _ <- ZIO.logInfo(s"会话 ${i.id.value} 已停止（放弃 ${h.waits.size} 项等待、${h.asked} 个在等的委派）")
+      _ <- ZIO.logInfo(s"已停止 ${hs.map(_.info.id.value).mkString("、")}（放弃 ${dropped.flatten.size} 项等待）")
     yield ()
+
+  /** 在停止的事务里记下一个会话的停止现场，返回放弃的等待。 */
+  private def stoppedTx(h: Halting, t: Long): Tx[List[Wait]] =
+    val id = h.info.id
+    for
+      _    <- ZIO.foreachDiscard(h.partial.filter(_.builder.parts.exists(visible)))(p => savePartial(id, p, t))
+      open <- Repo.openCalls(id).flatMap(Decode.calls)
+      _    <- ZIO.foreachDiscard(open)(c => CallTx.finish(c, CallResult.error(stoppedNote(c.status)), t))
+      run  <- Repo.lastRun(id)
+      _    <- ZIO.foreachDiscard(run.filter(_.state.active))(r => Repo.setRunState(r.id, RunState.Stopped, None, Some(t)))
+      _    <- Repo.dropQueued(id)
+      ws   <- waits.dropTx(id)
+      _    <- delegations.abandonTx(id)
+      _    <- noticeTx(id, run.map(_.id), NoticeKind.Stopped, "已停止", t)
+      _    <- delegations.settleTx(h.info, Outcome.Stopped(h.text), t)
+      _    <- touched(id, t)
+    yield ws
 
   private def visible(p: ShownPart): Boolean = p match
     case ReplyPart.Text(t, _)  => t.nonEmpty
@@ -161,9 +180,11 @@ private[sessions] final case class Control(
       i <- info(id)
       // touch 对删掉的行无效，这里只借它发通知（列表去掉它，开着的会话页重拉得到「不存在」）
       t <- now
-      _ <- db.write(delegations.threadGoneTx(i, t) *> Repo.orphanThreads(id) *> touched(id, t) *> Repo.deleteSession(id))
+      _ <- db.write(
+             delegations.threadGoneTx(i, t) *> Repo.orphanThreads(id) *> touched(id, t) *> Repo.deleteSession(id) *>
+               ports.emit(SessionEvent.Deleted(id, i.agent, i.origin))
+           )
       _ <- live.done(id)
-      _ <- ports.emit(SessionEvent.Deleted(id, i.agent, i.origin))
     yield ()
 
   // ---- agent 的忙碌与清理 ----

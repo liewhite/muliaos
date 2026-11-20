@@ -38,18 +38,17 @@ object SessionLink:
 
   val unread: URIO[Notifications, UnreadSource] = ZIO.serviceWith[Notifications](unreadOf)
 
-  private def listener(n: Notifications, sessions: Sessions, agents: Agents): SessionListener = e =>
-    val work: IO[AppError, Unit] = e match
-      case SessionEvent.Deleted(id, _, _) => n.forgetSession(id)
-      case _ =>
-        ZIO.foreachDiscard(SessionRules.wanted(e)) { w =>
-          for
-            info <- sessions.info(w.session)
-            name <- agents.names(List(info.agent)).map(_(info.agent))
-            _    <- n.notify(SessionRules.notice(w, name, info.title))
-          yield ()
-        }
-    work.catchAll(err => ZIO.logError(s"会话事件没能转成通知：${err.message}"))
+  /** 在会话发事件的写事务里发通知或删通知（推送在提交后）。 */
+  private def listener(n: Notifications, sessions: Sessions, agents: Agents): SessionListener =
+    case SessionEvent.Deleted(id, _, _) => n.forgetSessionIn(id)
+    case e =>
+      ZIO.foreachDiscard(SessionRules.wanted(e)) { w =>
+        for
+          info <- sessions.info(w.session)
+          name <- agents.names(List(info.agent)).map(_(info.agent))
+          _    <- n.notifyIn(SessionRules.notice(w, name, info.title))
+        yield ()
+      }
 
   private def unreadOf(n: Notifications): UnreadSource = new UnreadSource:
     def unread(ids: List[SessionId]): UIO[Set[SessionId]] =

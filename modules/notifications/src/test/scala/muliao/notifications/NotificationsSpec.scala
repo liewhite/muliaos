@@ -139,7 +139,7 @@ object NotificationsSpec extends ZIOSpecDefault:
           box1 <- inbox
           _    <- n.readPage("/issues/3")
           box2 <- inbox
-          _    <- n.forgetSession(s1)
+          _    <- Database.write(n.forgetSessionIn(s1))
           box3 <- inbox
           _    <- n.subscribe(sub("x")) *> n.subscribe(sub("x"))
           eps  <- Database.read(Repo.endpoints)

@@ -13,15 +13,22 @@ enum AgentState(val label: String) extends Labeled:
   case Active   extends AgentState("active")
   /** 停用但保留全部数据，不接新工作 */
   case Archived extends AgentState("archived")
+  /** 正在建（建到一半服务重启的，启动时按删除收拾掉） */
+  case Creating extends AgentState("creating")
   /** 正在删除（服务重启后接着删） */
   case Deleting extends AgentState("deleting")
   /** 已删除：只留编号与名字，供用量和工作历史显示 */
   case Deleted  extends AgentState("deleted")
 
-  /** 还存在（没删、没在删）。 */
+  /** 还存在（建好了、没删、没在删）。 */
   def live: Boolean = this match
-    case Active | Archived  => true
-    case Deleting | Deleted => false
+    case Active | Archived             => true
+    case Creating | Deleting | Deleted => false
+
+  /** access.toml 里可以有它的段：现存的，加上正在建的（建的时候就要写进角色）。 */
+  def grantable: Boolean = this match
+    case Active | Archived | Creating => true
+    case Deleting | Deleted           => false
 
 object AgentState extends Labels[AgentState]("agent 状态", AgentState.values)
 

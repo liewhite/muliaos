@@ -173,6 +173,34 @@ object AgentsSpec extends ZIOSpecDefault:
         !Files.exists(dirs.assets.resolve("alice"))
       )
     },
+    test("建到一半服务重启：启动时收拾掉（目录、权限段、工作目录），名字可再用；建时写不进权限就整个撤销（#1062）") {
+      for
+        dirs <- ZIO.service[TestEnv.Dirs]
+        a    <- create("alice", roles = List("admin"))
+        db   <- ZIO.service[muliao.platform.db.Database]
+        // 模拟：库里还是「正在建」，资源文件、工作目录、权限都写了，没来得及改成 active
+        _     <- db.write(AgentRepo.update(a.copy(state = AgentState.Creating)))
+        list  <- agents.flatMap(_.list)
+        again <- TestEnv.restartAgents
+        done  <- again.get(a.id)
+        acc   <- ZIO.serviceWithZIO[AssetStore](_.access)
+        b     <- create("alice")
+        // access.toml 写坏时建 agent：写不进权限，整个撤销，不留目录
+        _      = write(dirs.assets.resolve("platform/access.toml"), "[roles\n")
+        e     <- create("carol", roles = List("admin")).either
+        carol <- agents.flatMap(_.find("carol"))
+      yield assertTrue(
+        !list.exists(_.id == a.id),
+        done.state == AgentState.Deleted,
+        !acc.config.agents.contains(a.id),
+        !Files.exists(dirs.workspaces.resolve(a.id.value)),
+        b.id != a.id,
+        Files.isDirectory(dirs.assets.resolve("alice")),
+        e.isLeft,
+        carol.isEmpty,
+        !Files.exists(dirs.assets.resolve("carol"))
+      )
+    },
     test("改配置：只改给出的字段，写回 agent.toml") {
       for
         a <- create("alice")

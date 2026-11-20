@@ -27,7 +27,7 @@ private[sessions] final class Driver(
   import kernel.*
 
   /** 启动：收尾上次被打断的调用，续跑没跑完的运行（含挂起的：等的结果可能已到、门铃没来得及按）、排队的来信与批准了的调用，
-    * 以及还有回答去向的会话（运行做完了、收尾交回前被重启的，由 [[settleIfDone]] 补交回），然后开始应门铃。
+    * 以及待收尾的会话（运行做完了、收尾前被重启的，由 [[settleIfDone]] 补收尾），然后开始应门铃。
     */
   def start: IO[AppError, Unit] =
     for
@@ -45,8 +45,8 @@ private[sessions] final class Driver(
       runs     <- db.read(Repo.runsIn(List(RunState.Running, RunState.Suspended)))
       mail     <- db.read(Repo.sessionsWithMail)
       approved <- db.read(Repo.callsIn(List(CallState.Approved, CallState.ApprovedAlways)))
-      unsent   <- db.read(Repo.sessionsAwaitingReply)
-      toKick    = (runs.map(_.sessionId) ++ mail ++ approved.map(_.sessionId) ++ unsent).distinct
+      unsettled <- db.read(Repo.sessionsToSettle)
+      toKick    = (runs.map(_.sessionId) ++ mail ++ approved.map(_.sessionId) ++ unsettled).distinct
       _ <- ZIO.logInfo(s"启动：续跑 ${toKick.size} 个会话")
       _ <- ZIO.foreachDiscard(toKick)(doorbell.ring)
       _ <- doorbell.next.flatMap(kick).forever.forkIn(scope)
@@ -71,13 +71,12 @@ private[sessions] final class Driver(
   private def drive(id: SessionId, slot: Slot): ZIO[Scope, AppError, Unit] =
     for
       kit     <- requests.prepareKit(id).memoize
-      ran     <- Ref.make(false)
       rejects <- Ref.make(Map.empty[String, Int])
-      _       <- Round(id, slot, kit, ran, rejects).loop
+      _       <- Round(id, slot, kit, rejects).loop
     yield ()
 
-  /** 一轮驱动的现场：本轮的运行准备（只准备一次）、跑过没有、各工具连续被拒的次数。 */
-  private final case class Round(id: SessionId, slot: Slot, kit: ZIO[Scope, AppError, Kit], ran: Ref[Boolean], rejects: Ref[Map[String, Int]]):
+  /** 一轮驱动的现场：本轮的运行准备（只准备一次）、各工具连续被拒的次数。 */
+  private final case class Round(id: SessionId, slot: Slot, kit: ZIO[Scope, AppError, Kit], rejects: Ref[Map[String, Int]]):
     def loop: ZIO[Scope, AppError, Unit] =
       for
         last   <- db.read(Repo.lastRun(id))
@@ -85,14 +84,13 @@ private[sessions] final class Driver(
         open   <- db.read(Repo.openCalls(id)).flatMap(Decode.calls)
         queued <- db.read(Repo.queued(id)).map(_.nonEmpty)
         _ <- Plan.next(run, open, queued) match
-               case Next.Rest     => settleIfDone(id, ran)
+               case Next.Rest     => settleIfDone(id)
                case Next.Pause(r) => suspend(id, r)
-               case Next.Start    => ran.set(true) *> begin(id, kit) *> loop
+               case Next.Start    => begin(id, kit) *> loop
                case Next.Request(r) =>
-                 ran.set(true) *> (resume(id, r) *> kit.flatMap(k => request(k, r.id, slot))).catchAll(e => failRun(id, r.id, e.message)) *> loop
+                 (resume(id, r) *> kit.flatMap(k => request(k, r.id, slot))).catchAll(e => failRun(id, r.id, e.message)) *> loop
                case Next.Execute(r, cs) =>
-                 ran.set(true) *> (resume(id, r) *> kit.flatMap(k => calls.execute(k, r.id, cs, rejects, slot))).catchAll(e => failRun(id, r.id, e.message)) *>
-                   loop
+                 (resume(id, r) *> kit.flatMap(k => calls.execute(k, r.id, cs, rejects, slot))).catchAll(e => failRun(id, r.id, e.message)) *> loop
                case Next.Decline(_, cs) => decline(id, cs) *> loop
       yield ()
 
@@ -170,7 +168,7 @@ private[sessions] final class Driver(
                           ToolCallRow(entry, CallId.wrap(c.id), id, i, c.name, c.args, CallStatus.Pending.state, None, None, None, None)
                         ))
                    _ <- requests.recordUsage(kit, reply.usage, t)
-                   _ <- Repo.setRunState(run, RunState.Finished, None, Some(t)).when(calls.isEmpty)
+                   _ <- (Repo.setRunState(run, RunState.Finished, None, Some(t)) *> Repo.setSettleDue(id, true)).when(calls.isEmpty)
                    _ <- touched(id, t)
                  yield entry
                )
@@ -181,14 +179,13 @@ private[sessions] final class Driver(
 
   // ---- 收尾 ----
 
-  /** 驱动没事可做时：这次跑过运行、或有等着交回的回答，且没有进行中的异步工作，就是一段工作做完了：交回回答。 */
-  private def settleIfDone(id: SessionId, ran: Ref[Boolean]): IO[AppError, Unit] =
+  /** 驱动没事可做时：待收尾（运行做完了还没收尾）、且没有进行中的异步工作，就是一段工作做完了：收尾。 */
+  private def settleIfDone(id: SessionId): IO[AppError, Unit] =
     for
-      r     <- ran.get
       i     <- info(id)
       run   <- db.read(Repo.lastRun(id))
       waits <- db.read(Repo.waitsOf(id))
-      _     <- settle(i).when((r || i.pendingReply.nonEmpty) && waits.isEmpty && run.exists(_.state == RunState.Finished))
+      _     <- settle(i).when(i.settleDue && waits.isEmpty && run.exists(_.state == RunState.Finished))
     yield ()
 
   private def settle(i: SessionInfo): IO[AppError, Unit] =

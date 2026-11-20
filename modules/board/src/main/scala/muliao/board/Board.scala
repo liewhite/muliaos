@@ -46,8 +46,8 @@ trait Board:
     */
   def activity(agent: Option[AgentId], from: Long, to: Long): IO[AppError, List[IssueActivity]]
 
-  /** 会话事件：issue 会话最终失败记一条动态；一次运行结束后停滞时请 agent 表态（一次）。 */
-  def onSession(e: SessionEvent): UIO[Unit]
+  /** 会话事件（在会话发事件的写事务里）：issue 会话最终失败记一条动态；一次运行结束后停滞时请 agent 表态（一次）。 */
+  def onSession(e: SessionEvent): Tx[Unit]
 
   /** 删除 agent：它负责、被指派的 issue 置空（可重复执行）。 */
   def forgetAgent(agent: AgentId): IO[AppError, Unit]
@@ -358,15 +358,18 @@ object Board:
         issue  <- db.read(Repo.require(id))
         links  <- sessions.issueSessions(List(id))
         worker  = issue.assignedAgent
-        _      <- ZIO.foreachDiscard(links.filter(l => worker.contains(l.agent)))(l => sessions.stop(l.session))
-        _ <- db.write(
-               for
-                 i     <- Repo.require(id)
-                 after  = i.copy(status = halt.status)
-                 changes = List(Some(Activity.Stopped), Option.when(i.status != after.status)(Activity.StatusChanged(i.status, after.status)), halt.message.map(Activity.Commented(_))).flatten
-                 _     <- apply(by, i, after, changes, also = halt.message.flatMap(_ => after.assignedAgent))
-               yield ()
-             )
+        change  = halted(by, id, halt)
+        // 停会话与改 issue、投叫停留言同一事务提交；留言写在停止之后，不会被停止丢弃
+        _ <- links.find(l => worker.contains(l.agent)).fold(db.write(change))(l => sessions.stop(l.session, change))
+      yield ()
+
+    /** 叫停后 issue 的改动：记叫停、改状态、留言投给指派的 agent。 */
+    private def halted(by: By, id: IssueId, halt: Halt): Tx[Unit] =
+      for
+        i      <- Repo.require(id)
+        after   = i.copy(status = halt.status)
+        changes = List(Some(Activity.Stopped), Option.when(i.status != after.status)(Activity.StatusChanged(i.status, after.status)), halt.message.map(Activity.Commented(_))).flatten
+        _      <- apply(by, i, after, changes, also = halt.message.flatMap(_ => after.assignedAgent))
       yield ()
 
     def start(id: IssueId): IO[AppError, Unit] =
@@ -397,35 +400,31 @@ object Board:
 
     // ---- 会话事件 ----
 
-    def onSession(e: SessionEvent): UIO[Unit] =
-      val work: IO[AppError, Unit] = e match
-        case SessionEvent.Settled(_, agent, Origin.Issue(i), Outcome.Answered(_), _) => nudge(i, agent)
-        case SessionEvent.Settled(s, _, Origin.Issue(i), Outcome.Failed(err), _) =>
-          db.write(
-            Repo.get(i).flatMap(ZIO.foreachDiscard(_) { _ =>
-              record(i, Actor.System(Some(s)), List(Activity.SessionFailed(err)))
-            })
-          )
-        case _ => ZIO.unit
-      work.catchAll(err => ZIO.logError(s"看板处理会话事件失败：${err.message}"))
+    /** 在会话发事件的写事务里处理（与会话的收尾一起提交）。 */
+    def onSession(e: SessionEvent): Tx[Unit] = e match
+      case SessionEvent.Settled(_, agent, Origin.Issue(i), Outcome.Answered(_), _) => nudge(i, agent)
+      case SessionEvent.Settled(s, _, Origin.Issue(i), Outcome.Failed(err), _) =>
+        Repo.get(i).flatMap(ZIO.foreachDiscard(_) { _ =>
+          record(i, Actor.System(Some(s)), List(Activity.SessionFailed(err)))
+        })
+      case _ => ZIO.unit
 
     /** issue 会话做完一段工作（回到空闲、没有在等的事）后，issue 还该它处理：请它表态，直到下次有动态投给它之前只请一次。
-      * 「空闲」就是这个事件本身（事件发出时驱动还没退出，不再另查工作状态）。
+      * 「空闲」就是这个事件本身（事件发出时驱动还没退出，不再另查工作状态）。投不进（agent 已归档等）只记日志：
+      * 投信失败时还没写任何东西，会话的收尾照常提交。
       */
-    private def nudge(id: IssueId, agent: AgentId): IO[AppError, Unit] =
-      db.write(
-        Repo.get(id).flatMap(ZIO.foreachDiscard(_) { i =>
-          for
-            st    <- Repo.statuses(i.dependsOn)
-            asked <- Repo.nudged(id, agent)
-            r     <- render(List(i), Nil)
-            _ <- ZIO.when(Rules.worker(i, Rules.waitingOn(i, st.get)).contains(agent) && !asked) {
-                   sessions.deliverIn(Address.IssueOf(agent, id, s"#${id.value} ${i.title}"), Source.Issue(id), r.nudge(i)) *>
-                     Repo.markNudged(id, agent)
-                 }
-          yield ()
-        })
-      )
+    private def nudge(id: IssueId, agent: AgentId): Tx[Unit] =
+      Repo.get(id).flatMap(ZIO.foreachDiscard(_) { i =>
+        for
+          st    <- Repo.statuses(i.dependsOn)
+          asked <- Repo.nudged(id, agent)
+          r     <- render(List(i), Nil)
+          _ <- ZIO.when(Rules.worker(i, Rules.waitingOn(i, st.get)).contains(agent) && !asked) {
+                 (sessions.deliverIn(Address.IssueOf(agent, id, s"#${id.value} ${i.title}"), Source.Issue(id), r.nudge(i)) *> Repo.markNudged(id, agent))
+                   .catchSome { case e: AppError.Domain => ZIO.logWarning(s"#${id.value} 没能请它表态：${e.message}") }
+               }
+        yield ()
+      })
 
     def forgetAgent(agent: AgentId): IO[AppError, Unit] =
       db.write(

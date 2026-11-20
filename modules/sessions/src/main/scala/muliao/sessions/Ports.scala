@@ -2,6 +2,7 @@ package muliao.sessions
 
 import muliao.contract.{AgentId, AgentName, CallId, FileId, JobId, Origin, RunId, SessionId}
 import muliao.platform.config.ConfigSection
+import muliao.platform.db.Tx
 import muliao.resources.{AgentHook, RunResources}
 import muliao.toolkit.{Display, Tool, ToolContext, ToolFailure, ToolOutcome}
 import zio.*
@@ -54,7 +55,7 @@ enum Outcome:
   /** 被停止：`partial` 是停止前最后一条回复的正文 */
   case Stopped(partial: String)
 
-/** 本领域发给别的领域的事件（通知、看板、触发器订阅）。都在提交后发出。 */
+/** 本领域发给别的领域的事件（通知、看板订阅）。在产生它的写事务里交给订阅方，与本领域的改动一起提交（#1062）。 */
 enum SessionEvent:
   /** 会话回到空闲（回答完）、最终失败或被停止。`toUser`：用户在等这个回答 */
   case Settled(session: SessionId, agent: AgentId, origin: Origin, outcome: Outcome, toUser: Boolean)
@@ -72,8 +73,11 @@ enum UserNeed:
     case Answers(n)  => s"有 $n 个问题等你回答"
     case Approval(s) => s"等你批准：$s"
 
+/** 会话事件的订阅方：在发事件的写事务里写自己的表（只写库；推送、HTTP 这类慢的或外部的事用 `TxHooks.afterCommit` 放到提交后）。
+  * 失败会让整个事务回滚，连同会话自己的改动：收尾没记下，下次启动补收尾时重做。
+  */
 trait SessionListener:
-  def on(event: SessionEvent): UIO[Unit]
+  def on(event: SessionEvent): Tx[Unit]
 
 /** 后台任务（工作区领域实现）：会话在等它时，心跳检查报告状态，会话被停止时结束它。 */
 trait JobControl:
@@ -122,9 +126,9 @@ private[sessions] final class Ports private (wired: Promise[Nothing, Ports.Wired
   def display: UIO[Timeline.Shows] =
     wired.await.map(w => (name, args) => w.display.get(name).fold(Display.Plain)(f => args.fromJson[Json].fold(_ => Display.Plain, f)))
 
-  /** 同步地逐个通知订阅方（按贡献的顺序），一个出错不影响别的。 */
-  def emit(e: SessionEvent): UIO[Unit] =
-    wired.await.flatMap(w => ZIO.foreachDiscard(w.listeners)(l => l.on(e).catchAllCause(c => ZIO.logErrorCause("会话事件订阅方出错", c))))
+  /** 在调用方的写事务里逐个交给订阅方（按贡献的顺序）。 */
+  def emit(e: SessionEvent): Tx[Unit] =
+    wired.await.flatMap(w => ZIO.foreachDiscard(w.listeners)(_.on(e)))
 
 private[sessions] object Ports:
   final case class Wired(ports: SessionPorts):
