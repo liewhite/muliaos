@@ -148,7 +148,7 @@ object Sessions:
     def info(id: SessionId)          = kernel.info(id)
     def states(ids: List[SessionId]) = workStates.states(ids)
     def state(id: SessionId)         = workStates.state(id)
-    def stop(id: SessionId, also: Tx[Unit]) = control.stop(id, byUser = false, also)
+    def stop(id: SessionId, also: Tx[Unit]) = control.stop(id, also)
     def openJobWait(session: SessionId, job: JobId, label: String, heartbeat: Option[Duration]) =
       waits.open(session, WaitRef.Job(job), label, heartbeat).unit
     def closeJobWait(job: JobId, letter: Option[Letter])        = waits.close(WaitKey.job(job), letter)

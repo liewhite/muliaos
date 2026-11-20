@@ -163,7 +163,7 @@ private[sessions] object SessionTools:
         agent <- ZIO.foreach(in.agent)(a => agents.resolve(a.value))
         row   <- delegations.findThread(ctx.session, name, agent)
         st    <- states.state(row.id)
-        _     <- control.stop(row.id, byUser = false)
+        _     <- control.stop(row.id)
       yield ToolOutcome.text(if st == WorkState.Idle then s"thread「${name.value}」本来就空闲。" else s"已停下 thread「${name.value}」。")).mapError(fail)
     }
 

@@ -212,14 +212,14 @@ object Agents:
           profile  = AgentProfile(req.description.trim, model, req.group.map(_.trim).filter(_.nonEmpty))
           grants   = AgentGrants(req.roles.distinct, allow, deny)
           creating = AgentRecord(id, name, AgentRecord.keyOf(name.value), AgentState.Creating, false, None, t, t)
+          record   = creating.copy(state = AgentState.Active)
           // 先在库里记「正在建」，再写资源文件、工作目录、角色，最后改成 active：中途出错当场按删除收拾，中途重启由 [[start]] 收拾
           _ <- db.write(AgentRepo.insert(creating))
           _ <- (store.write(AssetPath.AgentFile(name), Formats.renderAgent(profile)) *>
                  store.write(AssetPath.PrivateMemory(name), "") *>
                  paths.ensureWorkspace(id) *>
-                 ZIO.unless(grants.isEmpty)(setGrants(id, _ => grants))).tapError(_ => finishDelete(creating).ignoreLogged)
-          record = creating.copy(state = AgentState.Active)
-          _ <- db.write(AgentRepo.update(record) *> publish)
+                 ZIO.unless(grants.isEmpty)(setGrants(id, _ => grants)) *>
+                 db.write(AgentRepo.update(record) *> publish)).tapError(_ => finishDelete(creating).ignoreLogged)
           _ <- ZIO.logInfo(s"建了 agent ${name.value}（${id.value}）")
         yield record
       }

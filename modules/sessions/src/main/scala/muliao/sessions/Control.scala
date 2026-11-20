@@ -30,30 +30,29 @@ private[sessions] final case class Control(
   /** 停止一个会话连同它开出的、没空闲的 thread（逐层）：先挡住它们的驱动，再在一个事务里记下全部停止的现场（保存已生成的部分，
     * 没结果的调用补上说明，丢弃排队的信，放弃等待中的工作，交回「被停止」），提交后结束等待中的后台任务。
     * 一个事务记下整棵，服务在中间重启也不会留下「上面停了、thread 还在跑」。
-    * `byUser`：用户在界面上点的（会话空闲时报错）；空闲时别的调用方什么也不停。
+    * 会话空闲时什么也不停。
     * `also`：调用方要和停止一起提交的改动（看板叫停 issue：改状态、投叫停留言），写在停止之后，所以投给这个会话的信不会被丢弃；会话空闲时单独提交。
     */
-  def stop(id: SessionId, byUser: Boolean, also: Tx[Unit] = ZIO.unit): IO[AppError, Unit] =
+  def stop(id: SessionId, also: Tx[Unit] = ZIO.unit): IO[AppError, Unit] =
     states.state(id).flatMap {
-      case WorkState.Idle if byUser => ZIO.fail(AppError.conflict("会话空闲，没有可停的"))
-      case WorkState.Idle           => db.write(also)
+      case WorkState.Idle => db.write(also)
       case _ =>
         for
-          held <- Ref.make(List.empty[(SessionId, Slot)])
-          _    <- (haltTree(id, held) *> held.get.flatMap(h => stopped(h.reverse, also))).ensuring(held.get.flatMap(ZIO.foreachDiscard(_)((s, _) => slots.release(s))))
-          _    <- held.get.flatMap(ZIO.foreachDiscard(_)((s, _) => ringIfMail(s)))
+          held <- Ref.make(List.empty[SessionId])
+          tree <- (haltTree(id, held).flatMap(t => stopped(t, also).as(t))).ensuring(held.get.flatMap(ZIO.foreachDiscard(_)(slots.release)))
+          _    <- ZIO.foreachDiscard(tree)((s, _) => ringIfMail(s))
         yield ()
     }
 
-  /** 挡住会话的驱动，再逐层挡住它开出的、没空闲的 thread；挡住的按先上后下记进 `held`（出错时调用方据此放开）。 */
-  private def haltTree(id: SessionId, held: Ref[List[(SessionId, Slot)]]): IO[AppError, Unit] =
+  /** 挡住会话的驱动，再逐层挡住它开出的、没空闲的 thread，按先上后下返回。挡之前先把编号记进 `held`（调用方据此放开，挡到一半被打断也不漏）。 */
+  private def haltTree(id: SessionId, held: Ref[List[SessionId]]): IO[AppError, List[(SessionId, Slot)]] =
     for
+      _    <- held.update(id :: _)
       slot <- slots.halt(id)
-      _    <- held.update((id, slot) :: _)
       kids <- db.read(Repo.threadsOf(id)).map(_.map(_.id))
       st   <- states.states(kids)
-      _    <- ZIO.foreachDiscard(kids.filter(k => st.get(k).exists(_ != WorkState.Idle)))(haltTree(_, held))
-    yield ()
+      rest <- ZIO.foreach(kids.filter(k => st.get(k).exists(_ != WorkState.Idle)))(haltTree(_, held))
+    yield (id, slot) :: rest.flatten
 
   /** 一个要停的会话：挡住时的槽，停止前读好的基本信息和交回的文字。 */
   private final case class Halting(info: SessionInfo, slot: Slot, partial: Option[Partial], text: String)
@@ -199,7 +198,7 @@ private[sessions] final case class Control(
 
   /** 删 agent 时删掉它的全部会话（可重复执行）。 */
   def agentCleanup(agent: AgentId): IO[AppError, Unit] =
-    db.read(Repo.sessionsOfAgent(agent)).flatMap(ZIO.foreachDiscard(_)(s => stop(s.id, byUser = false) *> remove(s.id)))
+    db.read(Repo.sessionsOfAgent(agent)).flatMap(ZIO.foreachDiscard(_)(s => stop(s.id) *> remove(s.id)))
 
 private[sessions] object Control:
   val layer: URLayer[Kernel & Slots & States & Doorbell & Mailbox & Waits & Delegations & Requests & Compaction, Control] = ZLayer.derive[Control]
