@@ -15,14 +15,14 @@ final case class Asked(slot: Slot, want: AskWant, purpose: AskPurpose)
   * 每次调用各自一个请求（带会话与要跑的命令，用户看着它批），要的是两种之一（[[AskWant]]）：
   *   - 明文（[[obtain]]）：「一次」与「拒绝」只结掉这一个；「一段时间」把这个 agent 这个 secret 记成已授权，同时结掉它全部在等的取明文请求，
   *     到期前再用不再问（到期的在下次读写状态时删掉）。
-  *   - 签名（[[sign]]，#938）：签名钥匙在浏览器里签好交回结果，明文不出浏览器；每次都要批，不看也不留「一段时间」的授权。
+  *   - 签名（[[sign]]，#938）：密钥对在浏览器里签好交回结果，明文不出浏览器；每次都要批，不看也不留「一段时间」的授权。
   * 调用结束（含被中断）时它的请求随之撤下。全在内存里，重启清空。
   */
 trait Grants:
   /** 取明文：有生效的授权直接给；否则登记一个请求，等到用户答复。 */
   def obtain(slot: Slot, purpose: AskPurpose, box: PasskeyBox): IO[AppError, String]
 
-  /** 请用户用这个签名钥匙签一份内容，等到用户答复；返回签好的结果。 */
+  /** 请用户用这个密钥对签一份内容，等到用户答复；返回签好的结果。 */
   def sign(slot: Slot, content: SignContent, purpose: AskPurpose, box: PasskeyBox): IO[AppError, String]
 
   /** 等授权的请求与生效中的授权（不含明文）。 */

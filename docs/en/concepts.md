@@ -155,16 +155,16 @@ Secrets are stored encrypted in the assets directory and never appear in session
 naming it in `run_shell` / `skill_run` (`secrets=[KEY]`, injected as an environment variable and masked in the output) or as
 `${vault:KEY}` in an MCP configuration. There is no tool that reveals a secret's value.
 
-Each secret is locked in one of three ways:
+Each secret has three dimensions, one choice each:
 
-| Lock | Who can decrypt |
+| Dimension | Choices |
 |---|---|
-| Server key | the platform, with the `[vault] key` from the config |
-| Passkey | only your browser, with your passkey; each use waits for your approval (once, for a period, or deny) |
-| Signing key | nobody: the private key only signs inside your browser after you approve the content (e.g. short-lived SSH certificates via `ssh_certificate`) |
+| Who can decrypt | **Server**: the platform, with the `[vault] key` from the config; **Passkey**: only your browser, with your passkey; each use waits for your approval (once, for a period, or deny) |
+| Content | **Password** (any text); **Key pair** (an ed25519 private key the platform can sign with, e.g. short-lived SSH certificates via `ssh_certificate`) |
+| Plaintext | **Any command**; **Scripts only** (usable by skill scripts and MCP servers, but not injectable into commands the agent writes itself); **Sign only** (key pairs only: the value can never be revealed) |
 
-A secret can also be marked *script-only*: usable by skill scripts and MCP servers, but not injectable into commands the agent writes itself.
-Passkey features require HTTPS on a domain name.
+Signing happens where the secret can be decrypted: server-held keys sign inside the platform (agents never see the private key and no approval is needed),
+passkey-held keys sign inside your browser after you approve the content. Passkey features require HTTPS on a domain name.
 
 ## Notifications
 

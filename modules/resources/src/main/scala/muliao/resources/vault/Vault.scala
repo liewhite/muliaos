@@ -1,6 +1,6 @@
 package muliao.resources.vault
 
-import muliao.contract.{AgentId, AskPurpose, AssetKind, SecretValue, SignContent}
+import muliao.contract.{AgentId, AskPurpose, AssetKind, RevealScope, SecretContent, SecretValue, SignContent, SigningAlgorithm, SshCert}
 import muliao.platform.AppError
 import muliao.resources.VaultSettings
 import muliao.resources.access.{Action, Decision, Permissions}
@@ -17,29 +17,40 @@ enum Actor:
 enum SecretUse:
   case Shell, Script, Mcp
 
+/** 设值时内容与能否取明文怎么定：沿用原来的（新建的取 [[SecretContent.Default]]）、只改明文范围，或整个指定（用户在界面上）。 */
+enum ContentChange:
+  case Keep
+  case Scope(scope: RevealScope)
+  case Replace(content: SecretContent)
+
+  def from(before: Option[SecretContent]): Either[String, SecretContent] = this match
+    case Keep       => Right(before.getOrElse(SecretContent.Default))
+    case Scope(s)   => before.fold(Right(SecretContent.Opaque(s)))(_.withScope(s))
+    case Replace(c) => Right(c)
+
 /** secret 的加密保存与解密使用。值只在这里出现：不进日志、不进错误信息。
-  * 两种锁法（[[SecretLock]]）：服务端主密钥的用时直接解；passkey 的用时经 [[Grants]] 等用户在界面上解开。
+  * 两种解锁方（[[SecretLock]]）：服务端主密钥的用时直接解、在服务端签；passkey 的用时经 [[Grants]] 等用户在界面上解开或签好。
   */
 trait Vault:
   /** 存或改一个 secret 的值。已有的要有改它的权限（agent 自己的、或规则给了 write）；新的归 `newOwner`（agent 调用时就是它自己）。
-    * `description` 为空时沿用原来的；`allowShell` 省略时新的为 true、已有的不变。passkey 加密的只有用户能改值。返回是否新建。
+    * `description` 为空时沿用原来的。passkey 加密的只有用户能设、能改值；服务端保管的密钥对先核对是认得的私钥。返回是否新建。
     */
   def set(
       actor: Actor,
       key: String,
       value: SecretValue,
+      content: ContentChange,
       description: Option[String],
-      allowShell: Option[Boolean],
       newOwner: Owner
   ): IO[AppError, Boolean]
 
-  /** 解出某 agent 能用的一组 secret。不能用的、`allow_shell = false` 却要注入自写命令的、解不开的都报错并点名是哪个 key。
+  /** 解出某 agent 能用的一组 secret。不能用的、只能签名的、只给脚本却要注入自写命令的、解不开的都报错并点名是哪个 key。
     * 其中 passkey 加密的没有生效的授权时，等用户授权（几个同时等），被拒绝报错；`purpose` 给用户看拿去做什么、在哪个会话里批。
     */
   def reveal(agent: AgentId, keys: List[String], use: SecretUse, purpose: AskPurpose): IO[AppError, Map[String, String]]
 
-  /** 请用户用签名钥匙 `key` 签一份内容（#938）：等用户在浏览器里解开并签好交回，私钥不出浏览器。返回签好的结果（SSH 证书是证书文件的一行）。
-    * 用它要有 use 权限；`key` 不是签名钥匙报错。
+  /** 用密钥对 `key` 签一份内容，返回签好的结果（SSH 证书是证书文件的一行）。服务端保管的在服务端直接签；
+    * passkey 加密的等用户在浏览器里解开并签好交回（#938），私钥不出浏览器。要有 use 权限；不是这种算法的密钥对报错。
     */
   def sign(agent: AgentId, key: String, content: SignContent, purpose: AskPurpose): IO[AppError, String]
 
@@ -77,8 +88,8 @@ object Vault:
         actor: Actor,
         key: String,
         value: SecretValue,
+        content: ContentChange,
         description: Option[String],
-        allowShell: Option[Boolean],
         newOwner: Owner
     ): IO[AppError, Boolean] =
       lock.withPermit {
@@ -98,12 +109,9 @@ object Vault:
                                     case _ =>
                                       ZIO.fail(AppError.forbidden(s"secret $key 归 ${doc.owner.label}，你没有改它的权限；请它的主人改，或找 admin 授权"))
                                 )
-                           sealedNow <- seal(actor, key, value, Some(doc.content.lock), now)
-                           next = SecretFile(
-                                    description.map(_.trim).filter(_.nonEmpty).getOrElse(doc.content.description),
-                                    sealedNow,
-                                    allowShell.getOrElse(doc.content.allowShell)
-                                  )
+                           shape     <- ZIO.fromEither(content.from(Some(doc.content.content))).mapError(AppError.invalid)
+                           sealedNow <- seal(actor, key, value, shape, Some(doc.content.lock), now)
+                           next = SecretFile(description.map(_.trim).filter(_.nonEmpty).getOrElse(doc.content.description), sealedNow, shape)
                            _ <- store.write(AssetPath.Secret(doc.owner, key), Formats.renderSecret(next))
                          yield false
                        case None =>
@@ -112,26 +120,32 @@ object Vault:
                            _ <- ZIO.when(owners.nonEmpty)(
                                   ZIO.fail(AppError.conflict(s"${owners.map(_.label).mkString("、")} 已有名为 $key 的 secret 文件（没加载：见资源问题），先处理它"))
                                 )
-                           sealedNow <- seal(actor, key, value, None, now)
+                           shape     <- ZIO.fromEither(content.from(None)).mapError(AppError.invalid)
+                           sealedNow <- seal(actor, key, value, shape, None, now)
                            owner = perms.flatMap(_.name).fold(newOwner)(Owner.Agent(_))
-                           next  = SecretFile(description.map(_.trim).getOrElse(""), sealedNow, allowShell.getOrElse(true))
+                           next  = SecretFile(description.map(_.trim).getOrElse(""), sealedNow, shape)
                            _ <- store.write(AssetPath.Secret(owner, key), Formats.renderSecret(next))
                          yield true
           _ <- ZIO.logInfo(s"secret $key 已${if created then "新建" else "更新"}")
         yield created
       }
 
-    /** 新值锁成什么：明文用主密钥加密；passkey 的密文浏览器里已加密好，原样存。passkey 加密的只有用户能设、能改。 */
-    private def seal(actor: Actor, key: String, value: SecretValue, before: Option[SecretLock], now: Long): IO[AppError, SecretLock] =
+    /** 新值锁成什么：明文用主密钥加密（密钥对先核对私钥认得）；passkey 的密文浏览器里已加密好，原样存。passkey 加密的只有用户能设、能改。 */
+    private def seal(actor: Actor, key: String, value: SecretValue, shape: SecretContent, before: Option[SecretLock], now: Long): IO[AppError, SecretLock] =
       (actor, before, value) match
-        case (Actor.Agent(_), Some(_: (SecretLock.Passkey | SecretLock.Signing)), _) =>
+        case (Actor.Agent(_), Some(_: SecretLock.Passkey), _) =>
           ZIO.fail(AppError.forbidden(s"secret $key 是 passkey 加密的，只能由用户在界面上改值"))
-        case (Actor.Agent(_), _, _: (SecretValue.Passkey | SecretValue.Signing)) =>
+        case (Actor.Agent(_), _, _: SecretValue.Passkey) =>
           ZIO.fail(AppError.forbidden("passkey 加密的 secret 只能由用户在界面上设值"))
         case (_, _, SecretValue.Plain(text)) =>
-          if text.isEmpty then ZIO.fail(AppError.invalid("secret 的值不能为空")) else ZIO.succeed(SecretLock.Server(fernet.encrypt(text, now)))
-        case (_, _, SecretValue.Passkey(box))      => ZIO.succeed(SecretLock.Passkey(box))
-        case (_, _, SecretValue.Signing(alg, box)) => ZIO.succeed(SecretLock.Signing(alg, box))
+          for
+            _ <- ZIO.when(text.isEmpty)(ZIO.fail(AppError.invalid("secret 的值不能为空")))
+            _ <- shape match
+                   case SecretContent.KeyPair(alg, _) =>
+                     ZIO.fromEither(ServerSigner.material(alg, text)).mapError(e => AppError.invalid(s"secret $key 是 ${alg.label} 密钥对，值不是认得的私钥：$e"))
+                   case SecretContent.Opaque(_) => ZIO.unit
+          yield SecretLock.Server(fernet.encrypt(text, now))
+        case (_, _, SecretValue.Passkey(box)) => ZIO.succeed(SecretLock.Passkey(box))
 
     /** 这个 agent 能用的 secret 文件：不存在、没加载或没有 use 权限都报错。 */
     private def usable(perms: Permissions, snap: Snapshot, key: String): IO[AppError, SecretDoc] =
@@ -151,9 +165,12 @@ object Vault:
         docs <- ZIO.foreach(keys.distinct) { key =>
                   for
                     doc <- usable(perms, snap, key)
-                    _ <- ZIO.when(use == SecretUse.Shell && !doc.content.allowShell)(
-                           ZIO.fail(AppError.forbidden(s"secret $key 只能经 skill 脚本（skill_run）或 MCP 使用，不能注入自写命令"))
-                         )
+                    _ <- (doc.content.content.revealScope, use) match
+                           case (None, _) =>
+                             ZIO.fail(AppError.forbidden(s"secret $key 只能签名（如 ssh_certificate），取不出明文"))
+                           case (Some(RevealScope.Scripts), SecretUse.Shell) =>
+                             ZIO.fail(AppError.forbidden(s"secret $key 只能经 skill 脚本（skill_run）或 MCP 使用，不能注入自写命令"))
+                           case _ => ZIO.unit
                   yield doc
                 }
         // 权限都过了才开始解：passkey 的几个同时等用户授权，一个被拒绝就不再等其余的
@@ -165,17 +182,50 @@ object Vault:
         perms <- permissions(agent)
         snap  <- store.snapshot
         doc   <- usable(perms, snap, key)
+        _ <- doc.content.content match
+               case SecretContent.KeyPair(alg, _) if alg == content.algorithm => ZIO.unit
+               case _ =>
+                 ZIO.fail(AppError.invalid(s"secret $key 不是 ${content.algorithm.label} 密钥对：要由用户在界面 Secret 页把它设成 ${content.algorithm.label} 密钥"))
         out <- doc.content.lock match
-                 // 现在只有一种算法；加第二种时在这里核对钥匙的算法与 content.algorithm 相同
-                 case SecretLock.Signing(_, box) => grants.sign(Slot(agent, key), content, purpose, box)
-                 case _ =>
-                   ZIO.fail(AppError.invalid(s"secret $key 不是签名钥匙：要由用户在界面 Secret 页设成签名钥匙（${content.algorithm.label}）"))
+                 case SecretLock.Server(token) => decrypt(key, token).flatMap(pem => ServerSigner.sign(key, pem, content))
+                 case SecretLock.Passkey(box)  => grants.sign(Slot(agent, key), content, purpose, box)
       yield out
+
+    private def decrypt(key: String, token: String): IO[AppError, String] =
+      ZIO.fromEither(fernet.decrypt(token)).mapError(r => AppError.invalid(s"secret $key 解不开（$r），请重新存一次它的值"))
 
     private def open(agent: AgentId, doc: SecretDoc, purpose: AskPurpose): IO[AppError, String] =
       doc.content.lock match
-        case SecretLock.Server(token) =>
-          ZIO.fromEither(fernet.decrypt(token)).mapError(r => AppError.invalid(s"secret ${doc.key} 解不开（$r），请重新存一次它的值"))
-        case SecretLock.Passkey(box) => grants.obtain(Slot(agent, doc.key), purpose, box)
-        case SecretLock.Signing(_, _) =>
-          ZIO.fail(AppError.forbidden(s"secret ${doc.key} 是签名钥匙，只能请用户签名（如 ssh_certificate），不能取明文"))
+        case SecretLock.Server(token) => decrypt(doc.key, token)
+        case SecretLock.Passkey(box)  => grants.obtain(Slot(agent, doc.key), purpose, box)
+
+/** 服务端保管的密钥对在服务端签（#1069）：读私钥、按内容的类型拼出待签的字节、用 JDK 签。 */
+object ServerSigner:
+  /** 某种算法的私钥文本读成能签名的东西。ed25519 认 OpenSSH 私钥文件（不带口令）。 */
+  def material(alg: SigningAlgorithm, text: String): Either[String, SshCert.PrivateKey] = alg match
+    case SigningAlgorithm.Ed25519 => SshCert.readPrivate(text)
+
+  def sign(key: String, pem: String, content: SignContent): IO[AppError, String] =
+    for
+      ca  <- ZIO.fromEither(material(content.algorithm, pem)).mapError(e => AppError.invalid(s"secret $key 不是可用的私钥：$e"))
+      now <- Clock.currentTime(java.util.concurrent.TimeUnit.SECONDS)
+      out <- content match
+               case SignContent.SshCert(req) =>
+                 ZIO
+                   .attempt {
+                     val rnd   = java.security.SecureRandom()
+                     val nonce = Array.ofDim[Byte](32)
+                     rnd.nextBytes(nonce)
+                     SshCert.issue(ca, req, now, nonce, rnd.nextLong())(ed25519(ca.seed))
+                   }
+                   .mapError(e => AppError.internal(s"用 secret $key 签名失败：${e.getMessage}", e))
+                   .flatMap(r => ZIO.fromEither(r).mapError(AppError.invalid))
+    yield out
+
+  private def ed25519(seed: Array[Byte])(data: Array[Byte]): Array[Byte] =
+    import java.security.spec.{EdECPrivateKeySpec, NamedParameterSpec}
+    val priv = java.security.KeyFactory.getInstance("Ed25519").generatePrivate(EdECPrivateKeySpec(NamedParameterSpec.ED25519, seed))
+    val s    = java.security.Signature.getInstance("Ed25519")
+    s.initSign(priv)
+    s.update(data)
+    s.sign()

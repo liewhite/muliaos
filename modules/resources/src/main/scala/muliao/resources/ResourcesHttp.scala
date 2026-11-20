@@ -7,7 +7,7 @@ import muliao.resources.access.*
 import muliao.resources.agents.*
 import muliao.resources.guard.{AssetGuard, Expectation, FileFingerprint}
 import muliao.resources.tree.*
-import muliao.resources.vault.{Actor, Vault}
+import muliao.resources.vault.{Actor, ContentChange, Vault}
 import zio.*
 
 import java.nio.file.{Files, Path}
@@ -196,11 +196,7 @@ final case class ResourcesHttp(
       val skills = snap.skills.map(s => AssetItem(AssetItemKind.Skill, s.name.value, s.owner.label, rel(s.main), usedBy(AssetKind.Skill, s.name.value, s.owner), Some(s.description), None, None))
       val mcps = snap.mcps.map(m => AssetItem(AssetItemKind.Mcp, m.name, m.owner.label, rel(m.file), usedBy(AssetKind.Mcp, m.name, m.owner), None, Some(m.config.enabled), None))
       val secrets = snap.secrets.map(s =>
-        val lock = s.content.lock match
-          case SecretLock.Server(_)     => SecretLockView.Server
-          case SecretLock.Passkey(_)    => SecretLockView.Passkey
-          case SecretLock.Signing(a, _) => SecretLockView.Signing(a)
-        AssetItem(AssetItemKind.Secret, s.key, s.owner.label, rel(s.file), usedBy(AssetKind.Secret, s.key, s.owner), Some(s.content.description), None, Some(s.content.allowShell), Some(lock))
+        AssetItem(AssetItemKind.Secret, s.key, s.owner.label, rel(s.file), usedBy(AssetKind.Secret, s.key, s.owner), Some(s.content.description), None, Some(SecretView(s.content.lock.view, s.content.content)))
       )
       val agentFiles = as.filter(a => snap.profiles.contains(a.name)).map(a =>
         AssetItem(AssetItemKind.Agent, a.name.value, a.name.value, AssetPath.render(AssetPath.AgentFile(a.name)).toString, List(a.name), snap.profiles.get(a.name).map(_.description), None, None)
@@ -248,21 +244,20 @@ final case class ResourcesHttp(
     else agents.resolve(label).map(a => Owner.Agent(a.name))
 
   private def putSecret(key: String, req: SecretWrite): IO[AppError, Unit] =
-    for
-      owner <- ZIO.foreach(req.owner)(ownerOf).map(_.getOrElse(Owner.Platform))
-      _ <- req.value match
-             case Some(v) => vault.set(Actor.User, key, v, req.description, req.allowShell, owner).unit
-             case None =>
-               for
-                 snap <- store.snapshot
-                 doc  <- ZIO.fromOption(snap.secret(key)).orElseFail(AppError.notFound(s"没有 secret $key（新建要给值）"))
-                 next  = doc.content.copy(
-                           description = req.description.map(_.trim).getOrElse(doc.content.description),
-                           allowShell = req.allowShell.getOrElse(doc.content.allowShell)
-                         )
-                 _ <- store.write(AssetPath.Secret(doc.owner, key), Formats.renderSecret(next))
-               yield ()
-    yield ()
+    req match
+      case SecretWrite.Value(value, content, description, owner) =>
+        for
+          o <- ZIO.foreach(owner)(ownerOf).map(_.getOrElse(Owner.Platform))
+          _ <- vault.set(Actor.User, key, value, ContentChange.Replace(content), description, o)
+        yield ()
+      case SecretWrite.Settings(description, scope) =>
+        for
+          snap    <- store.snapshot
+          doc     <- ZIO.fromOption(snap.secret(key)).orElseFail(AppError.notFound(s"没有 secret $key（新建要给值）"))
+          content <- ZIO.fromEither(scope.fold(Right(doc.content.content))(doc.content.content.withScope)).mapError(AppError.invalid)
+          next     = doc.content.copy(description = description.map(_.trim).getOrElse(doc.content.description), content = content)
+          _       <- store.write(AssetPath.Secret(doc.owner, key), Formats.renderSecret(next))
+        yield ()
 
   /** 找到的一项资源：它的文件（skill 是目录）与归谁。 */
   private final case class Found(path: Path, owner: Owner)

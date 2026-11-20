@@ -54,15 +54,18 @@ final case class McpConfig(transport: McpTransport, enabled: Boolean):
 
 final case class McpDoc(name: String, owner: Owner, file: Path, config: McpConfig)
 
-/** secret 的值怎么锁着：服务端主密钥（Fernet 密文，用时服务端自己解），用户的 passkey（服务端只存，用时等用户在浏览器里解开），
-  * 或签名钥匙（passkey 加密的私钥，只能请用户在浏览器里签名，取不出明文，#938）。与 `allowShell`（解开后能注入到哪）互不相干。
+/** secret 的值谁能解开：服务端主密钥（Fernet 密文，用时服务端自己解），或用户的 passkey（服务端只存，用时等用户在浏览器里解开）。
+  * 签名在哪做由它推出：服务端的在服务端签，passkey 的在用户浏览器里签。
   */
 enum SecretLock:
   case Server(token: String)
   case Passkey(box: muliao.contract.PasskeyBox)
-  case Signing(algorithm: muliao.contract.SigningAlgorithm, box: muliao.contract.PasskeyBox)
 
-/** secret 文件的内容：说明、密文、能否注入自写命令。 */
-final case class SecretFile(description: String, lock: SecretLock, allowShell: Boolean)
+  def view: muliao.contract.SecretLockView = this match
+    case Server(_)  => muliao.contract.SecretLockView.Server
+    case Passkey(_) => muliao.contract.SecretLockView.Passkey
+
+/** secret 文件的内容：说明、谁能解开（连同密文）、内容与能否取出明文（#1069）。 */
+final case class SecretFile(description: String, lock: SecretLock, content: muliao.contract.SecretContent)
 
 final case class SecretDoc(key: String, owner: Owner, file: Path, content: SecretFile)

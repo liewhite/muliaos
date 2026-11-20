@@ -126,7 +126,7 @@ object AgentsSpec extends ZIOSpecDefault:
         b     <- create("bob", allow = Nil)
         _      = write(dirs.assets.resolve("alice/skills/shared-tool/SKILL.md"), "---\ndescription: x\n---\n")
         _      = write(dirs.assets.resolve("alice/skills/private-tool/SKILL.md"), "---\ndescription: x\n---\n")
-        _     <- ZIO.serviceWithZIO[Vault](_.set(Actor.Agent(a.id), "ALICE_KEY", muliao.contract.SecretValue.Plain("v"), None, None, Owner.Platform))
+        _     <- ZIO.serviceWithZIO[Vault](_.set(Actor.Agent(a.id), "ALICE_KEY", muliao.contract.SecretValue.Plain("v"), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform))
         _     <- agents.flatMap(_.update(b.id, AgentPatch(allow = Some(List("use:skill:shared-tool", "use:secret:ALICE_KEY")))))
         _     <- agents.flatMap(_.update(a.id, AgentPatch(allow = Some(List("use:skill:shared-tool")))))
         _     <- busy(a.id, "在等后台任务")

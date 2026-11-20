@@ -119,8 +119,8 @@ object GuardSpec extends ZIOSpecDefault:
         dirs  <- ZIO.service[TestEnv.Dirs]
         a     <- alice
         vault <- ZIO.service[Vault]
-        _     <- vault.set(Actor.User, "OTHER_KEY", muliao.contract.SecretValue.Plain("v"), None, None, Owner.Platform)
-        _     <- vault.set(Actor.Agent(a.id), "MY_KEY", muliao.contract.SecretValue.Plain("v"), None, None, Owner.Platform)
+        _     <- vault.set(Actor.User, "OTHER_KEY", muliao.contract.SecretValue.Plain("v"), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform)
+        _     <- vault.set(Actor.Agent(a.id), "MY_KEY", muliao.contract.SecretValue.Plain("v"), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform)
         f      = dirs.assets.resolve("alice/mcp/web.json")
         x     <- guard(Actor.Agent(a.id), f, """{"transport":"http","url":"ftp://x"}""").either
         y     <- guard(Actor.Agent(a.id), f, """{"transport":"http","url":"https://x","headers":{"A":"${vault:OTHER_KEY}"}}""").either
@@ -128,19 +128,20 @@ object GuardSpec extends ZIOSpecDefault:
         ok    <- guard(Actor.Agent(a.id), f, """{"transport":"http","url":"https://x","headers":{"A":"${vault:MY_KEY}"}}""").either
       yield assertTrue(reason(x).contains("http"), reason(y).contains("OTHER_KEY"), reason(z).contains("不存在"), ok.isRight)
     },
-    test("secret 文件：不能手写新建、不能改密文，只能改 description 与 allow_shell") {
+    test("secret 文件：不能手写新建、不能改密文与内容类型，只能改 description 与 usage（shell / scripts）") {
       for
         dirs  <- ZIO.service[TestEnv.Dirs]
         a     <- alice
         vault <- ZIO.service[Vault]
-        _     <- vault.set(Actor.Agent(a.id), "MY_KEY", muliao.contract.SecretValue.Plain("v"), Some("说明"), None, Owner.Platform)
+        _     <- vault.set(Actor.Agent(a.id), "MY_KEY", muliao.contract.SecretValue.Plain("v"), muliao.resources.vault.ContentChange.Keep, Some("说明"), Owner.Platform)
         f      = dirs.assets.resolve("alice/secrets/MY_KEY.toml")
         text  <- ZIO.succeed(Files.readString(f))
         ct     = text.linesIterator.find(_.startsWith("ciphertext")).get
         a1    <- guard(Actor.User, dirs.assets.resolve("alice/secrets/NEW_KEY.toml"), "ciphertext = \"x\"\n").either
         a2    <- guard(Actor.User, f, "description = \"说明\"\nciphertext = \"gAAAAforged\"\n").either
-        a3    <- guard(Actor.User, f, s"description = \"新说明\"\n$ct\nallow_shell = false\n").either
-      yield assertTrue(reason(a1).contains("vault_set"), reason(a2).contains("只能手改"), a3.isRight)
+        a3    <- guard(Actor.User, f, s"description = \"新说明\"\n$ct\nusage = \"scripts\"\n").either
+        a4    <- guard(Actor.User, f, s"description = \"说明\"\nkeypair = \"ed25519\"\n$ct\n").either
+      yield assertTrue(reason(a1).contains("vault_set"), reason(a2).contains("只能手改"), a3.isRight, reason(a4).contains("只能手改"))
     },
     test("agent.toml：未知字段、空描述、模型不能用都拒绝") {
       for

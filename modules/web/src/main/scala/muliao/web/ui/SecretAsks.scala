@@ -40,7 +40,7 @@ object SecretAsks:
         )
       case AskWant.Sign(content @ SignContent.SshCert(r)) =>
         (
-          "要用签名钥匙签 SSH 证书",
+          "要用密钥签 SSH 证书",
           div(
             cls := "grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm",
             span(cls := "text-muted", "可登"), code(cls := "font-mono break-all", r.principals.mkString("  ")),

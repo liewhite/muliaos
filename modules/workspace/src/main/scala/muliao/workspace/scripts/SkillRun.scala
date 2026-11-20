@@ -22,7 +22,7 @@ object SkillRun:
       @description("skill 名（skill 索引里的）") skill: String,
       @description("脚本相对 skill 目录的路径，如 scripts/deploy.py；要有可执行位和 shebang 行") script: String,
       @description("传给脚本的参数，原样传入（不经 shell 解析）") args: List[String] = Nil,
-      @description("作为同名环境变量注入的 secret；可以用只允许脚本使用（allow_shell = false）的 secret") secrets: List[String] = Nil,
+      @description("作为同名环境变量注入的 secret；可以用只给脚本的（usage = scripts）secret") secrets: List[String] = Nil,
       @description("前台必须给：最多等多少秒；后台不给") timeout: Option[Double] = None,
       @description("true：后台运行，同 run_shell") background: Boolean = false,
       @fieldName("heartbeat_seconds") @description("仅后台：每隔多少秒投一条检查") heartbeatSeconds: Option[Double] = None
@@ -88,7 +88,7 @@ object SkillRun:
   val SkillRunDef = ToolDef[RunContext, SkillRunIn](
     "skill_run",
     "运行你的某个 skill 目录里的脚本：直接执行（不经 shell 解析，要有 shebang 行和可执行位），工作目录、写沙箱、超时、后台运行与 run_shell 相同。" +
-      "secrets 可以用只允许脚本使用（allow_shell = false）的 secret：这种 key 只能经包好检查的脚本用，不能注入自己写的命令。" +
+      "secrets 可以用只给脚本的（usage = scripts）secret：这种 key 只能经包好检查的脚本用，不能注入自己写的命令。" +
       "SKILL.md 的 frontmatter 里 `approval:` 列出的脚本，每次执行前等用户批准（这轮回答就此结束，结果或拒绝作为这个调用的结果回来）；用户选了「始终允许」的，同样的脚本、参数、secret 再调用且 skill 文件没改时直接执行。",
     Access.Write,
     Scheduling.Ordered,

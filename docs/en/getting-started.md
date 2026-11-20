@@ -117,7 +117,7 @@ when a request comes from `127.0.0.1`. Without it, every device shares one count
 2. Open the address in Safari on the iPhone, *Share → Add to Home Screen*, and open muliao from the home screen.
 3. In **设置** (settings), turn on push notifications for this device and send a test notification.
 
-Passkey-protected secrets and signing keys only work on an HTTPS domain name (not an IP address or `localhost`).
+Passkey-protected secrets only work on an HTTPS domain name (not an IP address or `localhost`).
 Voice input appears once a `[transcription]` section is configured.
 
 ## Upgrading

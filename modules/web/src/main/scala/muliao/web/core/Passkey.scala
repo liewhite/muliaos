@@ -1,6 +1,6 @@
 package muliao.web.core
 
-import muliao.contract.{PasskeyAad, PasskeyBox, PasskeyCredential, SignContent, SigningAlgorithm, SshCert, SshCertRequest}
+import muliao.contract.{PasskeyAad, PasskeyBox, PasskeyCredential, SecretContent, SignContent, SigningAlgorithm, SshCert}
 import org.scalajs.dom
 
 import scala.concurrent.Future
@@ -10,7 +10,7 @@ import scala.scalajs.js.typedarray.{ArrayBuffer, Uint8Array}
 import Http.ec
 
 /** passkey 加密的 secret（#915）：WebAuthn 的 PRF 扩展从 passkey 导出一把固定的密钥，AES-GCM 在浏览器里加解密（附加数据见 [[PasskeyAad]]），
-  * 服务端只存密文。passkey 绑定当前域名：在别的地址打开解不开。签名钥匙（#938）只在这里签名，不交出明文：它的附加数据与普通的不同，取明文的路解不开它。
+  * 服务端只存密文。passkey 绑定当前域名：在别的地址打开解不开。密钥对（#938）在这里签名；只能签名的不交出明文：它的附加数据与普通的不同，取明文的路解不开它。
   */
 object Passkey:
   /** PRF 的输入与 HKDF 的 info（固定）：同一把 passkey 每次导出同一把密钥。改了就解不开已有的密文。 */
@@ -44,44 +44,35 @@ object Passkey:
       box         <- encrypt(aes, cred, aad, plain)
     yield box
 
-  /** 用户设签名钥匙：先核对是这种算法认得的私钥，再加密。 */
-  def sealSigning(key: String, alg: SigningAlgorithm, plain: String, known: List[PasskeyCredential]): Future[PasskeyBox] =
-    either(material(alg, plain)).flatMap(_ => seal(PasskeyAad.signing(key, alg), plain, known))
+  /** 用户设一个新值：密钥对先核对是这种算法认得的私钥，再按内容定的附加数据加密。 */
+  def sealFor(key: String, content: SecretContent, plain: String, known: List[PasskeyCredential]): Future[PasskeyBox] =
+    val check = content match
+      case SecretContent.KeyPair(alg, _) => material(alg, plain).map(_ => ())
+      case SecretContent.Opaque(_)       => Right(())
+    either(check).flatMap(_ => seal(content.aad(key), plain, known))
 
-  /** 解开普通 passkey secret 交出明文（签名钥匙在这里解不开）。 */
+  /** 解开能取明文的 passkey secret 交出明文（只能签名的在这里解不开）。 */
   def reveal(key: String, box: PasskeyBox): Future[String] = open(PasskeyAad.plain(key), box)
 
-  /** 用签名钥匙签一份内容，返回签好的结果。内容按类型在这里拼成待签的字节，私钥不离开这个页面。 */
+  /** 用密钥对签一份内容，返回签好的结果。内容按类型在这里拼成待签的字节，私钥不离开这个页面。
+    * 先按只能签名的附加数据解，解不开再按能取明文的解（两种密钥对都能签；这条路只交出签名，不交出明文）。
+    */
   def sign(key: String, box: PasskeyBox, content: SignContent): Future[String] =
     for
-      pem    <- open(PasskeyAad.signing(key, content.algorithm), box)
-      secret <- either(material(content.algorithm, pem).left.map(e => s"secret $key 不是可用的签名钥匙：$e"))
+      aes    <- unlock(box)
+      pem    <- decrypt(aes, PasskeyAad.signing(key, content.algorithm), box).recoverWith(_ => decrypt(aes, PasskeyAad.plain(key), box))
+      secret <- either(material(content.algorithm, pem).left.map(e => s"secret $key 不是可用的 ${content.algorithm.label} 私钥：$e"))
       out <- content match
-               case SignContent.SshCert(req) => either(certificate(secret, req))
+               case SignContent.SshCert(req) =>
+                 val serial = bytes(random(8)).foldLeft(0L)((acc, b) => (acc << 8) | (b & 0xffL))
+                 either(SshCert.issue(secret, req, (js.Date.now() / 1000).toLong, bytes(random(32)), serial)(tbs => bytes(NobleEd25519.sign(array(tbs), array(secret.seed)))))
     yield out
 
   /** 某种算法的私钥文本读成能签名的东西。ed25519 认 OpenSSH 私钥文件（不带口令）。 */
   private def material(alg: SigningAlgorithm, text: String): Either[String, SshCert.PrivateKey] = alg match
     case SigningAlgorithm.Ed25519 => SshCert.readPrivate(text)
 
-  /** 签一张 SSH 证书：有效期从现在起 `minutes` 分钟，开头往前留 5 分钟容服务器时钟偏差；nonce、serial 取浏览器的安全随机数。 */
-  private def certificate(ca: SshCert.PrivateKey, req: SshCertRequest): Either[String, String] =
-    SshCert.readPublic(req.publicKey).left.map(e => s"请求里的公钥不对：$e").map { pub =>
-      val now = (js.Date.now() / 1000).toLong
-      val unsigned = SshCert.Unsigned(
-        nonce = bytes(random(32)),
-        key = pub,
-        serial = bytes(random(8)).foldLeft(0L)((acc, b) => (acc << 8) | (b & 0xffL)),
-        keyId = req.keyId,
-        principals = req.principals,
-        validity = SshCert.Validity(now - 300, now + req.minutes.toLong * 60),
-        sourceAddress = req.sourceAddress,
-        ca = ca.publicKey
-      )
-      unsigned.signed(bytes(NobleEd25519.sign(array(unsigned.toBeSigned), array(ca.seed))))
-    }
-
-  /** 解开（用户在系统弹窗里确认）。`aad` 不对（比如拿签名钥匙走取明文）就解不开。 */
+  /** 解开（用户在系统弹窗里确认）。`aad` 不对（比如拿只能签名的钥匙走取明文）就解不开。 */
   private def open(aad: String, box: PasskeyBox): Future[String] = unlock(box).flatMap(decrypt(_, aad, box))
 
   /** 用加密这份密文的那把 passkey 导出 AES 密钥（用户确认一次）。 */

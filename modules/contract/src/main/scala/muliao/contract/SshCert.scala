@@ -5,7 +5,8 @@ import java.util.Base64
 
 /** OpenSSH 的 ed25519 钥匙与用户证书的编码（PROTOCOL.certkeys、PROTOCOL.key），前后端共用（#938）：
   * 服务端生成临时钥匙、写钥匙文件；浏览器读 CA 私钥、拼出待签的证书，用 WebCrypto 签名后拼成证书行。
-  * 只有编码，不含签名与随机数：签名各端自己做（服务端 JDK、浏览器 WebCrypto），随机数由调用方给。
+  * 只有编码，不含签名与随机数：签名各端自己做（服务端 JDK、浏览器 noble-ed25519），随机数由调用方给。
+  * CA 私钥由服务端保管（#1069）时服务端也读它、自己签。
   */
 object SshCert:
   val KeyType  = "ssh-ed25519"
@@ -63,6 +64,15 @@ object SshCert:
     def signed(signature: Array[Byte]): String =
       val all = Wire.write(_.raw(toBeSigned).bytes(Wire.write(_.str(KeyType).bytes(signature))))
       s"$CertType ${b64(all)} $keyId"
+
+  /** 按请求签一张用户证书，得到证书文件的一行：有效期从 `now`（epoch 秒）起 `minutes` 分钟，开头往前留 5 分钟容服务器时钟偏差。
+    * `nonce`（32 字节）、`serial` 由调用方取安全随机数，`sign` 用 CA 私钥签给出的字节（服务端 JDK、浏览器各自实现）。
+    */
+  def issue(ca: PrivateKey, req: SshCertRequest, now: Long, nonce: Array[Byte], serial: Long)(sign: Array[Byte] => Array[Byte]): Either[String, String] =
+    readPublic(req.publicKey).left.map(e => s"请求里的公钥不对：$e").map { pub =>
+      val unsigned = Unsigned(nonce, pub, serial, req.keyId, req.principals, Validity(now - 300, now + req.minutes.toLong * 60), req.sourceAddress, ca.publicKey)
+      unsigned.signed(sign(unsigned.toBeSigned))
+    }
 
   /** 读公钥行（`ssh-ed25519 AAAA… 注释`）。 */
   def readPublic(line: String): Either[String, PublicKey] =

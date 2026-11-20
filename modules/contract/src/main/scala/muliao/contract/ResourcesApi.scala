@@ -151,24 +151,19 @@ final case class AssetItem(
     usedBy: List[AgentName],
     description: Option[String],
     enabled: Option[Boolean],
-    allowShell: Option[Boolean],
-    /** secret：怎么锁着 */
-    lock: Option[SecretLockView] = None
+    /** secret：谁能解开、内容与能否取明文 */
+    secret: Option[SecretView] = None
 ) derives JsonCodec, Schema
 
-/** secret 怎么锁着：服务端主密钥；passkey 加密（每次用都要用户授权）；签名钥匙（只能在浏览器里签名，#938）。
-  * JSON 里 `kind` 是分支名。
-  */
-@jsonDiscriminator("kind")
-enum SecretLockView derives JsonCodec:
-  case Server
-  case Passkey
-  case Signing(algorithm: SigningAlgorithm)
+/** secret 谁能解开：服务端主密钥，或用户的 passkey（每次用都要用户授权）。 */
+enum SecretLockView(val label: String) extends Labeled:
+  case Server  extends SecretLockView("server")
+  case Passkey extends SecretLockView("passkey")
 
-object SecretLockView:
-  given Schema[SecretLockView] =
-    given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
-    Schema.derived
+object SecretLockView extends Labels[SecretLockView]("解锁方", SecretLockView.values)
+
+/** 一个 secret 的三个维度（不含值）。 */
+final case class SecretView(lock: SecretLockView, content: SecretContent) derives JsonCodec, Schema
 
 final case class AssetIndex(root: String, items: List[AssetItem], problems: List[ProblemView], accessBroken: Option[String]) derives JsonCodec, Schema
 
@@ -179,9 +174,18 @@ final case class AssetFileWrite(path: String, content: String, fingerprint: Opti
 
 final case class SkillFiles(name: SkillName, owner: String, files: List[String]) derives JsonCodec, Schema
 
-/** 设 secret（值只能设不能看）。`value` 没给只改说明与 allow_shell；`owner` 只在新建时有用，缺省归平台。 */
-final case class SecretWrite(value: Option[SecretValue] = None, description: Option[String] = None, allowShell: Option[Boolean] = None, owner: Option[String] = None)
-    derives JsonCodec, Schema
+/** 设 secret（值只能设不能看）：设值（连同内容与能否取明文；`owner` 只在新建时有用，缺省归平台；`description` 空的沿用原来的），
+  * 或不动值只改说明与明文范围。JSON 里 `kind` 是分支名。
+  */
+@jsonDiscriminator("kind")
+enum SecretWrite derives JsonCodec:
+  case Value(value: SecretValue, content: SecretContent, description: Option[String] = None, owner: Option[String] = None)
+  case Settings(description: Option[String] = None, scope: Option[RevealScope] = None)
+
+object SecretWrite:
+  given Schema[SecretWrite] =
+    given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
+    Schema.derived
 
 final case class AssetTransfer(to: String) derives JsonCodec, Schema
 

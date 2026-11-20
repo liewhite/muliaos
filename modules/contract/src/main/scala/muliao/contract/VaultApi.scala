@@ -13,32 +13,81 @@ import zio.json.*
 final case class PasskeyBox(rp: String, credential: String, iv: String, ciphertext: String) derives JsonCodec, Schema:
   override def toString: String = s"PasskeyBox($rp)"
 
-/** 签名钥匙的算法（#938）。 */
+/** 密钥对的算法（#938）。 */
 enum SigningAlgorithm(val label: String) extends Labeled:
   case Ed25519 extends SigningAlgorithm("ed25519")
 
 object SigningAlgorithm extends Labels[SigningAlgorithm]("签名算法", SigningAlgorithm.values)
 
-/** passkey 加密时 AES-GCM 的附加数据：普通的是 secret 名；签名钥匙带上「签名钥匙、算法」，于是取明文的那条路（按 secret 名解）解不开它，
-  * 服务端被攻破、把签名钥匙冒充成普通 secret 发来取明文，浏览器也解不开。
+// ---- secret 的三个维度（#1069）：谁能解开（服务端主密钥或用户的 passkey，见 [[SecretValue]]）× 内容 × 能否取出明文（[[SecretContent]]） ----
+
+/** 解开后的明文能交给谁：任意命令（run_shell、触发器检查与常驻命令），或只给 skill 脚本（skill_run）和 MCP 配置。 */
+enum RevealScope(val label: String) extends Labeled:
+  case Shell   extends RevealScope("shell")
+  case Scripts extends RevealScope("scripts")
+
+object RevealScope extends Labels[RevealScope]("明文范围", RevealScope.values)
+
+/** 密钥对能否取出明文：能（交给哪些地方），或只能签名（私钥只在解开它的一方用：服务端或用户浏览器）。JSON 里 `kind` 是分支名。 */
+@jsonDiscriminator("kind")
+enum KeyExposure derives JsonCodec:
+  case Reveal(scope: RevealScope)
+  case SignOnly
+
+object KeyExposure:
+  given Schema[KeyExposure] =
+    given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
+    Schema.derived
+
+/** secret 的内容与能否取出明文：口令（总能取，只分范围），或密钥对（还可以只能签名）。「口令 + 只能签名」写不出来。JSON 里 `kind` 是分支名。 */
+@jsonDiscriminator("kind")
+enum SecretContent derives JsonCodec:
+  case Opaque(scope: RevealScope)
+  case KeyPair(algorithm: SigningAlgorithm, exposure: KeyExposure)
+
+  /** 明文能交给谁；只能签名的没有。 */
+  def revealScope: Option[RevealScope] = this match
+    case Opaque(s)                         => Some(s)
+    case KeyPair(_, KeyExposure.Reveal(s)) => Some(s)
+    case KeyPair(_, KeyExposure.SignOnly)  => None
+
+  /** 只改明文范围（内容类型与「只能签名」不变）；只能签名的没有范围可改。 */
+  def withScope(s: RevealScope): Either[String, SecretContent] = this match
+    case Opaque(_)                        => Right(Opaque(s))
+    case KeyPair(a, KeyExposure.Reveal(_)) => Right(KeyPair(a, KeyExposure.Reveal(s)))
+    case KeyPair(_, KeyExposure.SignOnly) => Left("只能签名的 secret 取不出明文，没有明文范围可改；要改成能取明文须重新设值")
+
+  /** passkey 加密时 AES-GCM 的附加数据，见 [[PasskeyAad]]。 */
+  def aad(key: String): String = this match
+    case KeyPair(a, KeyExposure.SignOnly) => PasskeyAad.signing(key, a)
+    case _                                => PasskeyAad.plain(key)
+
+object SecretContent:
+  /** 没指定时（agent 新建、只给值）：任意命令都能用的口令。 */
+  val Default: SecretContent = Opaque(RevealScope.Shell)
+
+  given Schema[SecretContent] =
+    given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
+    Schema.derived
+
+/** passkey 加密时 AES-GCM 的附加数据：能取明文的是 secret 名；只能签名的带上「签名、算法」，于是取明文的那条路（按 secret 名解）解不开它，
+  * 服务端被攻破、把只能签名的钥匙冒充成普通 secret 发来取明文，浏览器也解不开。
   */
 object PasskeyAad:
   def plain(key: String): String                           = key
   def signing(key: String, alg: SigningAlgorithm): String = s"signing:${alg.label}:$key"
 
-/** 设 secret 的新值：明文（服务端用主密钥加密）、浏览器里已用 passkey 加密好的密文，或签名钥匙（passkey 加密的私钥，只能在浏览器里签名，#938）。
+/** secret 的新值，也就定了谁能解开：明文（服务端用主密钥加密），或浏览器里已用 passkey 加密好的密文（附加数据按 [[SecretContent.aad]]）。
   * JSON 里 `kind` 是分支名。
   */
 @jsonDiscriminator("kind")
 enum SecretValue derives JsonCodec:
   case Plain(text: String)
   case Passkey(box: PasskeyBox)
-  case Signing(algorithm: SigningAlgorithm, box: PasskeyBox)
 
   override def toString: String = this match
-    case Plain(_)      => "SecretValue.Plain(***)"
-    case Passkey(b)    => s"SecretValue.Passkey($b)"
-    case Signing(a, b) => s"SecretValue.Signing(${a.label}, $b)"
+    case Plain(_)   => "SecretValue.Plain(***)"
+    case Passkey(b) => s"SecretValue.Passkey($b)"
 
 object SecretValue:
   given Schema[SecretValue] =
@@ -54,7 +103,7 @@ final case class AskPurpose(session: Option[SessionId], what: String) derives Js
 final case class SshCertRequest(publicKey: String, principals: List[String], minutes: Int, sourceAddress: Option[String], keyId: String)
     derives JsonCodec, Schema
 
-/** 要签名钥匙签的内容，带类型：浏览器按类型自己解码成人能看懂的样子显示、自己拼出待签的字节，不采信 agent 写的说明（#938）。
+/** 要密钥对签的内容，带类型：签名的一方（浏览器或服务端）按类型自己拼出待签的字节，浏览器还解码成人能看懂的样子显示，不采信 agent 写的说明（#938）。
   * 加一种内容就加一个分支。JSON 里 `kind` 是分支名。
   */
 @jsonDiscriminator("kind")
@@ -71,7 +120,7 @@ object SignContent:
     given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
     Schema.derived
 
-/** 要 passkey secret 做什么：解开交出明文，或用签名钥匙签一份内容（私钥只在浏览器里用、不交回）。JSON 里 `kind` 是分支名。 */
+/** 要 passkey secret 做什么：解开交出明文，或用密钥对签一份内容（私钥只在浏览器里用、不交回）。JSON 里 `kind` 是分支名。 */
 @jsonDiscriminator("kind")
 enum AskWant derives JsonCodec:
   case Reveal

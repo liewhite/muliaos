@@ -107,7 +107,7 @@ muliao 默认只监听 `127.0.0.1`。要从别的设备访问，在前面放一�
 2. 在 iPhone 的 Safari 打开这个地址，「分享 → 添加到主屏幕」，之后从主屏图标打开。
 3. 在「设置」里开启本设备推送，发一条测试通知。
 
-passkey 加密的 secret 和签名钥匙只在 HTTPS 的域名地址上可用（IP 和 `localhost` 不行）。配了 `[transcription]` 段才会出现语音输入。
+passkey 加密的 secret 只在 HTTPS 的域名地址上可用（IP 和 `localhost` 不行）。配了 `[transcription]` 段才会出现语音输入。
 
 ## 升级
 

@@ -119,8 +119,8 @@ object HttpSpec extends ZIOSpecDefault:
           w1   <- c.call("PUT", "/api/assets/file", Some(AssetFileWrite("alice/memory.md", "记一条  \n\n\n", Some(fp)).toJson))
           w2   <- c.call("PUT", "/api/assets/file", Some(AssetFileWrite("alice/memory.md", "再记", Some(fp)).toJson))
           esc  <- c.call("GET", "/api/assets/file?path=../data/config.toml")
-          sec  <- c.call("PUT", "/api/assets/secrets/API_TOKEN", Some("""{"value":{"kind":"Plain","text":"s3cret"},"description":"测试","owner":"alice"}"""))
-          sec2 <- c.call("PUT", "/api/assets/secrets/API_TOKEN", Some("""{"allowShell":false}"""))
+          sec  <- c.call("PUT", "/api/assets/secrets/API_TOKEN", Some("""{"kind":"Value","value":{"kind":"Plain","text":"s3cret"},"content":{"kind":"Opaque","scope":"shell"},"description":"测试","owner":"alice"}"""))
+          sec2 <- c.call("PUT", "/api/assets/secrets/API_TOKEN", Some("""{"kind":"Settings","scope":"scripts"}"""))
           files <- c.call("GET", "/api/assets/skills/tool-a/files")
           tr   <- c.call("POST", "/api/assets/skill/tool-a/transfer", Some("""{"to":"platform"}"""))
           idx  <- c.call("GET", "/api/assets")
@@ -138,7 +138,7 @@ object HttpSpec extends ZIOSpecDefault:
             sec.status == 204,
             sec2.status == 204,
             !idx.body.contains("s3cret"),
-            index.items.exists(i => i.kind == AssetItemKind.Secret && i.name == "API_TOKEN" && i.owner == "alice" && i.allowShell.contains(false) && i.description.contains("测试")),
+            index.items.exists(i => i.kind == AssetItemKind.Secret && i.name == "API_TOKEN" && i.owner == "alice" && i.secret.contains(SecretView(SecretLockView.Server, SecretContent.Opaque(RevealScope.Scripts))) && i.description.contains("测试")),
             files.body.fromJson[SkillFiles].toOption.exists(_.files == List("SKILL.md", "scripts/x.sh")),
             tr.status == 204,
             index.items.exists(i => i.kind == AssetItemKind.Skill && i.name == "tool-a" && i.owner == "platform"),

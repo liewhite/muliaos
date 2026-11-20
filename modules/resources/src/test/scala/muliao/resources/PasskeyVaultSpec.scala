@@ -34,13 +34,13 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
       a     <- ZIO.serviceWithZIO[Agents](_.create(NewAgent("alice", "x")))
       b     <- ZIO.serviceWithZIO[Agents](_.create(NewAgent("bob", "x")))
       vault <- ZIO.service[Vault]
-      _     <- vault.set(Actor.User, "PK_TOKEN", SecretValue.Passkey(box), Some("说明"), Some(false), Owner.Agent(a.name))
+      _     <- vault.set(Actor.User, "PK_TOKEN", SecretValue.Passkey(box), muliao.resources.vault.ContentChange.Scope(muliao.contract.RevealScope.Scripts), Some("说明"), Owner.Agent(a.name))
       _     <- ZIO.serviceWithZIO[Agents](_.update(b.id, AgentPatch(allow = Some(List("use:secret:PK_*")))))
     yield (a, b, vault)
 
   val spec = suite("passkey secret")(
     test("文件格式：[passkey] 表往返；ciphertext 与 [passkey] 恰好一个") {
-      val f = SecretFile("d", SecretLock.Passkey(box), allowShell = false)
+      val f = SecretFile("d", SecretLock.Passkey(box), SecretContent.Opaque(RevealScope.Scripts))
       val text = Formats.renderSecret(f)
       assertTrue(
         Formats.parseSecret(text) == Right(f),
@@ -50,18 +50,18 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         Formats.parseSecret("[passkey]\nrp = \"a\"\n").isLeft
       )
     },
-    test("只有用户能设、能改值；agent 的 vault_set 改不动；说明与 allow_shell 照常") {
+    test("只有用户能设、能改值；agent 的 vault_set 改不动；说明与明文范围照常") {
       for
         (a, _, vault) <- setup
         dirs  <- ZIO.service[TestEnv.Dirs]
         raw   <- ZIO.succeed(Files.readString(dirs.assets.resolve("alice/secrets/PK_TOKEN.toml")))
-        e1    <- vault.set(Actor.Agent(a.id), "PK_TOKEN", SecretValue.Plain("降级"), None, None, Owner.Platform).either
-        e2    <- vault.set(Actor.Agent(a.id), "OTHER", SecretValue.Passkey(box), None, None, Owner.Platform).either
-        n     <- vault.set(Actor.User, "PK_TOKEN", SecretValue.Plain("用户改回普通的"), None, None, Owner.Platform)
+        e1    <- vault.set(Actor.Agent(a.id), "PK_TOKEN", SecretValue.Plain("降级"), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform).either
+        e2    <- vault.set(Actor.Agent(a.id), "OTHER", SecretValue.Passkey(box), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform).either
+        n     <- vault.set(Actor.User, "PK_TOKEN", SecretValue.Plain("用户改回普通的"), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform)
         v     <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试"))
       yield assertTrue(
         raw.contains("[passkey]"),
-        raw.contains("allow_shell = false"),
+        raw.contains("usage = \"scripts\""),
         reason(e1).contains("只能由用户在界面上改值"),
         reason(e2).contains("只能由用户在界面上设值"),
         !n,
@@ -137,34 +137,36 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
       yield assertTrue(r1 == Map("PK_TOKEN" -> "v"), w2.size == 1, w4.size == 1)
     }
     ,
-    test("签名钥匙（#938）：文件是 [signing] 表；只有用户能设；取明文被拒、不发请求；普通 passkey secret 不能拿来签") {
+    test("passkey 的只能签名密钥对（#938、#1069）：文件写 keypair 与 usage = sign；只有用户能设；取明文被拒、不发请求；口令不能拿来签") {
       for
         (a, _, vault) <- setup
-        _     <- vault.set(Actor.User, "SSH_CA", SecretValue.Signing(SigningAlgorithm.Ed25519, box), Some("CA"), Some(false), Owner.Agent(a.name))
+        _     <- vault.set(Actor.User, "SSH_CA", SecretValue.Passkey(box), ContentChange.Replace(SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)), Some("CA"), Owner.Agent(a.name))
         dirs  <- ZIO.service[TestEnv.Dirs]
         raw   <- ZIO.succeed(Files.readString(dirs.assets.resolve("alice/secrets/SSH_CA.toml")))
-        e1    <- vault.set(Actor.Agent(a.id), "SSH_CA", SecretValue.Plain("降级"), None, None, Owner.Platform).either
-        e2    <- vault.set(Actor.Agent(a.id), "OTHER", SecretValue.Signing(SigningAlgorithm.Ed25519, box), None, None, Owner.Platform).either
+        e1    <- vault.set(Actor.Agent(a.id), "SSH_CA", SecretValue.Plain("降级"), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform).either
+        e2    <- vault.set(Actor.Agent(a.id), "OTHER", SecretValue.Passkey(box), ContentChange.Replace(SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)), None, Owner.Platform).either
         rv    <- vault.reveal(a.id, List("SSH_CA"), SecretUse.Script, in("s1", "cat")).either
         none  <- ZIO.serviceWithZIO[Grants](_.view.map(_._1))
         req    = SshCertRequest("ssh-ed25519 AAAA", List("admin@relay"), 5, None, "id")
         gen   <- vault.sign(a.id, "PK_TOKEN", SignContent.SshCert(req), in("s1", "x")).either
       yield assertTrue(
-        raw.contains("[signing]"),
-        raw.contains("algorithm = \"ed25519\""),
-        Formats.parseSecret(raw).map(_.lock) == Right(SecretLock.Signing(SigningAlgorithm.Ed25519, box)),
-        Formats.parseSecret(raw + "\n[passkey]\nrp = \"a\"\ncredential = \"b\"\niv = \"c\"\nciphertext = \"d\"\n").isLeft,
+        raw.contains("[passkey]"),
+        raw.contains("keypair = \"ed25519\""),
+        raw.contains("usage = \"sign\""),
+        Formats.parseSecret(raw) == Right(SecretFile("CA", SecretLock.Passkey(box), SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly))),
+        Formats.parseSecret("description = \"d\"\nusage = \"sign\"\nciphertext = \"x\"\n").left.exists(_.contains("只有密钥对")),
+        Formats.parseSecret("description = \"d\"\nusage = \"any\"\nciphertext = \"x\"\n").isLeft,
         reason(e1).contains("只能由用户在界面上改值"),
         reason(e2).contains("只能由用户在界面上设值"),
-        reason(rv).contains("不能取明文"),
+        reason(rv).contains("取不出明文"),
         none.isEmpty,
-        reason(gen).contains("不是签名钥匙")
+        reason(gen).contains("不是 ed25519 密钥对")
       )
     },
     test("签 SSH 证书（#938）：工具发出请求（带能登哪些、多久、记录名）；每张都要批；答错种类被拒；交回证书后写好钥匙与证书；拒绝") {
       for
         (a, _, vault) <- setup
-        _     <- vault.set(Actor.User, "SSH_CA", SecretValue.Signing(SigningAlgorithm.Ed25519, box), Some("CA"), Some(false), Owner.Agent(a.name))
+        _     <- vault.set(Actor.User, "SSH_CA", SecretValue.Passkey(box), ContentChange.Replace(SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)), Some("CA"), Owner.Agent(a.name))
         tool  <- toolOf("ssh_certificate")
         sub   <- ZIO.serviceWithZIO[Grants](_.asked)
         bad   <- tool.invoke(Json.Obj("logins" -> Json.Arr(Json.Str("relay"))), Ctx(a.id)).either
@@ -198,6 +200,44 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
           still.map(_.id) == w1.map(_.id),
           cert == "ssh-ed25519-cert-v01@openssh.com AAAA muliao\n",
           denied.left.toOption.exists(_.toString.contains("拒绝"))
+        )
+    },
+    test("服务端保管的只能签名密钥对（#1069）：值要是认得的私钥；取明文被拒；ssh_certificate 在服务端直接签好（不发请求），证书由这把 CA 签、验得过；手改不能放开成可取明文") {
+      for
+        (a, _, vault) <- setup
+        ca    <- SshKeys.generate
+        pem    = SshCert.writePrivate(ca, 7, "ca")
+        signOnly = ContentChange.Replace(SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly))
+        bad   <- vault.set(Actor.User, "SSH_CA", SecretValue.Plain("不是私钥"), signOnly, Some("CA"), Owner.Agent(a.name)).either
+        _     <- vault.set(Actor.User, "SSH_CA", SecretValue.Plain(pem), signOnly, Some("CA"), Owner.Agent(a.name))
+        rv    <- vault.reveal(a.id, List("SSH_CA"), SecretUse.Script, in("s1", "cat")).either
+        tool  <- toolOf("ssh_certificate")
+        out   <- tool.invoke(Json.Obj("logins" -> Json.Arr(Json.Str("admin@relay"))), Ctx(a.id))
+        pending <- ZIO.serviceWithZIO[Grants](_.view.map(_._1))
+        path   = (out match { case muliao.toolkit.ToolOutcome.Completed(cs) => cs.collect { case muliao.toolkit.ToolContent.Text(t) => t }.mkString }).linesIterator.collectFirst { case l if l.startsWith("钥匙：") => l.stripPrefix("钥匙：").takeWhile(_ != '（') }.get
+        cert  <- ZIO.attemptBlocking(Files.readString(java.nio.file.Path.of(path + "-cert.pub")))
+        dirs  <- ZIO.service[TestEnv.Dirs]
+        file   = dirs.assets.resolve("alice/secrets/SSH_CA.toml")
+        raw   <- ZIO.attemptBlocking(Files.readString(file))
+        loosen <- ZIO.serviceWithZIO[muliao.resources.guard.AssetGuard](_.check(Actor.Agent(a.id), file, raw.replace("usage = \"sign\"\n", ""), muliao.resources.guard.Expectation.Unconditional)).either
+      yield
+        // 证书行：类型 base64 注释；签名在末尾（string 类型名 + string 64 字节签名），签的是之前的全部字节
+        val blob = java.util.Base64.getDecoder.decode(cert.trim.split(" ")(1))
+        val sig  = blob.takeRight(64)
+        val tbs  = blob.dropRight(4 + 4 + SshCert.KeyType.length + 4 + 64)
+        val pub  = java.security.KeyFactory.getInstance("Ed25519").generatePublic(
+          java.security.spec.X509EncodedKeySpec(java.util.HexFormat.of().parseHex("302a300506032b6570032100") ++ ca.publicKey.bytes)
+        )
+        val v = java.security.Signature.getInstance("Ed25519")
+        v.initVerify(pub)
+        v.update(tbs)
+        assertTrue(
+          reason(bad).contains("不是认得的私钥"),
+          reason(rv).contains("取不出明文"),
+          pending.isEmpty,
+          cert.startsWith(SshCert.CertType + " "),
+          v.verify(sig),
+          loosen.isLeft
         )
     }
   ).provideSomeLayer[Scope](TestEnv.layer) @@ TestAspect.sequential @@ TestAspect.timeout(60.seconds)

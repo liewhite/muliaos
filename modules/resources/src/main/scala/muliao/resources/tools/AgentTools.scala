@@ -7,7 +7,7 @@ import muliao.resources.access.BuiltinRole
 import muliao.contract.AgentState
 import muliao.resources.agents.{AgentRecord, Agents, NewAgent}
 import muliao.resources.tree.{AssetPath, Owner}
-import muliao.resources.vault.{Actor, SshKeys, Vault}
+import muliao.resources.vault.{Actor, ContentChange, SshKeys, Vault}
 import muliao.toolkit.*
 import zio.*
 import zio.json.*
@@ -40,9 +40,8 @@ object AgentTools:
       @description("名字，如 `SLACK_TOKEN`：大写字母开头，大写字母、数字、下划线") key: String,
       @sensitive @description("值") value: String,
       @description("是什么、哪个账户或服务、和谁配对") description: String = "",
-      @fieldName("allow_shell")
-      @description("false：只能经 skill 脚本（skill_run）和 MCP 使用，不能注入自写命令。省略时新 secret 为 true，已有的不变")
-      allowShell: Option[Boolean] = None
+      @description("明文给谁：`shell` 任意命令；`scripts` 只能经 skill 脚本（skill_run）和 MCP 使用，不能注入自写命令。省略时新 secret 为 shell，已有的不变")
+      usage: Option[muliao.contract.RevealScope] = None
   )
   given Schema[VaultSet] = DeriveSchema.gen[VaultSet]
 
@@ -51,7 +50,7 @@ object AgentTools:
       @description("能登录的「账户@主机」，主机写服务器 principals 文件里认的名字，如 `admin@relay`；一张证书可以写几台") logins: List[String],
       @description("有效期（分钟，从用户批准时算起）") minutes: Int = 30,
       @fieldName("source_address") @description("只许从这些地址用（CIDR，逗号分隔），如 `203.0.113.7/32`；不给不限") sourceAddress: Option[String] = None,
-      @description("SSH CA：一个 ed25519 签名钥匙类的 secret") ca: String = "SSH_CA"
+      @description("SSH CA：一个 ed25519 密钥对类的 secret") ca: String = "SSH_CA"
   )
   given Schema[SshCertificate] = DeriveSchema.gen[SshCertificate]
 
@@ -126,7 +125,7 @@ object AgentTools:
 
   val SshCertificateDef = ToolDef[ToolContext, SshCertificate](
     "ssh_certificate",
-    "用签名钥匙类的 SSH CA 签一张短期证书来登录服务器：平台现生成一把临时钥匙，等用户在界面上用 passkey 批准（每张都要批，期间这个调用一直等着），返回钥匙路径；之后 `ssh -i <钥匙> -l <账户> <ssh 主机>`（账户要和证书里的一致，ssh 配置里那台的 User 不同时以 -l 为准；scp、rsync 同样带 -i），证书在钥匙旁的 `-cert.pub`，ssh 自动带上。「账户@主机」里的主机是服务器上认的名字，不一定是 ssh 别名。到期后重新申请。",
+    "用 ed25519 密钥对类的 SSH CA 签一张短期证书来登录服务器：平台现生成一把临时钥匙；CA 是 passkey 加密的等用户在界面上用 passkey 批准（每张都要批，期间这个调用一直等着），服务端保管的直接签；返回钥匙路径；之后 `ssh -i <钥匙> -l <账户> <ssh 主机>`（账户要和证书里的一致，ssh 配置里那台的 User 不同时以 -l 为准；scp、rsync 同样带 -i），证书在钥匙旁的 `-cert.pub`，ssh 自动带上。「账户@主机」里的主机是服务器上认的名字，不一定是 ssh 别名。到期后重新申请。",
     Access.Write
   )
 
@@ -199,7 +198,7 @@ object AgentTools:
 
     val vaultSet = VaultSetDef { (in, ctx) =>
       vault
-        .set(Actor.Agent(ctx.agent), in.key, muliao.contract.SecretValue.Plain(in.value), Some(in.description), in.allowShell, Owner.Platform)
+        .set(Actor.Agent(ctx.agent), in.key, muliao.contract.SecretValue.Plain(in.value), in.usage.fold(ContentChange.Keep)(ContentChange.Scope(_)), Some(in.description), Owner.Platform)
         .map(created => ToolOutcome.text(if created then s"已新建 secret ${in.key}。" else s"已更新 secret ${in.key}。"))
         .mapError(fail)
     }

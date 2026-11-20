@@ -15,10 +15,7 @@ final case class VaultHttp(grants: Grants, store: AssetStore):
       (asks, live) <- grants.view
       snap         <- store.snapshot
     yield
-      val creds = snap.secrets.map(_.content.lock).collect {
-        case SecretLock.Passkey(b)    => PasskeyCredential(b.rp, b.credential)
-        case SecretLock.Signing(_, b) => PasskeyCredential(b.rp, b.credential)
-      }.distinct
+      val creds = snap.secrets.map(_.content.lock).collect { case SecretLock.Passkey(b) => PasskeyCredential(b.rp, b.credential) }.distinct
       VaultState(asks, live, creds)
 
   def routes: List[Route] =
