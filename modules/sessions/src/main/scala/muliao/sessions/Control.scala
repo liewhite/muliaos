@@ -47,8 +47,8 @@ private[sessions] final case class Control(
   /** 挡住会话的驱动，再逐层挡住它开出的、没空闲的 thread，按先上后下返回。挡之前先把编号记进 `held`（调用方据此放开，挡到一半被打断也不漏）。 */
   private def haltTree(id: SessionId, held: Ref[List[SessionId]]): IO[AppError, List[(SessionId, Slot)]] =
     for
-      _    <- held.update(id :: _)
-      slot <- slots.halt(id)
+      // 记编号与挡住不可分：只记不挡时被打断，放开的会是正在跑的驱动自己的槽，可能再起一个驱动
+      slot <- (held.update(id :: _) *> slots.halt(id)).uninterruptible
       kids <- db.read(Repo.threadsOf(id)).map(_.map(_.id))
       st   <- states.states(kids)
       rest <- ZIO.foreach(kids.filter(k => st.get(k).exists(_ != WorkState.Idle)))(haltTree(_, held))
