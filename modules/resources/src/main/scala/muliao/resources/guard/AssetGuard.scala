@@ -159,8 +159,7 @@ object AssetGuard:
                       .fromOption(old.flatMap(o => Formats.parseSecret(o).toOption))
                       .orElseFail(refused("原文件已经坏了，用 vault_set 重新存一次值"))
             // 手改只能动说明与明文范围：密文、内容类型、「只能签名」都不变（否则改一行就能把只能签名的私钥变成可取明文）
-            sameShape = doc.content.content.revealScope.flatMap(s => prev.content.withScope(s).toOption).contains(doc.content.content)
-            _ <- ZIO.when(doc.content.lock != prev.lock || !(sameShape || doc.content.content == prev.content))(
+            _ <- ZIO.when(doc.content.lock != prev.lock || doc.content.content.unscoped != prev.content.unscoped)(
                    ZIO.fail(refused("只能手改 description 和 usage（shell / scripts）；改值用 vault_set，passkey 加密的、改内容类型或「只能签名」的只能由用户在界面上重新设值"))
                  )
           yield content

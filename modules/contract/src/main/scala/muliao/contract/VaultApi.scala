@@ -17,7 +17,10 @@ final case class PasskeyBox(rp: String, credential: String, iv: String, cipherte
 enum SigningAlgorithm(val label: String) extends Labeled:
   case Ed25519 extends SigningAlgorithm("ed25519")
 
-object SigningAlgorithm extends Labels[SigningAlgorithm]("签名算法", SigningAlgorithm.values)
+object SigningAlgorithm extends Labels[SigningAlgorithm]("签名算法", SigningAlgorithm.values):
+  /** 某种算法的私钥文本读成能签名的东西（前后端共用）。ed25519 认 OpenSSH 私钥文件（不带口令）。 */
+  def readPrivate(alg: SigningAlgorithm, text: String): Either[String, SshCert.PrivateKey] = alg match
+    case Ed25519 => SshCert.readPrivate(text)
 
 // ---- secret 的三个维度（#1069）：谁能解开（服务端主密钥或用户的 passkey，见 [[SecretValue]]）× 内容 × 能否取出明文（[[SecretContent]]） ----
 
@@ -59,8 +62,12 @@ enum SecretContent derives JsonCodec:
 
   /** passkey 加密时 AES-GCM 的附加数据，见 [[PasskeyAad]]。 */
   def aad(key: String): String = this match
-    case KeyPair(a, KeyExposure.SignOnly) => PasskeyAad.signing(key, a)
-    case _                                => PasskeyAad.plain(key)
+    case KeyPair(a, KeyExposure.SignOnly)  => PasskeyAad.signing(key, a)
+    case KeyPair(_, KeyExposure.Reveal(_)) => PasskeyAad.plain(key)
+    case Opaque(_)                         => PasskeyAad.plain(key)
+
+  /** 去掉明文范围后的形态（内容类型与「只能签名」）：手改文件只许改范围，比较前后的形态。 */
+  def unscoped: SecretContent = withScope(RevealScope.Shell).getOrElse(this)
 
 object SecretContent:
   /** 没指定时（agent 新建、只给值）：任意命令都能用的口令。 */

@@ -43,16 +43,25 @@ object SecretTab:
       case Kind.Password => List(Shell, Scripts)
       case Kind.Ed25519  => values.toList
 
+    /** 新建时的默认：口令任意命令可用；密钥对多半是 CA、签名私钥，默认只能签名。 */
+    def default(k: Kind): Usage = k match
+      case Kind.Password => Shell
+      case Kind.Ed25519  => Sign
+
+    /** 选的用法在这种内容下不可选（只能签名的切回口令）：落到口令里最严的一档，不放宽成任意命令。 */
+    def fit(k: Kind, u: Usage): Usage = if options(k).contains(u) then u else Scripts
+
   def kindOf(c: SecretContent): Kind = c match
     case SecretContent.Opaque(_)     => Kind.Password
     case SecretContent.KeyPair(_, _) => Kind.Ed25519
 
   def usageOf(c: SecretContent): Usage = c.revealScope.fold(Usage.Sign)(Usage.of)
 
-  /** 选的内容与用法合成一个 secret 内容。口令没有「只能签名」（界面上不给选）：切回口令时按任意命令算。 */
+  /** 选的内容与用法合成一个 secret 内容（用法先经 [[Usage.fit]]，口令配「只能签名」按只给脚本算）。 */
   def contentOf(k: Kind, u: Usage): SecretContent = (k, u) match
+    case (Kind.Password, Usage.Shell)   => SecretContent.Opaque(RevealScope.Shell)
     case (Kind.Password, Usage.Scripts) => SecretContent.Opaque(RevealScope.Scripts)
-    case (Kind.Password, _)             => SecretContent.Opaque(RevealScope.Shell)
+    case (Kind.Password, Usage.Sign)    => SecretContent.Opaque(RevealScope.Scripts)
     case (Kind.Ed25519, Usage.Sign)     => SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)
     case (Kind.Ed25519, Usage.Scripts)  => SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.Reveal(RevealScope.Scripts))
     case (Kind.Ed25519, Usage.Shell)    => SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.Reveal(RevealScope.Shell))
@@ -99,7 +108,7 @@ object SecretTab:
     def text(get: SecretForm => String, set: (SecretForm, String) => SecretForm) = v.zoom(get)(set)
     val lockOn  = v.signal.combineWith(existing).map((f, e) => f.lock.orElse(e.map(s => Lock.of(s.lock))).getOrElse(Lock.Server))
     val kindOn  = v.signal.combineWith(existing).map((f, e) => f.kind.orElse(e.map(s => kindOf(s.content))).getOrElse(Kind.Password))
-    val usageOn = v.signal.combineWith(existing).map((f, e) => f.usage.orElse(e.map(s => usageOf(s.content))).getOrElse(Usage.Shell))
+    val usageOn = v.signal.combineWith(existing, kindOn).map((f, e, k) => Usage.fit(k, f.usage.orElse(e.map(s => usageOf(s.content))).getOrElse(Usage.default(k))))
     val shapeOn = lockOn.combineWith(kindOn, usageOn).map((l, k, u) => (l, contentOf(k, u)))
     val shapeNow = Var[(Lock, SecretContent)]((Lock.Server, SecretContent.Default))
     def save(): Unit =
@@ -148,7 +157,7 @@ object SecretTab:
         span(
           cls := "text-xs text-muted",
           child.text <-- shapeOn.map {
-            case (Lock.Server, c) if c.revealScope.isEmpty  => "服务端主密钥加密，平台在服务端签名，agent 拿不到私钥，签名不用你批准"
+            case (Lock.Server, c) if c.revealScope.isEmpty  => "服务端主密钥加密，平台在服务端签名、不用你批准；agent 的工具取不出明文（防误用：能读主密钥的程序仍能解开，要真正隔离选 passkey）"
             case (Lock.Server, _)                     => "服务端主密钥加密，agent 用时直接解开"
             case (Lock.Passkey, c) if c.revealScope.isEmpty => "只有你的 passkey 能解开：私钥只在你的浏览器里签名，agent 每次要签都要你批准"
             case (Lock.Passkey, _)                    => "只有你的 passkey 能解开，agent 每次用都要你授权；服务端只存密文"

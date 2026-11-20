@@ -47,7 +47,7 @@ object Passkey:
   /** 用户设一个新值：密钥对先核对是这种算法认得的私钥，再按内容定的附加数据加密。 */
   def sealFor(key: String, content: SecretContent, plain: String, known: List[PasskeyCredential]): Future[PasskeyBox] =
     val check = content match
-      case SecretContent.KeyPair(alg, _) => material(alg, plain).map(_ => ())
+      case SecretContent.KeyPair(alg, _) => SigningAlgorithm.readPrivate(alg, plain).map(_ => ())
       case SecretContent.Opaque(_)       => Right(())
     either(check).flatMap(_ => seal(content.aad(key), plain, known))
 
@@ -61,16 +61,12 @@ object Passkey:
     for
       aes    <- unlock(box)
       pem    <- decrypt(aes, PasskeyAad.signing(key, content.algorithm), box).recoverWith(_ => decrypt(aes, PasskeyAad.plain(key), box))
-      secret <- either(material(content.algorithm, pem).left.map(e => s"secret $key 不是可用的 ${content.algorithm.label} 私钥：$e"))
+      secret <- either(SigningAlgorithm.readPrivate(content.algorithm, pem).left.map(e => s"secret $key 不是可用的 ${content.algorithm.label} 私钥：$e"))
       out <- content match
                case SignContent.SshCert(req) =>
                  val serial = bytes(random(8)).foldLeft(0L)((acc, b) => (acc << 8) | (b & 0xffL))
                  either(SshCert.issue(secret, req, (js.Date.now() / 1000).toLong, bytes(random(32)), serial)(tbs => bytes(NobleEd25519.sign(array(tbs), array(secret.seed)))))
     yield out
-
-  /** 某种算法的私钥文本读成能签名的东西。ed25519 认 OpenSSH 私钥文件（不带口令）。 */
-  private def material(alg: SigningAlgorithm, text: String): Either[String, SshCert.PrivateKey] = alg match
-    case SigningAlgorithm.Ed25519 => SshCert.readPrivate(text)
 
   /** 解开（用户在系统弹窗里确认）。`aad` 不对（比如拿只能签名的钥匙走取明文）就解不开。 */
   private def open(aad: String, box: PasskeyBox): Future[String] = unlock(box).flatMap(decrypt(_, aad, box))

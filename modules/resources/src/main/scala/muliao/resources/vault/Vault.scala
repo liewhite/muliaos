@@ -1,6 +1,6 @@
 package muliao.resources.vault
 
-import muliao.contract.{AgentId, AskPurpose, AssetKind, RevealScope, SecretContent, SecretValue, SignContent, SigningAlgorithm, SshCert}
+import muliao.contract.{AgentId, AskPurpose, AssetKind, RevealScope, SecretContent, SecretValue, SignContent, SigningAlgorithm}
 import muliao.platform.AppError
 import muliao.resources.VaultSettings
 import muliao.resources.access.{Action, Decision, Permissions}
@@ -142,7 +142,7 @@ object Vault:
             _ <- ZIO.when(text.isEmpty)(ZIO.fail(AppError.invalid("secret 的值不能为空")))
             _ <- shape match
                    case SecretContent.KeyPair(alg, _) =>
-                     ZIO.fromEither(ServerSigner.material(alg, text)).mapError(e => AppError.invalid(s"secret $key 是 ${alg.label} 密钥对，值不是认得的私钥：$e"))
+                     ZIO.fromEither(SigningAlgorithm.readPrivate(alg, text)).mapError(e => AppError.invalid(s"secret $key 是 ${alg.label} 密钥对，值不是认得的私钥：$e"))
                    case SecretContent.Opaque(_) => ZIO.unit
           yield SecretLock.Server(fernet.encrypt(text, now))
         case (_, _, SecretValue.Passkey(box)) => ZIO.succeed(SecretLock.Passkey(box))
@@ -198,34 +198,3 @@ object Vault:
       doc.content.lock match
         case SecretLock.Server(token) => decrypt(doc.key, token)
         case SecretLock.Passkey(box)  => grants.obtain(Slot(agent, doc.key), purpose, box)
-
-/** 服务端保管的密钥对在服务端签（#1069）：读私钥、按内容的类型拼出待签的字节、用 JDK 签。 */
-object ServerSigner:
-  /** 某种算法的私钥文本读成能签名的东西。ed25519 认 OpenSSH 私钥文件（不带口令）。 */
-  def material(alg: SigningAlgorithm, text: String): Either[String, SshCert.PrivateKey] = alg match
-    case SigningAlgorithm.Ed25519 => SshCert.readPrivate(text)
-
-  def sign(key: String, pem: String, content: SignContent): IO[AppError, String] =
-    for
-      ca  <- ZIO.fromEither(material(content.algorithm, pem)).mapError(e => AppError.invalid(s"secret $key 不是可用的私钥：$e"))
-      now <- Clock.currentTime(java.util.concurrent.TimeUnit.SECONDS)
-      out <- content match
-               case SignContent.SshCert(req) =>
-                 ZIO
-                   .attempt {
-                     val rnd   = java.security.SecureRandom()
-                     val nonce = Array.ofDim[Byte](32)
-                     rnd.nextBytes(nonce)
-                     SshCert.issue(ca, req, now, nonce, rnd.nextLong())(ed25519(ca.seed))
-                   }
-                   .mapError(e => AppError.internal(s"用 secret $key 签名失败：${e.getMessage}", e))
-                   .flatMap(r => ZIO.fromEither(r).mapError(AppError.invalid))
-    yield out
-
-  private def ed25519(seed: Array[Byte])(data: Array[Byte]): Array[Byte] =
-    import java.security.spec.{EdECPrivateKeySpec, NamedParameterSpec}
-    val priv = java.security.KeyFactory.getInstance("Ed25519").generatePrivate(EdECPrivateKeySpec(NamedParameterSpec.ED25519, seed))
-    val s    = java.security.Signature.getInstance("Ed25519")
-    s.initSign(priv)
-    s.update(data)
-    s.sign()

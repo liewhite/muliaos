@@ -163,7 +163,8 @@ Each secret has three dimensions, one choice each:
 | Content | **Password** (any text); **Key pair** (an ed25519 private key the platform can sign with, e.g. short-lived SSH certificates via `ssh_certificate`) |
 | Plaintext | **Any command**; **Scripts only** (usable by skill scripts and MCP servers, but not injectable into commands the agent writes itself); **Sign only** (key pairs only: the value can never be revealed) |
 
-Signing happens where the secret can be decrypted: server-held keys sign inside the platform (agents never see the private key and no approval is needed),
+Signing happens where the secret can be decrypted: server-held keys sign inside the platform with no approval (agent tools cannot reveal them, but this only guards against mistakes:
+anything that can read the `[vault] key` can decrypt them; use a passkey for real isolation),
 passkey-held keys sign inside your browser after you approve the content. Passkey features require HTTPS on a domain name.
 
 ## Notifications

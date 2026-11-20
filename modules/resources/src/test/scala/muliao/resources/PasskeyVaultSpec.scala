@@ -220,6 +220,8 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         file   = dirs.assets.resolve("alice/secrets/SSH_CA.toml")
         raw   <- ZIO.attemptBlocking(Files.readString(file))
         loosen <- ZIO.serviceWithZIO[muliao.resources.guard.AssetGuard](_.check(Actor.Agent(a.id), file, raw.replace("usage = \"sign\"\n", ""), muliao.resources.guard.Expectation.Unconditional)).either
+        toScripts <- ZIO.serviceWithZIO[muliao.resources.guard.AssetGuard](_.check(Actor.Agent(a.id), file, raw.replace("usage = \"sign\"", "usage = \"scripts\""), muliao.resources.guard.Expectation.Unconditional)).either
+        widen <- vault.set(Actor.Agent(a.id), "SSH_CA", SecretValue.Plain(pem), ContentChange.Scope(RevealScope.Shell), None, Owner.Platform).either
       yield
         // 证书行：类型 base64 注释；签名在末尾（string 类型名 + string 64 字节签名），签的是之前的全部字节
         val blob = java.util.Base64.getDecoder.decode(cert.trim.split(" ")(1))
@@ -237,7 +239,9 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
           pending.isEmpty,
           cert.startsWith(SshCert.CertType + " "),
           v.verify(sig),
-          loosen.isLeft
+          loosen.isLeft,
+          toScripts.isLeft,
+          reason(widen).contains("只能签名")
         )
     }
   ).provideSomeLayer[Scope](TestEnv.layer) @@ TestAspect.sequential @@ TestAspect.timeout(60.seconds)
