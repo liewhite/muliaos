@@ -107,7 +107,7 @@
 - **状态与种类**：跨领域、存库、走接口的状态与种类都是 `Labeled` 枚举（contract 的 `Labels` 给出解析、JSON、tapir、zio-schema 编解码，`Sql` 自动按 `label` 存取，当工具参数时 JSON Schema 列出全部 label），不写字符串比较；带分支字段的接口数据（时间线条目、来信来源、会话来源、回复段、实时事件、挂起说明、等待项）是 JSON 里 `kind` 为分支名的 ADT。
 - **要用户批准的执行**：工具返回 `ToolOutcome.Suspended(Pause.Approval(给用户看的摘要, 数据))`，工具本身用 `Approvable(工具)(批准后怎么做)` 包起来：用户批准后会话领域按调用的工具名找回它接着执行（`always` 表示用户选了以后不再问）。
 - **工具调用的状态**：`CallStatus = Pending | Running | Suspended(挂起说明) | Approved(批准说明, always) | Done(结果)`，各步带着自己的数据和时间；库里仍是平铺的列，写入只经 `CallTx.save(调用, 状态)`，读出经 `Decode.call` 还原。
-- **事件**：`Contribution.listener` 订阅 `SessionEvent`（提交后按贡献的顺序同步逐个调用）：`Settled`（回到空闲/最终失败/被停止，`toUser` 表示用户在等；最终失败无论谁在等都该通知用户）、`NeedsUser`（提问、等批准）、`Deleted`。未读是必填的 `SessionPorts.unread`（通知领域的 `SessionLink.unread`）。
+- **事件**：`Contribution.listener` 订阅 `SessionEvent`（提交后按贡献的顺序同步逐个调用）：`Settled`（回到空闲/最终失败/被停止，`toUser` 表示用户在等；最终失败无论谁在等都该通知用户。会话内部：取走回答去向、交回委派、发 `Settled` 一律经 `Delegations.settleTx`，放在调用方的收尾事务里，#1046；启动时还有回答去向或挂起运行的会话也会被拉起，补交回或接着跑）、`NeedsUser`（提问、等批准）、`Deleted`。未读是必填的 `SessionPorts.unread`（通知领域的 `SessionLink.unread`）。
 - **时间线**：`Sessions.timeline(id)` 给出界面与 `session_read` 共用的投影（`TimelineItem`，来信的 `source` 是 ADT `SourceView`：触发器名、issue 号、发起会话等都带在类型里，前端不拆字符串；session_read 的 USER/TRIGGER/… 标签由 history 的 `Reading.source` 给出）。存库的 `Source` 与接口的 `SourceView` 分开：两边 JSON 写法不同（库里是 zio-json 默认的外包对象），分开就不用迁移，`Source.view` 穷尽映射。会话列表的 `SessionSummary.origin` 直接是 contract 的 ADT `Origin`（用户 / 触发器名 / issue 号 / thread 的发起会话与名字），库里按种类、引用、发起会话三列存，只在 `SessionInfo` 里换算，所以只有一个类型。
 
 ## 通知与推送（notifications，#870）

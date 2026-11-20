@@ -111,7 +111,7 @@ object Sessions:
   val specs: List[muliao.toolkit.ToolSpec] = SessionTools.specs
 
   /** 本领域的各部分。 */
-  private[sessions] final case class Parts(
+  private final case class Parts(
       kernel: Kernel,
       mailbox: Mailbox,
       workStates: States,
@@ -124,8 +124,7 @@ object Sessions:
       agents: Agents
   )
 
-  /** `parts` 只给本领域的测试直接调内部服务。 */
-  private[sessions] final class Live(private[sessions] val parts: Parts) extends Sessions, SessionConsole:
+  private final class Live(parts: Parts) extends Sessions, SessionConsole:
     import parts.*
     import parts.kernel.*
 

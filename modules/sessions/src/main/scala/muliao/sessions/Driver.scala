@@ -26,7 +26,9 @@ private[sessions] final class Driver(
 ):
   import kernel.*
 
-  /** 启动：收尾上次被打断的调用，续跑没跑完的运行、排队的来信与批准了的调用，然后开始应门铃。 */
+  /** 启动：收尾上次被打断的调用，续跑没跑完的运行（含挂起的：等的结果可能已到、门铃没来得及按）、排队的来信与批准了的调用，
+    * 以及还有回答去向的会话（运行做完了、收尾交回前被重启的，由 [[settleIfDone]] 补交回），然后开始应门铃。
+    */
   def start: IO[AppError, Unit] =
     for
       t       <- now
@@ -40,10 +42,11 @@ private[sessions] final class Driver(
              )
            )
       _ <- ZIO.when(running.nonEmpty || pending.nonEmpty)(ZIO.logWarning(s"启动：${running.size} 个执行中、${pending.size} 个没开始的工具调用标成被打断"))
-      runs     <- db.read(Repo.runsIn(List(RunState.Running)))
+      runs     <- db.read(Repo.runsIn(List(RunState.Running, RunState.Suspended)))
       mail     <- db.read(Repo.sessionsWithMail)
       approved <- db.read(Repo.callsIn(List(CallState.Approved, CallState.ApprovedAlways)))
-      toKick    = (runs.map(_.sessionId) ++ mail ++ approved.map(_.sessionId)).distinct
+      unsent   <- db.read(Repo.sessionsAwaitingReply)
+      toKick    = (runs.map(_.sessionId) ++ mail ++ approved.map(_.sessionId) ++ unsent).distinct
       _ <- ZIO.logInfo(s"启动：续跑 ${toKick.size} 个会话")
       _ <- ZIO.foreachDiscard(toKick)(doorbell.ring)
       _ <- doorbell.next.flatMap(kick).forever.forkIn(scope)
@@ -201,6 +204,7 @@ private[sessions] final class Driver(
       t <- now
       _ <- ZIO.logWarning(s"会话 ${id.value} 的运行 ${run.value} 最终失败：$message")
       i <- info(id)
+      _ <- live.done(id)
       _ <- db.write(
              for
                open <- Repo.openCalls(id).flatMap(Decode.calls)
@@ -211,7 +215,6 @@ private[sessions] final class Driver(
                _    <- touched(id, t)
              yield ()
            )
-      _ <- live.done(id)
     yield ()
 
   private def failedNote(s: CallStatus): String = s match

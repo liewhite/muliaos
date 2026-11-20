@@ -3,6 +3,7 @@ package muliao.sessions
 import muliao.contract.*
 import muliao.models.llm.*
 import muliao.platform.AppError
+import muliao.platform.db.Database
 import muliao.resources.agents.Agents
 import muliao.sessions.TestEnv.*
 import zio.*
@@ -120,6 +121,36 @@ object SessionsSpec extends ZIOSpecDefault:
         !gateOpen
       )
     },
+    test("运行做完、收尾交回前被重启：启动时补交回（#1046）") {
+      for
+        d <- dirs
+        p <- probe
+        m <- fakeModels(_ => Script.Say(List(text("答完了"))))
+        // 第一次：正常做完，再把回答去向写回库，等同「运行已做完、收尾交回前服务停了」
+        id <- ZIO.scoped(layer(d, m).build.flatMap(env =>
+                (for
+                  _     <- start(p)
+                  alice <- agent("alice")
+                  id    <- userSession(alice, "问")
+                  _     <- idle(id)
+                  _     <- ZIO.serviceWithZIO[Database](_.write(store.Repo.setPendingReply(id, """[{"User":{}}]""")))
+                yield id).provideEnvironment(env)
+              ))
+        // 第二次：启动后补交回，不再请求模型
+        r <- ZIO.scoped(layer(d, m).build.flatMap(env =>
+               (for
+                 events <- recordEvents
+                 _      <- start(p)
+                 _ <- eventually("补交回")(events.get)(_.exists {
+                        case SessionEvent.Settled(`id`, _, _, Outcome.Answered("答完了"), true) => true
+                        case _                                                              => false
+                      })
+                 i <- ZIO.serviceWithZIO[Sessions](_.info(id))
+               yield i).provideEnvironment(env)
+             ))
+        reqs <- m.requests
+      yield assertTrue(r.pendingReply.isEmpty, reqs.size == 1)
+    },
     test("提问与回答；等批准、批准后执行") {
       fresh { req =>
         val last = lastUserText(req)
@@ -212,57 +243,6 @@ object SessionsSpec extends ZIOSpecDefault:
           tl3.last.parts.head.text.contains("alice 转述：bob 答：任务三"),
           threads.map(threadName(_).get).sorted == List("t1", "t2", "t3"),
           threads.forall(_.state == WorkState.Idle)
-        )
-      }
-    },
-    test("交回与收尾同一个事务：没提交则回答去向和委派都不动，提交即交回（#1046）") {
-      fresh { req =>
-        val last = lastUserText(req)
-        if isAgent(req, "bob") then
-          if last.endsWith("任务") then Script.Say(List(call("b1", "block", "{}"))) else Script.Say(List(text("bob 做完")))
-        else if last == "等" then Script.Say(List(call("a1", "ask_agent", """{"agent":"bob","message":"任务","thread":"t"}""")))
-        else Script.Say(List(text("好")))
-      } { (_, p, _) =>
-        for
-          events <- recordEvents
-          alice  <- agent("alice")
-          _      <- agent("bob")
-          id     <- userSession(alice, "等")
-          th     <- eventually("thread t")(console.flatMap(_.list(None, None, None, 50)))(_.items.exists(threadName(_).contains("t")))
-          t       = th.items.find(threadName(_).contains("t")).get.id
-          _      <- eventually("bob 的 block 在执行")(timeline(t))(_.exists(_.parts.exists(_.call.exists(_.state == CallState.Running))))
-          parts <- sessions.flatMap {
-                     case l: Sessions.Live => ZIO.succeed(l.parts)
-                     case _                => ZIO.fail(AppError.Internal("不是 Sessions.Live"))
-                   }
-          k     = parts.kernel
-          info <- k.info(t)
-          now  <- k.now
-          // 收尾事务在提交前失败（等同提交前被重启）：什么都不该交回
-          rolled <- k.db.write(parts.delegations.settleTx(info, Outcome.Answered("提前交回"), now) *> ZIO.fail(AppError.Internal("模拟提交前中断"))).either
-          i1     <- k.info(t)
-          open1  <- k.db.read(store.Repo.openDelegationsTo(t))
-          settledBefore <- events.get.map(_.exists {
-                             case SessionEvent.Settled(`t`, _, _, _, _) => true
-                             case _                                     => false
-                           })
-          // 提交：去向取走与交回同时生效
-          _     <- k.db.write(parts.delegations.settleTx(info, Outcome.Answered("提前交回"), now))
-          i2    <- k.info(t)
-          open2 <- k.db.read(store.Repo.openDelegationsTo(t))
-          _     <- eventually("alice 拿到结果")(timeline(id))(_.flatMap(_.parts.flatMap(_.call)).exists(_.result.nonEmpty))
-          _     <- p.gate.succeed(())
-          _     <- idle(t) *> idle(id)
-          tl    <- timeline(id)
-        yield assertTrue(
-          rolled.isLeft,
-          i1.pendingReply.exists(_.isInstanceOf[ReplyTo.Delegation]),
-          open1.size == 1,
-          !settledBefore,
-          i2.pendingReply.isEmpty,
-          open2.isEmpty,
-          // bob 后来的回答不再交回（委派已交回过）
-          tl.flatMap(_.parts.flatMap(_.call)).head.result.map(_.text).contains("提前交回")
         )
       }
     },

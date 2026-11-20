@@ -234,6 +234,9 @@ private[sessions] object Repo:
   /** 有排队来信的会话（启动时续跑）。 */
   val sessionsWithMail: Read[List[SessionId]] = Sql.run(inbox.map(_.sessionId).distinct).orInternal
 
+  /** 还有回答去向（没交回）的会话。 */
+  val sessionsAwaitingReply: Read[List[SessionId]] = Sql.run(sessions.filter(_.pendingReply != "[]").map(_.id)).orInternal
+
   def hasQueuedKey(session: SessionId, key: String): Read[Boolean] =
     Sql.run(inbox.filter(i => i.sessionId == lift(session) && i.dedupeKey.exists(_ == lift(key))).nonEmpty).orInternal
 
