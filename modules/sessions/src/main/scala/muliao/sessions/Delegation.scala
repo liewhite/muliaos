@@ -24,7 +24,7 @@ final case class Tracked(thread: SessionId, delegation: DelegationId)
 final case class ThreadView(thread: ThreadName, agent: String, session: SessionId, state: WorkState, failure: Option[String], answer: Option[String])
     derives JsonEncoder
 
-/** 委派与 thread：交给某 agent 的 thread（同名续聊）；thread 回到空闲、失败或被停止时把结局交回（[[handBack]]）。 */
+/** 委派与 thread：交给某 agent 的 thread（同名续聊）；thread 回到空闲、失败或被停止时把结局交回（[[settleTx]]）。 */
 private[sessions] final case class Delegations(kernel: Kernel, mailbox: Mailbox, waits: Waits, states: States, doorbell: Doorbell, agents: Agents):
   import kernel.*
 
@@ -64,38 +64,46 @@ private[sessions] final case class Delegations(kernel: Kernel, mailbox: Mailbox,
       _ <- doorbell.ring(tracked.thread)
     yield tracked
 
-  /** 把一段工作的结局交给等着的各方：委派方（交回）、用户（发事件，通知领域推送）。 */
-  def handBack(i: SessionInfo, pending: List[ReplyTo], outcome: Outcome): IO[AppError, Unit] =
+  /** 一段工作有了结局：在调用方的收尾事务里取走回答去向、把结局交回等着的委派方，提交后发 `Settled`（通知领域据此推送给用户）。
+    * 取走去向与交回在同一个事务里，服务重启不会留下「去向已取走、委派没交回」的半截。
+    */
+  def settleTx(i: SessionInfo, outcome: Outcome, t: Long): Tx[Unit] =
     for
-      _ <- ZIO.foreachDiscard(pending.collect { case ReplyTo.Delegation(d) => d })(d => finish(d, i, outcome))
-      _ <- ports.emit(SessionEvent.Settled(i.id, i.agent, i.origin, outcome, pending.contains(ReplyTo.User)))
+      pending <- mailbox.takePendingReply(i.id)
+      _       <- finishTx(pending.collect { case ReplyTo.Delegation(d) => d }, i, outcome, t)
+      _       <- afterCommit(ports.emit(SessionEvent.Settled(i.id, i.agent, i.origin, outcome, pending.contains(ReplyTo.User))))
     yield ()
 
-  /** thread 的一段工作有了结局：交回发起方（作为事件，或作为它等着的调用的结果）。已交回过的不再交。 */
-  def finish(d: DelegationId, thread: SessionInfo, outcome: Outcome): IO[AppError, Unit] =
-    for
-      row   <- db.read(Repo.delegation(d))
-      agent <- agents.names(List(thread.agent)).map(_(thread.agent))
-      name   = threadName(thread)
-      result = outcome match
-                 case Outcome.Answered(a) => CallResult.ok(if a.isEmpty then "（没有文字回答）" else a)
-                 case Outcome.Failed(e)   => CallResult.error(s"[agent $agent 的 thread「$name」最终失败：$e]")
-                 case Outcome.Stopped(p)  => CallResult.error(s"[agent $agent 的 thread「$name」被停止了。停止前的输出：\n$p]")
-      t <- now
-      requester <- db.write(
-                     row.fold(ZIO.none) { r =>
-                       Repo.finishDelegation(d, result.toJson).flatMap {
-                         case 0 => ZIO.none
-                         case _ =>
-                           r.mode match
-                             case TrackedMode.Report =>
-                               waits.closeTx(WaitKey.delegation(d), Some(Letter(Source.Event(EventKind.Delegation), reportText(agent, name, outcome))), t)
-                             case TrackedMode.Ask => resolveAsk(r, result, t)
-                       }
-                     }
-                   )
-      _ <- ZIO.foreachDiscard(requester)(doorbell.ring)
-    yield ()
+  /** thread 被删除（在删除它的事务里调）：交给它的未完成委派以失败交回发起方。 */
+  def threadGoneTx(thread: SessionInfo, t: Long): Tx[Unit] =
+    Repo.openDelegationsTo(thread.id).flatMap(ds => finishTx(ds.map(_.id), thread, Outcome.Failed("这个 thread 被删除了"), t))
+
+  /** 交回发起方（作为事件，或作为它等着的调用的结果），提交后按它的门铃。已交回过的不再交。 */
+  private def finishTx(ds: List[DelegationId], thread: SessionInfo, outcome: Outcome, t: Long): Tx[Unit] =
+    if ds.isEmpty then ZIO.unit
+    else
+      for
+        agent <- agents.names(List(thread.agent)).map(_(thread.agent))
+        name   = threadName(thread)
+        result = outcome match
+                   case Outcome.Answered(a) => CallResult.ok(if a.isEmpty then "（没有文字回答）" else a)
+                   case Outcome.Failed(e)   => CallResult.error(s"[agent $agent 的 thread「$name」最终失败：$e]")
+                   case Outcome.Stopped(p)  => CallResult.error(s"[agent $agent 的 thread「$name」被停止了。停止前的输出：\n$p]")
+        rows <- Repo.delegationsOf(ds)
+        _ <- ZIO.foreachDiscard(rows) { r =>
+               Repo
+                 .finishDelegation(r.id, result.toJson)
+                 .flatMap {
+                   case 0 => ZIO.none
+                   case _ =>
+                     r.mode match
+                       case TrackedMode.Report =>
+                         waits.closeTx(WaitKey.delegation(r.id), Some(Letter(Source.Event(EventKind.Delegation), reportText(agent, name, outcome))), t)
+                       case TrackedMode.Ask => resolveAsk(r, result, t)
+                 }
+                 .flatMap(ZIO.foreachDiscard(_)(s => afterCommit(doorbell.ring(s))))
+             }
+      yield ()
 
   private def reportText(agent: String, name: String, o: Outcome): String = o match
     case Outcome.Answered(a) => s"[委派回报] agent $agent 的 thread「$name」做完了，回答：\n$a"
@@ -136,10 +144,6 @@ private[sessions] final case class Delegations(kernel: Kernel, mailbox: Mailbox,
       asked <- Repo.openDelegationsFrom(requester)
       _     <- ZIO.foreachDiscard(asked)(d => Repo.finishDelegation(d.id, CallResult.error("[发起方被停止了]").toJson))
     yield asked
-
-  /** thread 被删除：交给它的未完成委派以失败交回发起方。 */
-  def threadGone(thread: SessionInfo): IO[AppError, Unit] =
-    db.read(Repo.openDelegationsTo(thread.id)).flatMap(ZIO.foreachDiscard(_)(d => finish(d.id, thread, Outcome.Failed("这个 thread 被删除了"))))
 
   /** 心跳检查里写的 thread 现状。 */
   def status(d: DelegationId): IO[AppError, String] =

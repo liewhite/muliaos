@@ -190,10 +190,9 @@ private[sessions] final class Driver(
 
   private def settle(i: SessionInfo): IO[AppError, Unit] =
     for
-      t       <- now
-      pending <- db.write(mailbox.takePendingReply(i.id) <* touched(i.id, t))
-      answer  <- lastAnswer(i.id)
-      _       <- delegations.handBack(i, pending, Outcome.Answered(answer))
+      t      <- now
+      answer <- lastAnswer(i.id)
+      _      <- db.write(delegations.settleTx(i, Outcome.Answered(answer), t) *> touched(i.id, t))
     yield ()
 
   /** 运行最终失败：没结果的调用补上说明，记下错误，交回失败。 */
@@ -201,19 +200,18 @@ private[sessions] final class Driver(
     for
       t <- now
       _ <- ZIO.logWarning(s"会话 ${id.value} 的运行 ${run.value} 最终失败：$message")
-      pending <- db.write(
-                   for
-                     open <- Repo.openCalls(id).flatMap(Decode.calls)
-                     _    <- ZIO.foreachDiscard(open)(c => CallTx.finish(c, CallResult.error(failedNote(c.status)), t))
-                     _    <- Repo.setRunState(run, RunState.Failed, Some(message), Some(t))
-                     _    <- noticeTx(id, Some(run), NoticeKind.Failed, message, t)
-                     p    <- mailbox.takePendingReply(id)
-                     _    <- touched(id, t)
-                   yield p
-                 )
-      _ <- live.done(id)
       i <- info(id)
-      _ <- delegations.handBack(i, pending, Outcome.Failed(message))
+      _ <- db.write(
+             for
+               open <- Repo.openCalls(id).flatMap(Decode.calls)
+               _    <- ZIO.foreachDiscard(open)(c => CallTx.finish(c, CallResult.error(failedNote(c.status)), t))
+               _    <- Repo.setRunState(run, RunState.Failed, Some(message), Some(t))
+               _    <- noticeTx(id, Some(run), NoticeKind.Failed, message, t)
+               _    <- delegations.settleTx(i, Outcome.Failed(message), t)
+               _    <- touched(id, t)
+             yield ()
+           )
+      _ <- live.done(id)
     yield ()
 
   private def failedNote(s: CallStatus): String = s match

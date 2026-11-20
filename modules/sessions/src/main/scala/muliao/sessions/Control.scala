@@ -41,14 +41,15 @@ private[sessions] final case class Control(
         yield ()
     }
 
-  /** 停止的收尾：一个事务里记下停止的现场，再放弃等待中的工作、停下 thread、交回「被停止」。 */
-  private final case class Halted(waits: List[Wait], pending: List[ReplyTo], asked: Int)
+  /** 停止的收尾：一个事务里记下停止的现场并交回「被停止」，再放弃等待中的工作、停下 thread。 */
+  private final case class Halted(waits: List[Wait], asked: Int)
 
   private def stopped(id: SessionId, slot: Slot): IO[AppError, Unit] =
     for
       partial <- slot.partial.get
       t       <- now
       i       <- info(id)
+      text    <- ZIO.succeed(partial.map(p => ModelView.answerText(p.builder.parts)).filter(_.nonEmpty)).someOrElseZIO(lastAnswer(id))
       h <- db.write(
              for
                _     <- ZIO.foreachDiscard(partial.filter(_.builder.parts.exists(visible)))(p => savePartial(id, p, t))
@@ -60,9 +61,9 @@ private[sessions] final case class Control(
                ws    <- waits.dropTx(id)
                asked <- delegations.abandonTx(id)
                _     <- noticeTx(id, run.map(_.id), NoticeKind.Stopped, "已停止", t)
-               p     <- mailbox.takePendingReply(id)
+               _     <- delegations.settleTx(i, Outcome.Stopped(text), t)
                _     <- touched(id, t)
-             yield Halted(ws, p, asked.size)
+             yield Halted(ws, asked.size)
            )
       _ <- slot.partial.set(None)
       _ <- live.done(id)
@@ -74,8 +75,6 @@ private[sessions] final case class Control(
       threads <- db.read(Repo.threadsOf(id))
       _ <- ZIO.foreachDiscard(threads)(th => stop(th.id, byUser = false).catchAll(e => ZIO.logWarning(s"停 thread ${th.id.value} 失败：${e.message}")))
       _ <- ZIO.logInfo(s"会话 ${i.id.value} 已停止（放弃 ${h.waits.size} 项等待、${h.asked} 个在等的委派）")
-      text <- ZIO.succeed(partial.map(p => ModelView.answerText(p.builder.parts)).filter(_.nonEmpty)).someOrElseZIO(lastAnswer(id))
-      _    <- delegations.handBack(i, h.pending, Outcome.Stopped(text))
     yield ()
 
   private def visible(p: ShownPart): Boolean = p match
@@ -160,10 +159,9 @@ private[sessions] final case class Control(
   private def remove(id: SessionId): IO[AppError, Unit] =
     for
       i <- info(id)
-      _ <- delegations.threadGone(i)
       // touch 对删掉的行无效，这里只借它发通知（列表去掉它，开着的会话页重拉得到「不存在」）
       t <- now
-      _ <- db.write(Repo.orphanThreads(id) *> touched(id, t) *> Repo.deleteSession(id))
+      _ <- db.write(delegations.threadGoneTx(i, t) *> Repo.orphanThreads(id) *> touched(id, t) *> Repo.deleteSession(id))
       _ <- live.done(id)
       _ <- ports.emit(SessionEvent.Deleted(id, i.agent, i.origin))
     yield ()

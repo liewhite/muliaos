@@ -215,6 +215,57 @@ object SessionsSpec extends ZIOSpecDefault:
         )
       }
     },
+    test("交回与收尾同一个事务：没提交则回答去向和委派都不动，提交即交回（#1046）") {
+      fresh { req =>
+        val last = lastUserText(req)
+        if isAgent(req, "bob") then
+          if last.endsWith("任务") then Script.Say(List(call("b1", "block", "{}"))) else Script.Say(List(text("bob 做完")))
+        else if last == "等" then Script.Say(List(call("a1", "ask_agent", """{"agent":"bob","message":"任务","thread":"t"}""")))
+        else Script.Say(List(text("好")))
+      } { (_, p, _) =>
+        for
+          events <- recordEvents
+          alice  <- agent("alice")
+          _      <- agent("bob")
+          id     <- userSession(alice, "等")
+          th     <- eventually("thread t")(console.flatMap(_.list(None, None, None, 50)))(_.items.exists(threadName(_).contains("t")))
+          t       = th.items.find(threadName(_).contains("t")).get.id
+          _      <- eventually("bob 的 block 在执行")(timeline(t))(_.exists(_.parts.exists(_.call.exists(_.state == CallState.Running))))
+          parts <- sessions.flatMap {
+                     case l: Sessions.Live => ZIO.succeed(l.parts)
+                     case _                => ZIO.fail(AppError.Internal("不是 Sessions.Live"))
+                   }
+          k     = parts.kernel
+          info <- k.info(t)
+          now  <- k.now
+          // 收尾事务在提交前失败（等同提交前被重启）：什么都不该交回
+          rolled <- k.db.write(parts.delegations.settleTx(info, Outcome.Answered("提前交回"), now) *> ZIO.fail(AppError.Internal("模拟提交前中断"))).either
+          i1     <- k.info(t)
+          open1  <- k.db.read(store.Repo.openDelegationsTo(t))
+          settledBefore <- events.get.map(_.exists {
+                             case SessionEvent.Settled(`t`, _, _, _, _) => true
+                             case _                                     => false
+                           })
+          // 提交：去向取走与交回同时生效
+          _     <- k.db.write(parts.delegations.settleTx(info, Outcome.Answered("提前交回"), now))
+          i2    <- k.info(t)
+          open2 <- k.db.read(store.Repo.openDelegationsTo(t))
+          _     <- eventually("alice 拿到结果")(timeline(id))(_.flatMap(_.parts.flatMap(_.call)).exists(_.result.nonEmpty))
+          _     <- p.gate.succeed(())
+          _     <- idle(t) *> idle(id)
+          tl    <- timeline(id)
+        yield assertTrue(
+          rolled.isLeft,
+          i1.pendingReply.exists(_.isInstanceOf[ReplyTo.Delegation]),
+          open1.size == 1,
+          !settledBefore,
+          i2.pendingReply.isEmpty,
+          open2.isEmpty,
+          // bob 后来的回答不再交回（委派已交回过）
+          tl.flatMap(_.parts.flatMap(_.call)).head.result.map(_.text).contains("提前交回")
+        )
+      }
+    },
     test("停止：保存已生成的部分，逐层停下 thread，丢弃排队的信") {
       fresh { req =>
         if isAgent(req, "bob") then Script.Hang(List(text("bob 想到一半")))
