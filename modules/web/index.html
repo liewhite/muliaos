@@ -3,8 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#181f38" />
+    <meta name="theme-color" content="#ffffff" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -13,12 +12,15 @@
     <link rel="icon" type="image/png" href="/icon-192.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>Muliao</title>
-    <!-- 首屏前按系统偏好设置主题，避免闪烁；运行时由前端的主题跟随接管 -->
+    <!-- 首屏前按设置里选的主题（muliao.theme：System/Light/Dark，没选过即跟随系统）先设一次，避免闪烁；运行时由前端 core/Theme 接管，类名与颜色两边保持一致 -->
     <script>
       (function () {
-        var t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        var c = ''
+        try { c = (localStorage.getItem('muliao.theme') || '').toLowerCase() } catch (e) {}
+        var t = c === 'dark' || c === 'light' ? c : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
         document.documentElement.classList.add(t)
         document.documentElement.setAttribute('data-theme', t)
+        document.querySelector('meta[name=theme-color]').setAttribute('content', t === 'dark' ? '#181f38' : '#ffffff')
       })()
     </script>
   </head>

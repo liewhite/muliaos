@@ -33,6 +33,7 @@ object SettingsPage:
   def view(): HtmlElement =
     val act = new Action
     Ui.page("设置")(
+      themeCard,
       pushCard(act),
       ScriptGrants.view(),
       act.errorView(),
@@ -47,6 +48,17 @@ object SettingsPage:
           Push.unsubscribe().failed.foreach(e => Toast.danger(s"取消本设备的推送失败：${Http.messageOf(e)}"))
         })
     }
+
+  /** 深浅色：存在本设备，各设备各设各的。 */
+  private def themeCard: HtmlElement =
+    Ui.card(
+      div(
+        cls := "card__header",
+        div(cls := "card__title flex items-center gap-2", Icon("SunMoon"), "主题"),
+        div(cls := "card__description", "只对本设备生效。")
+      ),
+      div(cls := "card__content", Fields.segmented("主题", Theme.choice.signal, Theme.choice.set, Theme.Choice.values.toList))
+    )
 
   private def pushCard(act: Action): HtmlElement =
     // None：还在查询本设备的订阅

@@ -10,7 +10,7 @@ import org.scalajs.dom
 /** 前端入口：按登录状态显示登录页或登录后的外壳；全局的确认弹窗与提示挂在根部。 */
 object Main:
   def main(args: Array[String]): Unit =
-    followSystemTheme()
+    Theme.start()
     SwNavigate.listen()
     Push.registerServiceWorker()
     Auth.check()
@@ -28,16 +28,3 @@ object Main:
       Confirm.view,
       Toast.view
     )
-
-  /** 主题跟随系统深浅色（index.html 里的内联脚本负责首屏，避免闪烁）。 */
-  private def followSystemTheme(): Unit =
-    val mq = dom.window.matchMedia("(prefers-color-scheme: dark)")
-    def apply(): Unit =
-      val t    = if mq.matches then "dark" else "light"
-      val root = dom.document.documentElement
-      root.classList.remove("dark")
-      root.classList.remove("light")
-      root.classList.add(t)
-      root.setAttribute("data-theme", t)
-    mq.addEventListener("change", (_: dom.Event) => apply())
-    apply()
