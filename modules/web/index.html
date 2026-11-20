@@ -15,8 +15,7 @@
     <!-- 首屏前按设置里选的主题（muliao.theme：System/Light/Dark，没选过即跟随系统）先设一次，避免闪烁；运行时由前端 core/Theme 接管，类名与颜色两边保持一致 -->
     <script>
       (function () {
-        var c = ''
-        try { c = (localStorage.getItem('muliao.theme') || '').toLowerCase() } catch (e) {}
+        var c = (localStorage.getItem('muliao.theme') || '').toLowerCase()
         var t = c === 'dark' || c === 'light' ? c : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
         document.documentElement.classList.add(t)
         document.documentElement.setAttribute('data-theme', t)

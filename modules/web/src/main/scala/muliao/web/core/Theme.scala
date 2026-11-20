@@ -42,4 +42,4 @@ object Theme:
     Mode.values.foreach(x => root.classList.remove(x.cssName))
     root.classList.add(m.cssName)
     root.setAttribute("data-theme", m.cssName)
-    Option(dom.document.querySelector("meta[name=theme-color]")).foreach(_.setAttribute("content", m.barColor))
+    dom.document.querySelector("meta[name=theme-color]").setAttribute("content", m.barColor)
