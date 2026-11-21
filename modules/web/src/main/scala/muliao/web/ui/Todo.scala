@@ -25,7 +25,7 @@ object Todo:
     case Secret   extends Kind("KeyRound", "border-warning/40", "text-warning")
 
   /** 一个选择：按钮文字、产生答复的动作；`primary` 是推荐的那个，`hint` 是按钮的说明，`enabled` 为假时不能点（如提问还没答完）。 */
-  final case class Choice(label: String, run: () => Future[Any], primary: Boolean = false, hint: String = "", enabled: Signal[Boolean] = Val(true))
+  final case class Choice(label: String, run: () => Future[Any], primary: Boolean = false, hint: Option[String] = None, enabled: Signal[Boolean] = Val(true))
 
   /** @param what   要做什么（接在 agent 名后面）
     * @param since  开始等的时刻
@@ -57,7 +57,7 @@ object Todo:
         cls := "flex flex-wrap justify-end gap-2",
         choices.map(c =>
           Ui.btn(if c.primary then Variant.Primary else Variant.Secondary, Size.Sm, disabledIf = act.busy.signal.combineWith(c.enabled).map(_ || !_))(
-            Option.when(c.hint.nonEmpty)(title := c.hint),
+            c.hint.map(title := _),
             c.label,
             onClick --> (_ => act.fire(c.run()))
           )

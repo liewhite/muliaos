@@ -9,6 +9,12 @@ import org.scalajs.dom
 import Http.ec
 
 object NotificationsPage:
+  /** 全部未读通知数（应用图标角标，与推送带来的数一致）。 */
+  val unread: Signal[Long] = Remote(NotificationsApi.list)(Some(1)).map(_.data.fold(0L)(_.unread))
+
+  /** 导航上通知的角标：未读通知加待你处理的件数。这两个由外壳一直订阅着。 */
+  val badge: Signal[Long] = unread.combineWith(Awaiting.items.map(_.size.toLong)).map(_ + _)
+
   def view(): HtmlElement =
     val inbox = Remote(NotificationsApi.list)(None)
     // 这次进页面时见过的未读：自己标了已读、列表重拉后它们仍显示未读点，让用户看出哪些是新的（下次进页面才消失）

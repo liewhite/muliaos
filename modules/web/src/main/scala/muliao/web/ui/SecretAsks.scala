@@ -17,13 +17,12 @@ object SecretAsks:
   private val Spans = List(60 -> "1 小时", 8 * 60 -> "8 小时", 24 * 60 -> "24 小时")
 
   /** 全部在等的请求（Secret 页）：按编号保留元素，别的请求进来刷新时，正在做的授权不被打断。 */
-  def list(asks: Signal[List[SecretAsk]]): HtmlElement =
-    div(cls := "flex flex-col gap-2", children <-- asks.splitSeq(_.id)(s => card(s.now(), away(s.now()))))
+  def list(asks: Signal[List[SecretAsk]], place: SecretAsk => Todo.Place = away): HtmlElement =
+    div(cls := "flex flex-col gap-2", children <-- asks.splitSeq(_.id)(s => card(s.now(), place(s.now()))))
 
   /** 这个会话里在等的请求。 */
   def forSession(id: SessionId): HtmlElement =
-    val asks = Remote(VaultApi.vaultState)(()).map(_.data.toList.flatMap(_.asks).filter(_.purpose.session.contains(id)))
-    div(cls := "flex flex-col gap-2", children <-- asks.splitSeq(_.id)(s => card(s.now(), Todo.Place.InSession)))
+    list(Remote(VaultApi.vaultState)(()).map(_.data.toList.flatMap(_.asks).filter(_.purpose.session.contains(id))), _ => Todo.Place.InSession)
 
   def away(a: SecretAsk): Todo.Place = Todo.Place.Away(a.agent, a.purpose.session)
 
@@ -40,7 +39,7 @@ object SecretAsks:
           Seq(span("要用 passkey secret"), key),
           Some(a.since),
           pre(cls := Ui.CodeBlock + " max-h-60 overflow-auto", a.purpose.what),
-          (deny :: Spans.map((m, label) => Todo.Choice(s"允许 $label", answer(AskDecision.For(_, m)), hint = "这个 agent 用这个 secret 在这段时间内不再问，正在等的一并放行"))) :+
+          (deny :: Spans.map((m, label) => Todo.Choice(s"允许 $label", answer(AskDecision.For(_, m)), hint = Some("这个 agent 用这个 secret 在这段时间内不再问，正在等的一并放行")))) :+
             Todo.Choice("允许一次", answer(AskDecision.Once(_)), primary = true)
         )
       case AskWant.Sign(content) =>
@@ -61,6 +60,6 @@ object SecretAsks:
           ),
           List(
             deny,
-            Todo.Choice("签名", reply(Passkey.sign(a.key, a.box, content).map(AskDecision.Signed(_))), primary = true, hint = "用 passkey 解开密钥、在这个页面里按上面的内容签好交回，私钥不离开浏览器")
+            Todo.Choice("签名", reply(Passkey.sign(a.key, a.box, content).map(AskDecision.Signed(_))), primary = true, hint = Some("用 passkey 解开密钥、在这个页面里按上面的内容签好交回，私钥不离开浏览器"))
           )
         )

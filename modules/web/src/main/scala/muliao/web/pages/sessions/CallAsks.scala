@@ -30,7 +30,7 @@ object CallAsks:
       Seq(div(cls := "text-sm whitespace-pre-wrap", summary), ToolDetail.view(c)),
       List(
         Todo.Choice("拒绝", decide(false, false)),
-        Todo.Choice("始终允许", decide(true, true), hint = "以后同样的调用不再问（设置页可撤销）"),
+        Todo.Choice("始终允许", decide(true, true), hint = Some("以后同样的调用不再问（设置页可撤销）")),
         Todo.Choice("批准", decide(true, false), primary = true)
       ),
       anchor = Some(anchor(c.id))

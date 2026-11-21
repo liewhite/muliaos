@@ -98,7 +98,7 @@ final class TranscriptView:
 
   /** 在等用户的调用是待办卡片（[[CallAsks]]，与通知页同一个）；答复过的留下结果。 */
   private def waiting(entry: Long, c: CallView, ctx: TranscriptCtx): Option[HtmlElement] =
-    Option.when(c.state == CallState.Suspended)(CallAsks.card(c, Todo.Place.InSession, ctx.answer(entry, c.id, _))).flatten
+    CallAsks.card(c, Todo.Place.InSession, ctx.answer(entry, c.id, _))
 
   private def note(icon: String, text: String): HtmlElement =
     div(cls := "flex items-center gap-1.5 self-start text-xs text-muted", Icon(icon, "size-3.5"), text)

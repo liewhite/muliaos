@@ -1,7 +1,6 @@
 package muliao.web.shell
 
 import com.raquo.laminar.api.L.*
-import muliao.contract.NotificationsApi
 import muliao.web.core.*
 import muliao.web.pages
 import muliao.web.pwa.{Badge, Push, SwNavigate}
@@ -152,10 +151,8 @@ object Shell:
 
   /** 登录后的界面。手机：页面 + 底部导航，页面头部左上角打开管理抽屉。桌面（md 起）：左侧窄栏 + 页面；管理类页面在 lg 起多一列常驻的管理菜单。 */
   def view(): HtmlElement =
-    val unreadLoad = Remote(NotificationsApi.list)(Some(1)).map(_.map(_.unread))
-    val unread     = unreadLoad.map(_.data.getOrElse(0L))
-    // 导航角标把待你处理的也算上（应用图标角标仍只算未读通知，与推送带来的数一致）
-    val badge      = unread.combineWith(pages.notifications.Awaiting.items.map(_.size.toLong)).map(_ + _)
+    val unread     = pages.notifications.NotificationsPage.unread
+    val badge      = pages.notifications.NotificationsPage.badge
     val route      = Router.location.map(_.route)
     div(
       cls := "flex h-full flex-col md:flex-row",
