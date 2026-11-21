@@ -29,11 +29,11 @@ object PlainSecretSpec extends ZIOSpecDefault:
         text.contains("value = "),
         !text.contains("ciphertext"),
         Formats.parseSecret("value = \"v\"\n") == Right(SecretFile("", SecretBody.Plain("v", RevealScope.Shell))),
-        Formats.parseSecret("value = \"v\"\nkeypair = \"ed25519\"\n").left.exists(_.contains("只能是口令")),
+        Formats.parseSecret("value = \"v\"\nkeypair = \"ed25519\"\naddress = \"39nhYfstc6AJ9wHfERt9BZfSiTa5ZpSE15cWVGkgEr7c\"\n").left.exists(_.contains("只能是口令")),
         Formats.parseSecret("value = \"v\"\nusage = \"sign\"\n").left.exists(_.contains("sign")),
         Formats.parseSecret("value = \"v\"\nciphertext = \"x\"\n").left.exists(_.contains("只能有一个")),
         SecretBody.Plain("v", RevealScope.Scripts).view == SecretView.Plain("v", RevealScope.Scripts),
-        SecretBody.Server("t", SecretContent.Default).view == SecretView.Server(SecretContent.Default)
+        SecretBody.Server("t", SecretContent.Opaque(RevealScope.Shell)).view == SecretView.Server(SecretContent.Opaque(RevealScope.Shell))
       )
     },
     test("用户设成明文：文件里是原值；agent 照常取用（范围照旧管）；不能拿来签名；agent 改值仍是明文、可改范围；agent 新建的总是加密") {
@@ -85,7 +85,7 @@ object PlainSecretSpec extends ZIOSpecDefault:
         ok    <- guard(Actor.Agent(a.id), plain, "description = \"新说明\"\nusage = \"scripts\"\nvalue = \"v2\"\n").either
         toEnc <- guard(Actor.Agent(a.id), plain, s"description = \"地址\"\n$ct\n").either
         toPln <- guard(Actor.Agent(a.id), enc, "description = \"加密的\"\nvalue = \"明文\"\n").either
-        kp    <- guard(Actor.Agent(a.id), plain, "description = \"地址\"\nkeypair = \"ed25519\"\nvalue = \"v2\"\n").either
+        kp    <- guard(Actor.Agent(a.id), plain, "description = \"地址\"\nkeypair = \"ed25519\"\naddress = \"39nhYfstc6AJ9wHfERt9BZfSiTa5ZpSE15cWVGkgEr7c\"\nvalue = \"v2\"\n").either
         fresh <- guard(Actor.User, dirs.assets.resolve("alice/secrets/HAND_MADE.toml"), "value = \"v\"\n").either
       yield assertTrue(
         ok.isRight,

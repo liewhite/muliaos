@@ -119,7 +119,7 @@ object GuardSpec extends ZIOSpecDefault:
         dirs  <- ZIO.service[TestEnv.Dirs]
         a     <- alice
         vault <- ZIO.service[Vault]
-        _     <- vault.set("OTHER_KEY", muliao.resources.vault.SecretInput.ByUser(muliao.contract.SecretValue.Server("v", muliao.contract.SecretContent.Default), Owner.Platform), None)
+        _     <- vault.set("OTHER_KEY", muliao.resources.vault.SecretInput.ByUser(muliao.contract.SecretValue.Server("v", muliao.contract.SecretShape.Default), Owner.Platform), None)
         _     <- vault.set("MY_KEY", muliao.resources.vault.SecretInput.ByAgent(a.id, "v", None), None)
         f      = dirs.assets.resolve("alice/mcp/web.json")
         x     <- guard(Actor.Agent(a.id), f, """{"transport":"http","url":"ftp://x"}""").either
@@ -140,7 +140,7 @@ object GuardSpec extends ZIOSpecDefault:
         a1    <- guard(Actor.User, dirs.assets.resolve("alice/secrets/NEW_KEY.toml"), "ciphertext = \"x\"\n").either
         a2    <- guard(Actor.User, f, "description = \"说明\"\nciphertext = \"gAAAAforged\"\n").either
         a3    <- guard(Actor.User, f, s"description = \"新说明\"\n$ct\nusage = \"scripts\"\n").either
-        a4    <- guard(Actor.User, f, s"description = \"说明\"\nkeypair = \"ed25519\"\n$ct\n").either
+        a4    <- guard(Actor.User, f, s"description = \"说明\"\nkeypair = \"ed25519\"\naddress = \"39nhYfstc6AJ9wHfERt9BZfSiTa5ZpSE15cWVGkgEr7c\"\n$ct\n").either
       yield assertTrue(reason(a1).contains("vault_set"), reason(a2).contains("只能手改"), a3.isRight, reason(a4).contains("只能手改"))
     },
     test("agent.toml：未知字段、空描述、模型不能用都拒绝") {

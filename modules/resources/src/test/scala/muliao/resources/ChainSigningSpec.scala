@@ -21,7 +21,10 @@ object ChainSigningSpec extends ZIOSpecDefault:
   private val ethKey = s("ethKey")
   private val solKey = s("solana", "secretKeyJson")
 
-  private def signed(c: SignContent, key: String): Json.Obj = Signing.sign(c, key, JvmCrypto).flatMap(_.fromJson[Json.Obj]).toOption.get
+  private def signed(c: SignContent, key: String): Json.Obj =
+    SigningKeys.identity(c.algorithm, key, JvmCrypto).flatMap(i => Signing.sign(c, i, key, JvmCrypto)).flatMap(_.fromJson[Json.Obj]).toOption.get
+
+  private val ethId = KeyIdentity.parse(SigningAlgorithm.Secp256k1, s("ethAddress")).toOption.get
   private def field(o: Json.Obj, k: String): String = o.get(k).collect { case Json.Str(x) => x }.getOrElse("")
 
   private def tool = PasskeyVaultSpec.toolOf("sign")
@@ -70,8 +73,12 @@ object ChainSigningSpec extends ZIOSpecDefault:
           field(r, "transaction") == s(n, "signed") && field(r, "signature") == s(n, "signature") && field(r, "public_key") == s("solana", "publicKey")
         ),
         field(signed(msg, s("solana", "secretKeyB58")), "signature") == s("solanaMessage", "signature"),
-        SigningKeys.identity(SigningAlgorithm.Ed25519, solKey, JvmCrypto).exists(_.contains(s("solana", "publicKey"))),
-        SigningKeys.identity(SigningAlgorithm.Secp256k1, ethKey, JvmCrypto) == Right(s"以太坊地址 ${s("ethAddress")}"),
+        SigningKeys.identity(SigningAlgorithm.Ed25519, solKey, JvmCrypto).map(_.address) == Right(s("solana", "publicKey")),
+        SigningKeys.identity(SigningAlgorithm.Secp256k1, ethKey, JvmCrypto) == Right(ethId),
+        // 公开身份 JSON 往返；私钥与记下的不是同一把就不签（#1098）
+        ethId.toJson.fromJson[KeyIdentity] == Right(ethId),
+        ethId.toJson == s"""{"algorithm":"secp256k1","address":"${s("ethAddress")}"}""",
+        Signing.sign(SignContent.EthMessage(MessageBytes.Text("x")), KeyIdentity.parse(SigningAlgorithm.Secp256k1, "0x" + "1" * 40).toOption.get, ethKey, JvmCrypto).left.exists(_.contains("不一致")),
         // 公钥部分被改过的 Solana 私钥、超出范围的以太坊私钥都不认
         SigningKeys.ed25519(solKey.replaceFirst("121,", "122,"), JvmCrypto).isLeft,
         SigningKeys.secp256k1("0x" + "f" * 64, JvmCrypto).isLeft,
@@ -82,11 +89,11 @@ object ChainSigningSpec extends ZIOSpecDefault:
       for
         a     <- ZIO.serviceWithZIO[agents.Agents](_.create(agents.NewAgent("alice", "x")))
         vault <- ZIO.service[Vault]
-        signOnly = (alg: SigningAlgorithm) => SecretContent.KeyPair(alg, KeyExposure.SignOnly)
+        signOnly = (alg: SigningAlgorithm) => SecretShape.KeyPair(alg, KeyExposure.SignOnly)
         mine     = Owner.Agent(a.name)
         _     <- vault.set("ETH_KEY", SecretInput.ByUser(SecretValue.Server(ethKey, signOnly(SigningAlgorithm.Secp256k1)), mine), Some("eth"))
         _     <- vault.set("SOL_KEY", SecretInput.ByUser(SecretValue.Server(solKey, signOnly(SigningAlgorithm.Ed25519)), mine), Some("sol"))
-        _     <- vault.set("ETH_PK", SecretInput.ByUser(SecretValue.Passkey(PasskeyVaultSpec.box, signOnly(SigningAlgorithm.Secp256k1)), mine), Some("eth"))
+        _     <- vault.set("ETH_PK", SecretInput.ByUser(SecretValue.Passkey(PasskeyVaultSpec.box, SecretContent.KeyPair(ethId, KeyExposure.SignOnly)), mine), Some("eth"))
         badKey <- vault.set("BAD", SecretInput.ByUser(SecretValue.Server("0x1234", signOnly(SigningAlgorithm.Secp256k1)), mine), None).either
         t      <- tool
         ctx     = PasskeyVaultSpec.Ctx(a.id)
@@ -100,6 +107,7 @@ object ChainSigningSpec extends ZIOSpecDefault:
         w      <- PasskeyVaultSpec.asks(1)
         _      <- PasskeyVaultSpec.answer(w.head.id, AskDecision.Signed("{\"signature\":\"0xabc\"}"))
         viaPk  <- f.join
+        ga     <- PasskeyVaultSpec.toolOf("get_agent").flatMap(_.invoke(Json.Obj("agent" -> Json.Str("alice")), ctx))
       yield
         val schema = t.spec.inputSchema.toJson
         assertTrue(
@@ -112,7 +120,10 @@ object ChainSigningSpec extends ZIOSpecDefault:
           wrong.left.toOption.exists(_.toString.contains("不是 secp256k1 密钥对")),
           txMsg.left.toOption.exists(_.toString.contains("solana_transaction")),
           pending.isEmpty,
-          w.head.want == AskWant.Sign(SignContent.EthMessage(MessageBytes.Text("hi"))),
+          w.head.want == AskWant.Sign(SignContent.EthMessage(MessageBytes.Text("hi")), ethId),
+          // 服务端保管的公开身份是服务端从私钥算的；agent 在 get_agent 里看得到（#1098）
+          text(ga).contains(s"secret:ETH_KEY（secp256k1 ${s("ethAddress")}）"),
+          text(ga).contains(s"secret:SOL_KEY（ed25519 ${s("solana", "publicKey")}）"),
           w.head.purpose.what == "签以太坊消息（EIP-191）",
           text(viaPk).contains("0xabc")
         )

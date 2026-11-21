@@ -27,6 +27,9 @@ object SshCert:
     override def hashCode: Int = java.util.Arrays.hashCode(raw)
     override def toString: String = s"PublicKey(${b64(raw)})"
 
+  object PublicKey:
+    def of(raw: Array[Byte]): Either[String, PublicKey] = key(raw)
+
   /** ed25519 私钥：32 字节种子与对应公钥。toString 不带种子。 */
   final class PrivateKey(seedBytes: Array[Byte], val publicKey: PublicKey):
     def seed: Array[Byte] = seedBytes.clone()

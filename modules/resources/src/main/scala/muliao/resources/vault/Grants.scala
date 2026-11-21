@@ -22,8 +22,8 @@ trait Grants:
   /** 取明文：有生效的授权直接给；否则登记一个请求，等到用户答复。 */
   def obtain(slot: Slot, purpose: AskPurpose, box: PasskeyBox): IO[AppError, String]
 
-  /** 请用户用这个密钥对签一份内容，等到用户答复；返回签好的结果。 */
-  def sign(slot: Slot, content: SignContent, purpose: AskPurpose, box: PasskeyBox): IO[AppError, String]
+  /** 请用户用这个密钥对（公开身份 `signer`）签一份内容，等到用户答复；返回签好的结果。 */
+  def sign(slot: Slot, content: SignContent, signer: KeyIdentity, purpose: AskPurpose, box: PasskeyBox): IO[AppError, String]
 
   /** 等授权的请求与生效中的授权（不含明文）。 */
   def view: UIO[(List[SecretAsk], List[SecretGrant])]
@@ -54,17 +54,17 @@ object Grants:
   /** 一个请求在等什么、答复交给谁：种类与答复的类型绑在一起，答错种类在类型上对不上。 */
   private enum Need:
     case Value(reply: Promise[AppError, Plain])
-    case Sign(content: SignContent, reply: Promise[AppError, String])
+    case Sign(content: SignContent, signer: KeyIdentity, reply: Promise[AppError, String])
 
     def want: AskWant = this match
-      case Value(_)   => AskWant.Reveal
-      case Sign(c, _) => AskWant.Sign(c)
+      case Value(_)      => AskWant.Reveal
+      case Sign(c, s, _) => AskWant.Sign(c, s)
 
     def deny: UIO[Unit] =
       val e = AppError.forbidden("用户拒绝了这次使用 passkey secret 的请求")
       this match
         case Value(r)   => r.fail(e).unit
-        case Sign(_, r) => r.fail(e).unit
+        case Sign(_, _, r) => r.fail(e).unit
 
   /** 一个在等的请求。 */
   private final case class Waiting(slot: Slot, need: Need, purpose: AskPurpose, box: PasskeyBox, since: Long)
@@ -85,10 +85,10 @@ object Grants:
         got   <- ask(slot, Need.Value(reply), purpose, box, s => s.grants.get(slot).map(_.plain))(reply.await)
       yield got.value
 
-    def sign(slot: Slot, content: SignContent, purpose: AskPurpose, box: PasskeyBox): IO[AppError, String] =
+    def sign(slot: Slot, content: SignContent, signer: KeyIdentity, purpose: AskPurpose, box: PasskeyBox): IO[AppError, String] =
       for
         reply <- Promise.make[AppError, String]
-        out   <- ask(slot, Need.Sign(content, reply), purpose, box, _ => None)(reply.await)
+        out   <- ask(slot, Need.Sign(content, signer, reply), purpose, box, _ => None)(reply.await)
       yield out
 
     /** 登记一个请求并等答复（`ready` 给出不用问就有的结果）；结束时（拿到、被拒绝或被中断）撤下请求。 */
@@ -147,7 +147,7 @@ object Grants:
       (w.need, decision) match
         case (need, AskDecision.Deny)                    => (Right(need.deny), done)
         case (Need.Value(r), AskDecision.Once(v))        => (Right(r.succeed(Plain(v)).unit), done)
-        case (Need.Sign(_, r), AskDecision.Signed(c))    => (Right(r.succeed(c).unit), done)
+        case (Need.Sign(_, _, r), AskDecision.Signed(c)) => (Right(r.succeed(c).unit), done)
         case (Need.Value(_), AskDecision.For(v, minutes)) =>
           // 授权覆盖这个 agent 这个 secret 的全部取明文请求
           val p    = Plain(v)

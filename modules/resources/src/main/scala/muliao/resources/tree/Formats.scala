@@ -142,18 +142,19 @@ object Formats:
 
   // ---- secret ----
 
-  private val secretKeys  = Set("description", "ciphertext", "passkey", "value", "keypair", "usage")
+  private val secretKeys  = Set("description", "ciphertext", "passkey", "value", "keypair", "address", "usage")
   private val passkeyKeys = Set("rp", "credential", "iv", "ciphertext")
   private val SignUsage   = "sign"
 
   /** 三个维度各一处（#1069）：
     *   - 怎么保存：服务端加密的写 `ciphertext`（Fernet 密文）；passkey 加密的写 `[passkey]` 表（rp、credential、iv、ciphertext）；
     *     明文保存的写 `value`（#1093）。恰好一个。
-    *   - 内容：写了 `keypair = "<算法>"` 是密钥对（值是私钥），没写是口令。明文保存的只能是口令。
+    *   - 内容：写了 `keypair = "<算法>"` 是密钥对（值是私钥），还要写它的公开身份 `address`（#1098，见 [[muliao.contract.KeyIdentity]]）；
+    *     没写是口令。明文保存的只能是口令。
     *   - 能否取出明文：`usage` 是 `shell`（缺省：任意命令）、`scripts`（只给 skill 脚本与 MCP）或 `sign`（只能签名，只有密钥对能写）。
     */
   def parseSecret(text: String): Either[String, SecretFile] =
-    import muliao.contract.{KeyExposure, RevealScope, SecretContent, SigningAlgorithm}
+    import muliao.contract.{KeyExposure, KeyIdentity, RevealScope, SecretContent, SigningAlgorithm}
     def scopeOf(u: Option[String]): Either[String, RevealScope] =
       u.fold(Right(RevealScope.Shell))(s => RevealScope.parse(s).left.map(e => s"usage：$e / $SignUsage"))
     for
@@ -164,12 +165,18 @@ object Formats:
       pk    <- t.table("passkey")
       plain <- t.string("value")
       alg   <- t.string("keypair").flatMap(o => o.fold(Right(None))(s => SigningAlgorithm.parse(s).map(Some(_))))
+      addr  <- t.string("address")
+      id <- (alg, addr) match
+              case (Some(a), Some(s)) => KeyIdentity.parse(a, s).map(Some(_)).left.map(e => s"address：$e")
+              case (Some(_), None)    => Left("密钥对缺少公开身份 address：在 Secret 页重新设一次它的值，平台会从私钥算出")
+              case (None, Some(_))    => Left("只有密钥对（写了 keypair）有 address")
+              case (None, None)       => Right(None)
       usage <- t.string("usage")
-      content = (alg, usage) match
+      content = (id, usage) match
                   case (None, Some(SignUsage))    => Left(s"只有密钥对（写了 keypair）能 usage = \"$SignUsage\"")
                   case (None, u)                  => scopeOf(u).map(SecretContent.Opaque(_))
-                  case (Some(a), Some(SignUsage)) => Right(SecretContent.KeyPair(a, KeyExposure.SignOnly))
-                  case (Some(a), u)               => scopeOf(u).map(s => SecretContent.KeyPair(a, KeyExposure.Reveal(s)))
+                  case (Some(i), Some(SignUsage)) => Right(SecretContent.KeyPair(i, KeyExposure.SignOnly))
+                  case (Some(i), u)               => scopeOf(u).map(s => SecretContent.KeyPair(i, KeyExposure.Reveal(s)))
       body <- (ct, pk, plain) match
                 case (Some(token), None, None) => content.map(SecretBody.Server(token, _))
                 case (None, Some(p), None)     => passkeyBox(p).flatMap(b => content.map(SecretBody.Passkey(b, _)))
@@ -195,7 +202,7 @@ object Formats:
     import muliao.contract.{RevealScope, SecretContent}
     val content = s.body.content
     val keypair = content match
-      case SecretContent.KeyPair(a, _) => List(s"keypair = ${TomlFile.str(a.label)}")
+      case SecretContent.KeyPair(i, _) => List(s"keypair = ${TomlFile.str(i.algorithm.label)}", s"address = ${TomlFile.str(i.address)}")
       case SecretContent.Opaque(_)     => Nil
     val usage = content.revealScope match
       case Some(RevealScope.Shell) => Nil

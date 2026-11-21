@@ -160,7 +160,7 @@ Each secret has three dimensions, one choice each:
 | Dimension | Choices |
 |---|---|
 | Storage | **Server-encrypted**: the platform decrypts it with the `[vault] key` from the config; **Passkey-encrypted**: only your browser, with your passkey; each use waits for your approval (once, for a period, or deny); **Plain**: not encrypted and shown in the UI, passwords only, for non-secret settings |
-| Content | **Password** (any text); **Key pair** (a private key the platform can sign with: ed25519 for short-lived SSH certificates via `ssh_certificate` and Solana transactions and messages via `sign`; secp256k1 for Ethereum transactions, EIP-191 and EIP-712 messages via `sign`) |
+| Content | **Password** (any text); **Key pair** (a private key the platform can sign with: ed25519 for short-lived SSH certificates via `ssh_certificate` and Solana transactions and messages via `sign`; secp256k1 for Ethereum transactions, EIP-191 and EIP-712 messages via `sign`. When the value is set, the platform derives its address from the private key (Ethereum address, or ed25519 public key and Solana address) and records it; the Secret page and agents can see it, and every signature first checks the private key still matches it) |
 | Plaintext | **Any command**; **Scripts only** (usable by skill scripts and MCP servers, but not injectable into commands the agent writes itself); **Sign only** (key pairs only: the value can never be revealed) |
 
 Signing happens where the secret can be decrypted: server-held keys sign inside the platform with no approval (agent tools cannot reveal them, but this only guards against mistakes:

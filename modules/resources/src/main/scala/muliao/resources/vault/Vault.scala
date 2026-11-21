@@ -1,6 +1,6 @@
 package muliao.resources.vault
 
-import muliao.contract.{AgentId, AgentName, AskPurpose, AssetKind, RevealScope, SecretContent, SecretValue, SignContent, Signing, SigningKeys}
+import muliao.contract.{AgentId, AgentName, AskPurpose, AssetKind, RevealScope, SecretContent, SecretShape, SecretValue, SignContent, Signing}
 import muliao.platform.AppError
 import muliao.resources.VaultSettings
 import muliao.resources.access.{Action, Decision, Permissions}
@@ -124,14 +124,14 @@ object Vault:
       */
     private def seal(key: String, input: SecretInput, before: Option[SecretBody], now: Long): IO[AppError, SecretBody] =
       input match
-        case SecretInput.ByUser(SecretValue.Server(text, c), _) => encrypt(key, text, c, now)
+        case SecretInput.ByUser(SecretValue.Server(text, s), _) => encrypt(key, text, s, now)
         case SecretInput.ByUser(SecretValue.Passkey(box, c), _) => ZIO.succeed(SecretBody.Passkey(box, c))
         case SecretInput.ByUser(SecretValue.Plain(text, s), _)  => nonEmpty(text).as(SecretBody.Plain(text, s))
         case SecretInput.ByAgent(_, text, scope) =>
           before match
-            case None => encrypt(key, text, SecretContent.Opaque(scope.getOrElse(RevealScope.Shell)), now)
+            case None => encrypt(key, text, SecretShape.Opaque(scope.getOrElse(RevealScope.Shell)), now)
             case Some(SecretBody.Server(_, c)) =>
-              ZIO.fromEither(scope.fold(Right(c))(c.withScope)).mapError(AppError.invalid).flatMap(encrypt(key, text, _, now))
+              ZIO.fromEither(scope.fold(Right(c))(c.withScope)).mapError(AppError.invalid).flatMap(c => encrypt(key, text, SecretShape.of(c), now))
             case Some(SecretBody.Plain(_, s)) => nonEmpty(text).as(SecretBody.Plain(text, scope.getOrElse(s)))
             case Some(SecretBody.Passkey(_, _)) =>
               ZIO.fail(AppError.forbidden(s"secret $key 是 passkey 加密的，只能由用户在界面上改值"))
@@ -139,14 +139,12 @@ object Vault:
     private def nonEmpty(text: String): IO[AppError, Unit] =
       ZIO.when(text.isEmpty)(ZIO.fail(AppError.invalid("secret 的值不能为空"))).unit
 
-    private def encrypt(key: String, text: String, content: SecretContent, now: Long): IO[AppError, SecretBody] =
+    /** 密钥对的公开身份从这次的私钥算出（#1098）。 */
+    private def encrypt(key: String, text: String, shape: SecretShape, now: Long): IO[AppError, SecretBody] =
       for
         _ <- nonEmpty(text)
-        _ <- content match
-               case SecretContent.KeyPair(alg, _) =>
-                 ZIO.fromEither(SigningKeys.identity(alg, text, JvmCrypto)).mapError(e => AppError.invalid(s"secret $key 是 ${alg.label} 密钥对，值不是认得的私钥：$e")).unit
-               case SecretContent.Opaque(_) => ZIO.unit
-      yield SecretBody.Server(fernet.encrypt(text, now), content)
+        c <- ZIO.fromEither(shape.content(text, JvmCrypto)).mapError(e => AppError.invalid(s"secret $key 是密钥对，值不是认得的私钥：$e"))
+      yield SecretBody.Server(fernet.encrypt(text, now), c)
 
     /** 这个 agent 能用的 secret 文件：不存在、没加载或没有 use 权限都报错。 */
     private def usable(perms: Permissions, snap: Snapshot, key: String): IO[AppError, SecretDoc] =
@@ -184,14 +182,14 @@ object Vault:
         snap  <- store.snapshot
         doc   <- usable(perms, snap, key)
         out <- doc.content.body match
-                 case SecretBody.Server(token, SecretContent.KeyPair(alg, _)) if alg == content.algorithm =>
+                 case SecretBody.Server(token, SecretContent.KeyPair(signer, _)) if signer.algorithm == content.algorithm =>
                    decrypt(key, token).flatMap(text =>
-                     ZIO.attempt(Signing.sign(content, text, JvmCrypto))
+                     ZIO.attempt(Signing.sign(content, signer, text, JvmCrypto))
                        .mapError(e => AppError.internal(s"用 secret $key 签名失败：${e.getMessage}", e))
                        .flatMap(r => ZIO.fromEither(r).mapError(e => AppError.invalid(s"用 secret $key 签名失败：$e")))
                    )
-                 case SecretBody.Passkey(box, SecretContent.KeyPair(alg, _)) if alg == content.algorithm =>
-                   grants.sign(Slot(agent, key), content, purpose, box)
+                 case SecretBody.Passkey(box, SecretContent.KeyPair(signer, _)) if signer.algorithm == content.algorithm =>
+                   grants.sign(Slot(agent, key), content, signer, purpose, box)
                  case _ =>
                    ZIO.fail(AppError.invalid(s"secret $key 不是 ${content.algorithm.label} 密钥对：要由用户在界面 Secret 页把它设成 ${content.algorithm.label} 密钥"))
       yield out

@@ -1,6 +1,6 @@
 package muliao.resources.tools
 
-import muliao.contract.{RoleName, AssetKind}
+import muliao.contract.{AssetKind, RoleName, SecretContent}
 import muliao.platform.AppError
 import muliao.resources.*
 import muliao.resources.access.BuiltinRole
@@ -96,7 +96,7 @@ object AgentTools:
 
   val GetAgentDef = ToolDef[ToolContext, AgentRef](
     "get_agent",
-    "看一个 agent 的配置、最终能用的工具（tools）和资源（assets：`种类:名字`）、全部角色与全部内置工具。看自己的用自己的名字。",
+    "看一个 agent 的配置、最终能用的工具（tools）和资源（assets：`种类:名字`，密钥对 secret 后面括号里是算法和地址：以太坊地址或 ed25519 公钥的 base58，即 Solana 地址）、全部角色与全部内置工具。看自己的用自己的名字。",
     Access.Read,
     display = _ => Display.JsonData
   )
@@ -152,6 +152,12 @@ object AgentTools:
       ).mapError(fail)
     }
 
+    // 密钥对 secret 附上公开身份（#1098），签名前不用先签一条去取地址
+    def identityOf(snap: tree.Snapshot, g: AssetGrant): String = g.kind match
+      case AssetKind.Secret =>
+        snap.secret(g.name).map(_.content.body.content).collect { case SecretContent.KeyPair(i, _) => s"（${i.short}）" }.getOrElse("")
+      case _ => ""
+
     def view(a: AgentRecord): IO[AppError, AgentView] =
       for
         eff    <- resources.effective(a.id)
@@ -171,7 +177,7 @@ object AgentTools:
         allow = grants.allow.map(_.text),
         deny = grants.deny.map(_.text),
         tools = eff.tools.map(_.name).sorted,
-        assets = eff.assets.map(g => s"${g.kind.label}:${g.name}") ++ List(s"${AssetKind.Memory.label}:${a.name.value}（私有）"),
+        assets = eff.assets.map(g => s"${g.kind.label}:${g.name}${identityOf(snap, g)}") ++ List(s"${AssetKind.Memory.label}:${a.name.value}（私有）"),
         availableRoles = roles.flatten,
         allTools = catalog.tools.map(_.name).sorted,
         problems = snap.problems.filter(_.owner.contains(Owner.Agent(a.name))).map(p => s"${p.path}：${p.reason}")

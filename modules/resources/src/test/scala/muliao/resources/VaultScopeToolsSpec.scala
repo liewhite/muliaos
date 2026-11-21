@@ -89,7 +89,7 @@ object VaultScopeToolsSpec extends ZIOSpecDefault:
     test("主密钥不对拒绝启动（已有 secret 一个都解不开）") {
       for
         vault <- ZIO.service[Vault]
-        _     <- vault.set("PLATFORM_KEY", muliao.resources.vault.SecretInput.ByUser(muliao.contract.SecretValue.Server("v", muliao.contract.SecretContent.Default), Owner.Platform), None)
+        _     <- vault.set("PLATFORM_KEY", muliao.resources.vault.SecretInput.ByUser(muliao.contract.SecretValue.Server("v", muliao.contract.SecretShape.Default), Owner.Platform), None)
         snap  <- ZIO.serviceWithZIO[AssetStore](_.snapshot)
         wrong  = Fernet.fromKey(Fernet.generateKey()).toOption.get
         right  = Fernet.fromKey(TestEnv.key).toOption.get

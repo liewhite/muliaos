@@ -98,11 +98,10 @@ object SigningKeys:
       _ <- Either.cond(n > 0 && n < N, (), "不是有效的 secp256k1 私钥（超出范围）")
     yield Secp256k1Key(b, EthAddress.fromPublic(crypto.secp256k1Public(b)))
 
-  /** 核对是这种算法认得的私钥，给出它的公开身份（设值时给用户看）。 */
-  def identity(alg: SigningAlgorithm, text: String, crypto: Crypto): Either[String, String] = alg match
-    case SigningAlgorithm.Ed25519 =>
-      ed25519(text, crypto).map(k => s"Solana 地址 ${Base58.encode(k.publicKey.bytes)}\nSSH 公钥 ${k.publicKey.line("")}")
-    case SigningAlgorithm.Secp256k1 => secp256k1(text, crypto).map(k => s"以太坊地址 ${k.address.checksummed}")
+  /** 核对是这种算法认得的私钥，算出它的公开身份（设值时存下、给用户看，#1098）。 */
+  def identity(alg: SigningAlgorithm, text: String, crypto: Crypto): Either[String, KeyIdentity] = alg match
+    case SigningAlgorithm.Ed25519   => ed25519(text, crypto).map(k => KeyIdentity.Ed25519(k.publicKey))
+    case SigningAlgorithm.Secp256k1 => secp256k1(text, crypto).map(k => KeyIdentity.Secp256k1(k.address))
 
 /** 签好的结果（给 agent 的 JSON）。 */
 object Signed:
@@ -116,8 +115,17 @@ object Signed:
   final case class SolanaSignature(@jsonField("public_key") publicKey: String, signature: String) derives JsonEncoder
 
 object Signing:
-  /** 用私钥文本签一份内容：按内容的类型读私钥、拼出待签的字节、签好拼成结果（SSH 证书是证书文件的一行，其余是给 agent 的 JSON）。 */
-  def sign(content: SignContent, keyText: String, crypto: Crypto): Either[String, String] =
+  /** 用私钥文本签一份内容：先核对私钥就是 secret 记下的那把（`signer`，#1098），再按内容的类型拼出待签的字节、签好拼成结果
+    * （SSH 证书是证书文件的一行，其余是给 agent 的 JSON）。
+    */
+  def sign(content: SignContent, signer: KeyIdentity, keyText: String, crypto: Crypto): Either[String, String] =
+    for
+      actual <- SigningKeys.identity(content.algorithm, keyText, crypto)
+      _      <- Either.cond(actual == signer, (), s"私钥对应 ${actual.address}，和 secret 记下的 ${signer.address} 不一致：不签；请在 Secret 页重新设一次它的值")
+      out    <- signWith(content, keyText, crypto)
+    yield out
+
+  private def signWith(content: SignContent, keyText: String, crypto: Crypto): Either[String, String] =
     content match
       case SignContent.SshCert(req) =>
         SigningKeys.ed25519(keyText, crypto).flatMap { ca =>

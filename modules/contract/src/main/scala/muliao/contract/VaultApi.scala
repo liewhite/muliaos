@@ -20,6 +20,41 @@ enum SigningAlgorithm(val label: String) extends Labeled:
 
 object SigningAlgorithm extends Labels[SigningAlgorithm]("签名算法", SigningAlgorithm.values)
 
+/** 密钥对的公开身份（#1098）：设值时从私钥算出、随 secret 存下，界面和 agent 只读；签名前核对解开的私钥与它对得上（[[Signing.sign]]）。
+  * 算法由它定。[[address]] 是它的文字写法：ed25519 是公钥的 base58（就是 Solana 地址），secp256k1 是以太坊地址（EIP-55 大小写）。
+  * JSON 里写 `{"algorithm": …, "address": …}`。
+  */
+enum KeyIdentity:
+  case Ed25519(publicKey: SshCert.PublicKey)
+  case Secp256k1(ethAddress: chain.EthAddress)
+
+  def algorithm: SigningAlgorithm = this match
+    case Ed25519(_)   => SigningAlgorithm.Ed25519
+    case Secp256k1(_) => SigningAlgorithm.Secp256k1
+
+  def address: String = this match
+    case Ed25519(k)   => chain.Base58.encode(k.bytes)
+    case Secp256k1(a) => a.checksummed
+
+  /** 给人看的几项（Secret 页、批准卡片）。 */
+  def rows: List[(String, String)] = this match
+    case Ed25519(k)   => List("Solana 地址" -> address, "SSH 公钥" -> k.line(""))
+    case Secp256k1(_) => List("以太坊地址" -> address)
+
+  /** 一行：算法与地址（agent 看的资源列表、报错）。 */
+  def short: String = s"${algorithm.label} $address"
+
+object KeyIdentity:
+  def parse(alg: SigningAlgorithm, address: String): Either[String, KeyIdentity] = alg match
+    case SigningAlgorithm.Ed25519 =>
+      chain.Base58.decode(address.trim).flatMap(SshCert.PublicKey.of).map(Ed25519(_)).left.map(e => s"ed25519 公钥（base58）不对：$e")
+    case SigningAlgorithm.Secp256k1 => chain.EthAddress.parse(address).map(Secp256k1(_))
+
+  private final case class Wire(algorithm: SigningAlgorithm, address: String) derives JsonCodec, Schema
+
+  given JsonCodec[KeyIdentity] = JsonCodec[Wire].transformOrFail(w => parse(w.algorithm, w.address), k => Wire(k.algorithm, k.address))
+  given Schema[KeyIdentity]    = summon[Schema[Wire]].as[KeyIdentity]
+
 // ---- secret 的三个维度（#1069）：怎么保存（服务端主密钥加密、用户的 passkey 加密或明文，见 [[SecretValue]]）× 内容 × 能否取出明文（[[SecretContent]]） ----
 
 /** 解开后的明文能交给谁：任意命令（run_shell、触发器检查与常驻命令），或只给 skill 脚本（skill_run）和 MCP 配置。 */
@@ -40,11 +75,13 @@ object KeyExposure:
     given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
     Schema.derived
 
-/** secret 的内容与能否取出明文：口令（总能取，只分范围），或密钥对（还可以只能签名）。「口令 + 只能签名」写不出来。JSON 里 `kind` 是分支名。 */
+/** secret 的内容与能否取出明文：口令（总能取，只分范围），或密钥对（带它的公开身份，还可以只能签名）。「口令 + 只能签名」写不出来。
+  * JSON 里 `kind` 是分支名。
+  */
 @jsonDiscriminator("kind")
 enum SecretContent derives JsonCodec:
   case Opaque(scope: RevealScope)
-  case KeyPair(algorithm: SigningAlgorithm, exposure: KeyExposure)
+  case KeyPair(identity: KeyIdentity, exposure: KeyExposure)
 
   /** 明文能交给谁；只能签名的没有。 */
   def revealScope: Option[RevealScope] = this match
@@ -60,7 +97,7 @@ enum SecretContent derives JsonCodec:
 
   /** passkey 加密时 AES-GCM 的附加数据，见 [[PasskeyAad]]。 */
   def aad(key: String): String = this match
-    case KeyPair(a, KeyExposure.SignOnly)  => PasskeyAad.signing(key, a)
+    case KeyPair(i, KeyExposure.SignOnly)  => PasskeyAad.signing(key, i.algorithm)
     case KeyPair(_, KeyExposure.Reveal(_)) => PasskeyAad.plain(key)
     case Opaque(_)                         => PasskeyAad.plain(key)
 
@@ -68,10 +105,38 @@ enum SecretContent derives JsonCodec:
   def unscoped: SecretContent = withScope(RevealScope.Shell).getOrElse(this)
 
 object SecretContent:
-  /** 没指定时（agent 新建、只给值）：任意命令都能用的口令。 */
-  val Default: SecretContent = Opaque(RevealScope.Shell)
-
   given Schema[SecretContent] =
+    given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
+    Schema.derived
+
+/** 设值时选的内容（私钥还没读，密钥对只定算法）：拿到私钥的一方（服务端加密的是服务端，passkey 的是浏览器）从私钥算出公开身份，
+  * 得到 [[SecretContent]]（#1098）。JSON 里 `kind` 是分支名。
+  */
+@jsonDiscriminator("kind")
+enum SecretShape derives JsonCodec:
+  case Opaque(scope: RevealScope)
+  case KeyPair(algorithm: SigningAlgorithm, exposure: KeyExposure)
+
+  /** 配上值：密钥对核对是这种算法认得的私钥并算出公开身份。 */
+  def content(text: String, crypto: Crypto): Either[String, SecretContent] = this match
+    case Opaque(s)      => Right(SecretContent.Opaque(s))
+    case KeyPair(a, e)  => SigningKeys.identity(a, text, crypto).map(SecretContent.KeyPair(_, e))
+
+  /** 明文能交给谁；只能签名的没有。 */
+  def revealScope: Option[RevealScope] = this match
+    case Opaque(s)                         => Some(s)
+    case KeyPair(_, KeyExposure.Reveal(s)) => Some(s)
+    case KeyPair(_, KeyExposure.SignOnly)  => None
+
+object SecretShape:
+  /** 没指定时：任意命令都能用的口令。 */
+  val Default: SecretShape = Opaque(RevealScope.Shell)
+
+  def of(c: SecretContent): SecretShape = c match
+    case SecretContent.Opaque(s)     => Opaque(s)
+    case SecretContent.KeyPair(i, e) => KeyPair(i.algorithm, e)
+
+  given Schema[SecretShape] =
     given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
     Schema.derived
 
@@ -84,11 +149,12 @@ object PasskeyAad:
 
 /** secret 的新值连同内容，也就定了怎么保存：交明文由服务端用主密钥加密（`Server`），浏览器里已用 passkey 加密好的密文（`Passkey`，附加数据按
   * [[SecretContent.aad]]），或不加密照原样存、界面上直接显示（`Plain`，#1093）。明文保存的只能是口令：私钥明文放着谁都能读，「只能签名」没有意义，
-  * 所以它只带明文范围。JSON 里 `kind` 是分支名。
+  * 所以它只带明文范围。密钥对的公开身份由拿到私钥的一方算：服务端加密的只带选的内容（[[SecretShape]]），服务端算；
+  * passkey 的服务端解不开，由浏览器算好带来（签名时再核对）。JSON 里 `kind` 是分支名。
   */
 @jsonDiscriminator("kind")
 enum SecretValue derives JsonCodec:
-  case Server(text: String, content: SecretContent)
+  case Server(text: String, shape: SecretShape)
   case Passkey(box: PasskeyBox, content: SecretContent)
   case Plain(text: String, scope: RevealScope)
 
@@ -149,8 +215,8 @@ object SignContent:
 @jsonDiscriminator("kind")
 enum AskWant derives JsonCodec:
   case Reveal
-  // 钥匙的算法就是 `content.algorithm`（服务端发请求前核对过）
-  case Sign(content: SignContent)
+  // `signer` 是这把钥匙记下的公开身份，算法就是 `content.algorithm`（服务端发请求前核对过）；浏览器解开后核对私钥与它对得上才签
+  case Sign(content: SignContent, signer: KeyIdentity)
 
 object AskWant:
   given Schema[AskWant] =

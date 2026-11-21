@@ -42,7 +42,7 @@ object SecretAsks:
           (deny :: Spans.map((m, label) => Todo.Choice(s"允许 $label", answer(AskDecision.For(_, m)), hint = Some("这个 agent 用这个 secret 在这段时间内不再问，正在等的一并放行")))) :+
             Todo.Choice("允许一次", answer(AskDecision.Once(_)), primary = true)
         )
-      case AskWant.Sign(content) =>
+      case AskWant.Sign(content, signer) =>
         Todo.card(
           Todo.Kind.Secret,
           place,
@@ -50,7 +50,7 @@ object SecretAsks:
           Some(a.since),
           div(
             cls := "grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm",
-            Signing.rows(content).flatMap((k, v) =>
+            (signer.rows ++ Signing.rows(content)).flatMap((k, v) =>
               List(
                 span(cls := "text-muted whitespace-nowrap", k),
                 if v.contains('\n') || v.length > 80 then pre(cls := Ui.CodeBlock + " max-h-60 overflow-auto whitespace-pre-wrap break-all text-xs", v)
@@ -60,6 +60,6 @@ object SecretAsks:
           ),
           List(
             deny,
-            Todo.Choice("签名", reply(Passkey.sign(a.key, a.box, content).map(AskDecision.Signed(_))), primary = true, hint = Some("用 passkey 解开密钥、在这个页面里按上面的内容签好交回，私钥不离开浏览器"))
+            Todo.Choice("签名", reply(Passkey.sign(a.key, a.box, content, signer).map(AskDecision.Signed(_))), primary = true, hint = Some("用 passkey 解开密钥、在这个页面里按上面的内容签好交回，私钥不离开浏览器"))
           )
         )

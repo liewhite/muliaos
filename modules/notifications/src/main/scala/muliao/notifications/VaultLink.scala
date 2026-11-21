@@ -18,7 +18,7 @@ object VaultLink:
     val where = a.purpose.session.fold("在 Secret 页")(_ => "点开在会话里")
     val (title, body) = a.want match
       case AskWant.Reveal => (s"$agent 要用 secret ${a.slot.key}", s"要拿它跑：${short(a.purpose.what)}。${where}用 passkey 批准（一次或一段时间）或拒绝。")
-      case AskWant.Sign(c) =>
+      case AskWant.Sign(c, _) =>
         val gist = Signing.rows(c).take(3).map((k, v) => s"$k ${short(v)}").mkString("，")
         (s"$agent 要${Signing.title(c)}", s"$gist。${where}用 passkey 签名或拒绝。")
     Notice(title, body, a.purpose.session.fold(Target.Page(Page))(Target.Session(_)))

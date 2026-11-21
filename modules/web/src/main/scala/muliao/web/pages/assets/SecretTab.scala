@@ -83,54 +83,54 @@ object SecretTab:
     def fit(k: Kind, u: Usage): Usage = if options(k).contains(u) then u else Scripts
 
   def kindOf(c: SecretContent): Kind = c match
-    case SecretContent.Opaque(_)       => Kind.Password
-    case SecretContent.KeyPair(alg, _) => Kind.KeyPair(alg)
+    case SecretContent.Opaque(_)     => Kind.Password
+    case SecretContent.KeyPair(i, _) => Kind.KeyPair(i.algorithm)
 
   def usageOf(c: SecretContent): Usage = c.revealScope.fold(Usage.Sign)(Usage.of)
 
-  /** 选的内容与用法合成一个 secret 内容（用法先经 [[Usage.fit]]，口令配「只能签名」按只给脚本算）。 */
-  def contentOf(k: Kind, u: Usage): SecretContent = (k, u) match
-    case (Kind.Password, _)             => SecretContent.Opaque(Usage.passwordScope(u))
-    case (Kind.KeyPair(a), Usage.Sign)    => SecretContent.KeyPair(a, KeyExposure.SignOnly)
-    case (Kind.KeyPair(a), Usage.Scripts) => SecretContent.KeyPair(a, KeyExposure.Reveal(RevealScope.Scripts))
-    case (Kind.KeyPair(a), Usage.Shell)   => SecretContent.KeyPair(a, KeyExposure.Reveal(RevealScope.Shell))
+  /** 选的内容与用法合成一个 secret 内容（用法先经 [[Usage.fit]]，口令配「只能签名」按只给脚本算）；密钥对的公开身份要等有了私钥再算。 */
+  def shapeOf(k: Kind, u: Usage): SecretShape = (k, u) match
+    case (Kind.Password, _)               => SecretShape.Opaque(Usage.passwordScope(u))
+    case (Kind.KeyPair(a), Usage.Sign)    => SecretShape.KeyPair(a, KeyExposure.SignOnly)
+    case (Kind.KeyPair(a), Usage.Scripts) => SecretShape.KeyPair(a, KeyExposure.Reveal(RevealScope.Scripts))
+    case (Kind.KeyPair(a), Usage.Shell)   => SecretShape.KeyPair(a, KeyExposure.Reveal(RevealScope.Shell))
 
   /** 三个选项没动过时：已有的保持原样、新建的取默认（只改值时不把加密方式和限制悄悄改掉）。 */
   final case class SecretForm(key: String, value: String, description: String, owner: String, lock: Option[Lock], kind: Option[Kind], usage: Option[Usage])
 
   private def emptyForm(owner: String) = SecretForm("", "", "", owner, None, None, None)
 
-  /** 新值按什么存（不含值）：加密的带内容，明文的只是口令、带明文范围。 */
+  /** 新值按什么存（不含值）：加密的带选的内容，明文的只是口令、带明文范围。 */
   enum Target:
-    case Server(content: SecretContent)
-    case Passkey(content: SecretContent)
+    case Server(shape: SecretShape)
+    case Passkey(shape: SecretShape)
     case Plain(scope: RevealScope)
 
   object Target:
-    /** 沿用已有的。 */
+    /** 沿用已有的（密钥对的公开身份按新私钥重算）。 */
     def of(v: SecretView): Target = v match
-      case SecretView.Server(c)   => Server(c)
-      case SecretView.Passkey(c)  => Passkey(c)
+      case SecretView.Server(c)   => Server(SecretShape.of(c))
+      case SecretView.Passkey(c)  => Passkey(SecretShape.of(c))
       case SecretView.Plain(_, s) => Plain(s)
 
     /** 表单里选的：明文的内容固定为口令（表单只给它口令可选）。 */
     def of(l: Lock, k: Kind, u: Usage): Target = l match
-      case Lock.Server  => Server(contentOf(k, u))
-      case Lock.Passkey => Passkey(contentOf(k, u))
+      case Lock.Server  => Server(shapeOf(k, u))
+      case Lock.Passkey => Passkey(shapeOf(k, u))
       case Lock.Plain   => Plain(Usage.passwordScope(u))
 
   extension (t: Target)
-    def content: SecretContent = t match
-      case Target.Server(c)  => c
-      case Target.Passkey(c) => c
-      case Target.Plain(s)   => SecretContent.Opaque(s)
+    def revealScope: Option[RevealScope] = t match
+      case Target.Server(s)  => s.revealScope
+      case Target.Passkey(s) => s.revealScope
+      case Target.Plain(s)   => Some(s)
 
   /** 新值：passkey 的在浏览器里用已用过的那把 passkey（没有就新建）加密，密钥对先核对是认得的私钥（ed25519：不带口令的 OpenSSH 私钥文件）。
     * `creds` 是页面上已拉到的，点击后不再发请求（Safari 要求 WebAuthn 由点击直接触发）。
     */
   private def valueOf(key: String, text: String, target: Target, creds: List[PasskeyCredential]): Future[SecretValue] = target match
-    case Target.Server(c)  => Future.successful(SecretValue.Server(text, c))
-    case Target.Passkey(c) => Passkey.sealFor(key, c, text, creds).map(SecretValue.Passkey(_, c))
+    case Target.Server(s)  => Future.successful(SecretValue.Server(text, s))
+    case Target.Passkey(s) => Passkey.sealFor(key, s, text, creds).map(SecretValue.Passkey(_, _))
     case Target.Plain(s)   => Future.successful(SecretValue.Plain(text, s))
 
   def view(list: Signal[List[AssetItem]], agents: Signal[List[AgentSummary]]): HtmlElement =
@@ -167,7 +167,7 @@ object SecretTab:
     val kindOn = v.signal.combineWith(existing, lockOn).map((f, e, l) => Kind.fit(l, f.kind.orElse(e.map(s => kindOf(s.content))).getOrElse(Kind.Password)))
     val usageOn  = v.signal.combineWith(existing, kindOn).map((f, e, k) => Usage.fit(k, f.usage.orElse(e.map(s => usageOf(s.content))).getOrElse(Usage.default(k))))
     val targetOn = lockOn.combineWith(kindOn, usageOn).map((l, k, u) => Target.of(l, k, u))
-    val targetNow = Var[Target](Target.Server(SecretContent.Default))
+    val targetNow = Var[Target](Target.Server(SecretShape.Opaque(RevealScope.Shell)))
     def save(): Unit =
       val f   = v.now()
       val key = f.key.trim
@@ -192,9 +192,9 @@ object SecretTab:
         span(
           cls := "text-xs text-muted",
           child.text <-- targetOn.map {
-            case Target.Server(c) if c.revealScope.isEmpty  => "服务端主密钥加密，平台在服务端签名、不用你批准；agent 的工具取不出明文（防误用：能读主密钥的程序仍能解开，要真正隔离选 passkey）"
+            case Target.Server(s) if s.revealScope.isEmpty  => "服务端主密钥加密，平台在服务端签名、不用你批准；agent 的工具取不出明文（防误用：能读主密钥的程序仍能解开，要真正隔离选 passkey）"
             case Target.Server(_)                           => "服务端主密钥加密，agent 用时直接解开；值只能设、不能看"
-            case Target.Passkey(c) if c.revealScope.isEmpty => "只有你的 passkey 能解开：私钥只在你的浏览器里签名，agent 每次要签都要你批准"
+            case Target.Passkey(s) if s.revealScope.isEmpty => "只有你的 passkey 能解开：私钥只在你的浏览器里签名，agent 每次要签都要你批准"
             case Target.Passkey(_)                          => "只有你的 passkey 能解开，agent 每次用都要你授权；服务端只存密文"
             case Target.Plain(_)                            => "不加密：值照原样存在文件里，这页上直接显示，agent 读得到文件也就看得到值；只放不保密的配置（地址、账户名等），只能是口令"
           }
@@ -211,7 +211,7 @@ object SecretTab:
         child.maybe <-- kindOn.combineWith(v.signal.map(_.value)).map {
           case (Kind.KeyPair(alg), text) if text.trim.nonEmpty =>
             val shown = scala.util.Try(SigningKeys.identity(alg, text, BrowserCrypto)).toEither.left.map(_.getMessage).flatten
-            Some(shown.fold(e => span(cls := "text-xs text-danger", s"还不是认得的私钥：$e"), id => pre(cls := "font-mono text-xs whitespace-pre-wrap break-all", id)))
+            Some(shown.fold(e => span(cls := "text-xs text-danger", s"还不是认得的私钥：$e"), identityView))
           case _ => None
         }
       ),
@@ -220,7 +220,7 @@ object SecretTab:
         child <-- kindOn.map(k => Fields.segmented("能否取出明文", usageOn, u => v.update(_.copy(usage = Some(u))), Usage.options(k), showLabel = true)),
         span(
           cls := "text-xs text-muted",
-          child.text <-- targetOn.map(_.content.revealScope).map {
+          child.text <-- targetOn.map(_.revealScope).map {
             case Some(RevealScope.Shell)   => "能注入任意命令（run_shell 等）"
             case Some(RevealScope.Scripts) => "只能经 skill 脚本（skill_run）和 MCP 配置用，不能注入自写命令"
             case None                      => "取不出明文：只能请平台签名"
@@ -263,6 +263,8 @@ object SecretTab:
               })
             ),
             div(cls := "truncate text-xs text-muted", child.text <-- s.map(_.description.filter(_.nonEmpty).getOrElse("无说明"))),
+            // 密钥对的公开身份（设值时从私钥算出，#1098）
+            child.maybe <-- s.map(_.secret.map(_.content).collect { case SecretContent.KeyPair(i, _) => i }).distinct.map(_.map(identityView)),
             // 明文保存的直接显示值
             child.maybe <-- s.map(_.secret.collect { case SecretView.Plain(value, _) => value }).distinct.map(_.map(value =>
               div(cls := "mt-1 whitespace-pre-wrap break-all font-mono text-sm select-all", value)
@@ -313,6 +315,13 @@ object SecretTab:
         ),
         act.errorView()
       )
+    )
+
+  /** 密钥对的公开身份：每项一行，可整段选中复制。 */
+  private def identityView(i: KeyIdentity): HtmlElement =
+    div(
+      cls := "mt-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 text-xs",
+      i.rows.flatMap((k, v) => List(span(cls := "text-muted whitespace-nowrap", k), span(cls := "font-mono break-all select-all", v)))
     )
 
   /** 等授权的请求（全部会话的，含触发器这类没有会话的）与生效中的授权。 */

@@ -16,6 +16,9 @@ import java.nio.file.Files
 object PasskeyVaultSpec extends ZIOSpecDefault:
   val box = PasskeyBox("muliao.example.com", "Y3JlZA", "aXY=", "Y3Q=")
 
+  /** passkey 密钥对的公开身份由浏览器算好带来（#1098）：测试里随便一把 ed25519 公钥。 */
+  val caId: KeyIdentity = KeyIdentity.Ed25519(SshCert.PublicKey.of(Array.fill[Byte](32)(1)).toOption.get)
+
   def reason(e: Either[muliao.platform.AppError, ?]): String = e.left.toOption.map(_.message).getOrElse("（没被拒）")
 
   /** 等到有 `n` 个请求在等。 */
@@ -56,7 +59,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         dirs  <- ZIO.service[TestEnv.Dirs]
         raw   <- ZIO.succeed(Files.readString(dirs.assets.resolve("alice/secrets/PK_TOKEN.toml")))
         e1    <- vault.set("PK_TOKEN", SecretInput.ByAgent(a.id, "降级", None), None).either
-        n     <- vault.set("PK_TOKEN", SecretInput.ByUser(SecretValue.Server("用户改回普通的", SecretContent.Opaque(RevealScope.Scripts)), Owner.Platform), None)
+        n     <- vault.set("PK_TOKEN", SecretInput.ByUser(SecretValue.Server("用户改回普通的", SecretShape.Opaque(RevealScope.Scripts)), Owner.Platform), None)
         v     <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试"))
       yield assertTrue(
         raw.contains("[passkey]"),
@@ -138,7 +141,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
     test("passkey 的只能签名密钥对（#938、#1069）：文件写 keypair 与 usage = sign；只有用户能设；取明文被拒、不发请求；口令不能拿来签") {
       for
         (a, _, vault) <- setup
-        _     <- vault.set("SSH_CA", SecretInput.ByUser(SecretValue.Passkey(box, SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)), Owner.Agent(a.name)), Some("CA"))
+        _     <- vault.set("SSH_CA", SecretInput.ByUser(SecretValue.Passkey(box, SecretContent.KeyPair(caId, KeyExposure.SignOnly)), Owner.Agent(a.name)), Some("CA"))
         dirs  <- ZIO.service[TestEnv.Dirs]
         raw   <- ZIO.succeed(Files.readString(dirs.assets.resolve("alice/secrets/SSH_CA.toml")))
         e1    <- vault.set("SSH_CA", SecretInput.ByAgent(a.id, "降级", None), None).either
@@ -149,8 +152,12 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
       yield assertTrue(
         raw.contains("[passkey]"),
         raw.contains("keypair = \"ed25519\""),
+        raw.contains(s"address = \"${caId.address}\""),
+        Formats.parseSecret(raw.replace(s"address = \"${caId.address}\"\n", "")).left.exists(_.contains("缺少公开身份")),
+        Formats.parseSecret(raw.replace(caId.address, "0x" + "1" * 40)).left.exists(_.contains("address")),
+        Formats.parseSecret("description = \"d\"\naddress = \"x\"\nciphertext = \"x\"\n").left.exists(_.contains("只有密钥对")),
         raw.contains("usage = \"sign\""),
-        Formats.parseSecret(raw) == Right(SecretFile("CA", SecretBody.Passkey(box, SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)))),
+        Formats.parseSecret(raw) == Right(SecretFile("CA", SecretBody.Passkey(box, SecretContent.KeyPair(caId, KeyExposure.SignOnly)))),
         Formats.parseSecret("description = \"d\"\nusage = \"sign\"\nciphertext = \"x\"\n").left.exists(_.contains("只有密钥对")),
         Formats.parseSecret("description = \"d\"\nusage = \"any\"\nciphertext = \"x\"\n").isLeft,
         reason(e1).contains("只能由用户在界面上改值"),
@@ -162,7 +169,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
     test("签 SSH 证书（#938）：工具发出请求（带能登哪些、多久、记录名）；每张都要批；答错种类被拒；交回证书后写好钥匙与证书；拒绝") {
       for
         (a, _, vault) <- setup
-        _     <- vault.set("SSH_CA", SecretInput.ByUser(SecretValue.Passkey(box, SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)), Owner.Agent(a.name)), Some("CA"))
+        _     <- vault.set("SSH_CA", SecretInput.ByUser(SecretValue.Passkey(box, SecretContent.KeyPair(caId, KeyExposure.SignOnly)), Owner.Agent(a.name)), Some("CA"))
         tool  <- toolOf("ssh_certificate")
         sub   <- ZIO.serviceWithZIO[Grants](_.asked)
         bad   <- tool.invoke(Json.Obj("logins" -> Json.Arr(Json.Str("relay"))), Ctx(a.id)).either
@@ -185,7 +192,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         assertTrue(
           bad.isLeft,
           want match
-            case AskWant.Sign(SignContent.SshCert(r)) =>
+            case AskWant.Sign(SignContent.SshCert(r), `caId`) =>
               r.principals == List("admin@relay", "root@jlp") && r.minutes == 10 && r.keyId == "muliao:alice:s" && SshCert.readPublic(r.publicKey).isRight
             case _ => false
           ,
@@ -203,7 +210,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         (a, _, vault) <- setup
         ca    <- SshKeys.generate
         pem    = SshCert.writePrivate(ca, 7, "ca")
-        signOnly = SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)
+        signOnly = SecretShape.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)
         bad   <- vault.set("SSH_CA", SecretInput.ByUser(SecretValue.Server("不是私钥", signOnly), Owner.Agent(a.name)), Some("CA")).either
         _     <- vault.set("SSH_CA", SecretInput.ByUser(SecretValue.Server(pem, signOnly), Owner.Agent(a.name)), Some("CA"))
         rv    <- vault.reveal(a.id, List("SSH_CA"), SecretUse.Script, in("s1", "cat")).either
@@ -217,6 +224,9 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         raw   <- ZIO.attemptBlocking(Files.readString(file))
         loosen <- ZIO.serviceWithZIO[muliao.resources.guard.AssetGuard](_.check(Actor.Agent(a.id), file, raw.replace("usage = \"sign\"\n", ""), muliao.resources.guard.Expectation.Unconditional)).either
         toScripts <- ZIO.serviceWithZIO[muliao.resources.guard.AssetGuard](_.check(Actor.Agent(a.id), file, raw.replace("usage = \"sign\"", "usage = \"scripts\""), muliao.resources.guard.Expectation.Unconditional)).either
+        // 公开身份从私钥算出（#1098），手改不动
+        caAddr     = chain.Base58.encode(ca.publicKey.bytes)
+        reAddr    <- ZIO.serviceWithZIO[muliao.resources.guard.AssetGuard](_.check(Actor.Agent(a.id), file, raw.replace(caAddr, caId.address), muliao.resources.guard.Expectation.Unconditional)).either
         widen <- vault.set("SSH_CA", SecretInput.ByAgent(a.id, pem, Some(RevealScope.Shell)), None).either
       yield
         // 证书行：类型 base64 注释；签名在末尾（string 类型名 + string 64 字节签名），签的是之前的全部字节
@@ -237,6 +247,8 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
           v.verify(sig),
           loosen.isLeft,
           toScripts.isLeft,
+          raw.contains(s"address = \"$caAddr\""),
+          reAddr.isLeft,
           reason(widen).contains("只能签名")
         )
     }

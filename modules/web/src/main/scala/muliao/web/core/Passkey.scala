@@ -1,6 +1,6 @@
 package muliao.web.core
 
-import muliao.contract.{PasskeyAad, PasskeyBox, PasskeyCredential, SecretContent, SignContent, Signing, SigningKeys}
+import muliao.contract.{KeyIdentity, PasskeyAad, PasskeyBox, PasskeyCredential, SecretContent, SecretShape, SignContent, Signing}
 import org.scalajs.dom
 
 import scala.concurrent.Future
@@ -44,12 +44,9 @@ object Passkey:
       box         <- encrypt(aes, cred, aad, plain)
     yield box
 
-  /** 用户设一个新值：密钥对先核对是这种算法认得的私钥，再按内容定的附加数据加密。 */
-  def sealFor(key: String, content: SecretContent, plain: String, known: List[PasskeyCredential]): Future[PasskeyBox] =
-    val check = content match
-      case SecretContent.KeyPair(alg, _) => SigningKeys.identity(alg, plain, BrowserCrypto).map(_ => ())
-      case SecretContent.Opaque(_)       => Right(())
-    either(check).flatMap(_ => seal(content.aad(key), plain, known))
+  /** 用户设一个新值：密钥对先核对是这种算法认得的私钥并算出它的公开身份（#1098），再按内容定的附加数据加密；返回密文与内容。 */
+  def sealFor(key: String, shape: SecretShape, plain: String, known: List[PasskeyCredential]): Future[(PasskeyBox, SecretContent)] =
+    either(shape.content(plain, BrowserCrypto)).flatMap(c => seal(c.aad(key), plain, known).map(_ -> c))
 
   /** 解开能取明文的 passkey secret 交出明文（只能签名的在这里解不开）。 */
   def reveal(key: String, box: PasskeyBox): Future[String] = open(PasskeyAad.plain(key), box)
@@ -57,11 +54,11 @@ object Passkey:
   /** 用密钥对签一份内容，返回签好的结果。内容在这个页面里按类型拼成待签的字节（[[Signing]]，与服务端同一份代码），私钥不离开这个页面。
     * 先按只能签名的附加数据解，解不开再按能取明文的解（两种密钥对都能签；这条路只交出签名，不交出明文）。
     */
-  def sign(key: String, box: PasskeyBox, content: SignContent): Future[String] =
+  def sign(key: String, box: PasskeyBox, content: SignContent, signer: KeyIdentity): Future[String] =
     for
       aes    <- unlock(box)
       text   <- decrypt(aes, PasskeyAad.signing(key, content.algorithm), box).recoverWith(_ => decrypt(aes, PasskeyAad.plain(key), box))
-      out    <- either(Signing.sign(content, text, BrowserCrypto).left.map(e => s"用 secret $key 签名失败：$e"))
+      out    <- either(Signing.sign(content, signer, text, BrowserCrypto).left.map(e => s"用 secret $key 签名失败：$e"))
     yield out
 
   /** 解开（用户在系统弹窗里确认）。`aad` 不对（比如拿只能签名的钥匙走取明文）就解不开。 */
