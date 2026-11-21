@@ -14,7 +14,7 @@ import zio.json.*
 import zio.schema.{DeriveSchema, Schema}
 import zio.schema.annotation.{description, fieldName}
 
-/** 本领域给 agent 的工具：list_agents、get_agent、create_agent、delete_agent、vault_set、ssh_certificate。 */
+/** 本领域给 agent 的工具：list_agents、get_agent、create_agent、delete_agent、vault_set、ssh_certificate，以及 sign（[[SignTool]]）。 */
 object AgentTools:
 
   final case class NoArgs()
@@ -130,7 +130,7 @@ object AgentTools:
   )
 
   /** 本领域工具的静态定义（进全部内置工具目录）。 */
-  val specs: List[ToolSpec] = List(ListAgentsDef, GetAgentDef, CreateAgentDef, DeleteAgentDef, VaultSetDef, SshCertificateDef).map(_.spec)
+  val specs: List[ToolSpec] = List(ListAgentsDef, GetAgentDef, CreateAgentDef, DeleteAgentDef, VaultSetDef, SshCertificateDef).map(_.spec) :+ SignTool.SignDef.spec
 
   def all(
       agents: Agents,
@@ -219,4 +219,4 @@ object AgentTools:
       )).mapError(fail)
     }
 
-    List(listAgents, getAgent, createAgent, deleteAgent, vaultSet, sshCertificate)
+    List(listAgents, getAgent, createAgent, deleteAgent, vaultSet, sshCertificate, SignTool.tool(vault))

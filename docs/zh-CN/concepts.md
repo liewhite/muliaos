@@ -51,7 +51,7 @@ agent 只拿到权限允许的工具。工具列表只由权限和配置的 MCP 
 | issue 看板 | `issue_list`、`issue_show`、`issue_create`、`issue_update`、`issue_comment`、`issue_stop` |
 | 触发器 | `trigger_kinds`、`trigger_list`、`trigger_create`、`trigger_update`、`trigger_run`、`trigger_delete` |
 | 历史 | `history_append`、`history_search`、`activity_overview`、`session_read` |
-| secret | `vault_set`、`ssh_certificate` |
+| secret | `vault_set`、`ssh_certificate`、`sign` |
 | 网页（配了才有） | `web_search`、`web_fetch` |
 | MCP | agent 能用的、已启用的 MCP server 的工具，名字带 server 前缀 |
 
@@ -132,7 +132,7 @@ secret 存在资源目录里，加密的值不会出现在会话记录、日志�
 | 维度 | 可选 |
 |---|---|
 | 怎么保存 | **服务端加密**：平台用配置里的 `[vault] key` 解；**passkey 加密**：只有你的浏览器用你的 passkey 解，每次使用都等你批准（一次、一段时间，或拒绝）；**明文**：不加密，界面上直接显示，只能是口令，用来放不保密的配置 |
-| 内容 | **口令**（任意文本）；**密钥对**（ed25519 私钥，平台能用它签名，比如经 `ssh_certificate` 签 SSH 短期证书） |
+| 内容 | **口令**（任意文本）；**密钥对**（平台能用它签名的私钥：ed25519 经 `ssh_certificate` 签 SSH 短期证书、经 `sign` 签 Solana 交易与消息；secp256k1 经 `sign` 签以太坊交易、EIP-191 与 EIP-712 消息） |
 | 能否取出明文 | **任意命令**；**只给脚本**（skill 脚本和 MCP server 能用，agent 自己写的命令注入不了）；**只能签名**（只有密钥对能选，取不出明文） |
 
 签名在解开它的一方做：服务端的在平台里签（不用你批准；agent 的工具取不出明文，但这只防误用：能读到配置里主密钥的程序仍能解开，要真正隔离用 passkey），passkey 的在你的浏览器里、在你看过内容并批准后签。passkey 相关功能要 HTTPS 的域名地址。

@@ -52,8 +52,18 @@ object Dagre extends js.Object:
   def layout(g: js.Any): Unit = js.native
   val graphlib: js.Dynamic = js.native
 
-/** ed25519 签名（@noble/curves，#938）：passkey 加密的密钥对在浏览器里签名用；以后的 secp256k1 等也用这个库。`secretKey` 是 32 字节种子。 */
+/** ed25519 签名（@noble/curves，#938）：passkey 加密的密钥对在浏览器里签名用。`secretKey` 是 32 字节种子。 */
 @js.native
 @JSImport("@noble/curves/ed25519.js", "ed25519")
 object NobleEd25519 extends js.Object:
   def sign(message: scala.scalajs.js.typedarray.Uint8Array, secretKey: scala.scalajs.js.typedarray.Uint8Array): scala.scalajs.js.typedarray.Uint8Array = js.native
+  def getPublicKey(secretKey: scala.scalajs.js.typedarray.Uint8Array): scala.scalajs.js.typedarray.Uint8Array = js.native
+
+/** secp256k1（@noble/curves，#1092）：以太坊密钥对在浏览器里签名用。`sign` 签的是 32 字节摘要（`prehash: false`），
+  * `format: "recovered"` 时返回 65 字节：恢复位‖r‖s。
+  */
+@js.native
+@JSImport("@noble/curves/secp256k1.js", "secp256k1")
+object NobleSecp256k1 extends js.Object:
+  def sign(digest: scala.scalajs.js.typedarray.Uint8Array, secretKey: scala.scalajs.js.typedarray.Uint8Array, opts: js.Any): scala.scalajs.js.typedarray.Uint8Array = js.native
+  def getPublicKey(secretKey: scala.scalajs.js.typedarray.Uint8Array, isCompressed: Boolean): scala.scalajs.js.typedarray.Uint8Array = js.native

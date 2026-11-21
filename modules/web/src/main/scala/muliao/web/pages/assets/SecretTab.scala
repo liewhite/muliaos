@@ -29,16 +29,28 @@ object SecretTab:
     /** passkey 加密要在 HTTPS 的域名地址上才能选。 */
     def options: List[Lock] = if muliao.web.core.Passkey.available then values.toList else List(Server, Plain)
 
-  /** 内容。 */
-  enum Kind(val label: String) extends Shown.Self:
-    case Password extends Kind("口令")
-    case Ed25519  extends Kind("ed25519 密钥")
+  /** 内容：口令，或某种算法的密钥对。 */
+  enum Kind extends Shown.Self:
+    case Password
+    case KeyPair(algorithm: SigningAlgorithm)
+
+    def label: String = this match
+      case Password     => "口令"
+      case KeyPair(alg) => s"${alg.label} 密钥"
+
+    /** 值怎么写、能签什么。 */
+    def hint: String = this match
+      case Password                            => "任意文本：token、口令、私钥都行，平台不解析"
+      case KeyPair(SigningAlgorithm.Ed25519)   => "ed25519 私钥：不带口令的 OpenSSH 私钥文件，或 Solana 私钥（solana-keygen 的 JSON 数组、钱包导出的 base58）；平台能用它签 SSH 证书、Solana 交易与消息"
+      case KeyPair(SigningAlgorithm.Secp256k1) => "以太坊私钥：64 位十六进制（可带 0x）；平台能用它签以太坊交易、EIP-191 与 EIP-712 消息"
 
   object Kind:
+    val all: List[Kind] = Password :: SigningAlgorithm.values.toList.map(KeyPair(_))
+
     /** 明文保存的只能是口令。 */
     def options(l: Lock): List[Kind] = l match
       case Lock.Plain                => List(Password)
-      case Lock.Server | Lock.Passkey => values.toList
+      case Lock.Server | Lock.Passkey => all
 
     def fit(l: Lock, k: Kind): Kind = if options(l).contains(k) then k else Password
 
@@ -54,8 +66,8 @@ object SecretTab:
       case RevealScope.Scripts => Scripts
 
     def options(k: Kind): List[Usage] = k match
-      case Kind.Password => List(Shell, Scripts)
-      case Kind.Ed25519  => values.toList
+      case Kind.Password   => List(Shell, Scripts)
+      case Kind.KeyPair(_) => values.toList
 
     /** 口令的明文范围（「只能签名」按只给脚本算，同 [[fit]]）。 */
     def passwordScope(u: Usage): RevealScope = u match
@@ -64,24 +76,24 @@ object SecretTab:
 
     /** 新建时的默认：口令任意命令可用；密钥对多半是 CA、签名私钥，默认只能签名。 */
     def default(k: Kind): Usage = k match
-      case Kind.Password => Shell
-      case Kind.Ed25519  => Sign
+      case Kind.Password   => Shell
+      case Kind.KeyPair(_) => Sign
 
     /** 选的用法在这种内容下不可选（只能签名的切回口令）：落到口令里最严的一档，不放宽成任意命令。 */
     def fit(k: Kind, u: Usage): Usage = if options(k).contains(u) then u else Scripts
 
   def kindOf(c: SecretContent): Kind = c match
-    case SecretContent.Opaque(_)     => Kind.Password
-    case SecretContent.KeyPair(_, _) => Kind.Ed25519
+    case SecretContent.Opaque(_)       => Kind.Password
+    case SecretContent.KeyPair(alg, _) => Kind.KeyPair(alg)
 
   def usageOf(c: SecretContent): Usage = c.revealScope.fold(Usage.Sign)(Usage.of)
 
   /** 选的内容与用法合成一个 secret 内容（用法先经 [[Usage.fit]]，口令配「只能签名」按只给脚本算）。 */
   def contentOf(k: Kind, u: Usage): SecretContent = (k, u) match
     case (Kind.Password, _)             => SecretContent.Opaque(Usage.passwordScope(u))
-    case (Kind.Ed25519, Usage.Sign)     => SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)
-    case (Kind.Ed25519, Usage.Scripts)  => SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.Reveal(RevealScope.Scripts))
-    case (Kind.Ed25519, Usage.Shell)    => SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.Reveal(RevealScope.Shell))
+    case (Kind.KeyPair(a), Usage.Sign)    => SecretContent.KeyPair(a, KeyExposure.SignOnly)
+    case (Kind.KeyPair(a), Usage.Scripts) => SecretContent.KeyPair(a, KeyExposure.Reveal(RevealScope.Scripts))
+    case (Kind.KeyPair(a), Usage.Shell)   => SecretContent.KeyPair(a, KeyExposure.Reveal(RevealScope.Shell))
 
   /** 三个选项没动过时：已有的保持原样、新建的取默认（只改值时不把加密方式和限制悄悄改掉）。 */
   final case class SecretForm(key: String, value: String, description: String, owner: String, lock: Option[Lock], kind: Option[Kind], usage: Option[Usage])
@@ -135,9 +147,11 @@ object SecretTab:
         code(cls := "font-mono", "run_shell(secrets=[KEY])"),
         " 注入同名环境变量；只给脚本的只能用 ",
         code(cls := "font-mono", "skill_run(secrets=[KEY])"),
-        " 经 skill 里的脚本注入；只能签名的密钥对取不出明文，只能请平台签（如 ",
+        " 经 skill 里的脚本注入；只能签名的密钥对取不出明文，只能请平台签（",
         code(cls := "font-mono", "ssh_certificate"),
-        "）。加密的值只能设，不能看；明文保存的直接显示在下面。passkey 加密的只有你的 passkey 能解开，agent 每次要用都等你授权（一次或一段时间）：在它的会话里批准，触发器这类没有会话的在下面批准。"
+        " 签 SSH 证书，",
+        code(cls := "font-mono", "sign"),
+        " 签以太坊、Solana 的交易与消息）。加密的值只能设，不能看；明文保存的直接显示在下面。passkey 加密的只有你的 passkey 能解开，agent 每次要用都等你授权（一次或一段时间）：在它的会话里批准，触发器这类没有会话的在下面批准。"
       ),
       Grants.view(vault, agents),
       Ui.collapsibleCard("新建或改值")(form(list, agents, creds)),
@@ -192,13 +206,14 @@ object SecretTab:
       div(
         cls := "flex flex-col gap-1 text-sm",
         child <-- lockOn.map(l => Fields.segmented("内容", kindOn, k => v.update(_.copy(kind = Some(k))), Kind.options(l), showLabel = true)),
-        span(
-          cls := "text-xs text-muted",
-          child.text <-- kindOn.map {
-            case Kind.Password => "任意文本：token、口令、私钥都行，平台不解析"
-            case Kind.Ed25519  => "ed25519 私钥（不带口令的 OpenSSH 私钥文件），平台能用它签名（如 SSH 证书）"
-          }
-        )
+        span(cls := "text-xs text-muted", child.text <-- kindOn.map(_.hint)),
+        // 密钥对：边输边在本页核对私钥认不认得，认得就显示它的地址（私钥不离开浏览器）
+        child.maybe <-- kindOn.combineWith(v.signal.map(_.value)).map {
+          case (Kind.KeyPair(alg), text) if text.trim.nonEmpty =>
+            val shown = scala.util.Try(SigningKeys.identity(alg, text, BrowserCrypto)).toEither.left.map(_.getMessage).flatten
+            Some(shown.fold(e => span(cls := "text-xs text-danger", s"还不是认得的私钥：$e"), id => pre(cls := "font-mono text-xs whitespace-pre-wrap break-all", id)))
+          case _ => None
+        }
       ),
       div(
         cls := "flex flex-col gap-1 text-sm",
@@ -239,7 +254,9 @@ object SecretTab:
                   case SecretView.Passkey(_)  => List(Ui.chip("passkey", Tone.Accent)())
                   case SecretView.Plain(_, _) => List(Ui.chip(Lock.Plain.label)())
                   case SecretView.Server(_)   => Nil) ++
-                  Option.when(kindOf(sv.content) == Kind.Ed25519)(Ui.chip(Kind.Ed25519.label, Tone.Accent)()).toList ++
+                  (kindOf(sv.content) match
+                    case k: Kind.KeyPair => List(Ui.chip(k.label, Tone.Accent)())
+                    case Kind.Password   => Nil) ++
                   (usageOf(sv.content) match
                     case Usage.Shell => Nil
                     case u           => List(Ui.chip(u.label)()))

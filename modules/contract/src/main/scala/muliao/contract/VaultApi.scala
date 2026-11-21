@@ -13,14 +13,12 @@ import zio.json.*
 final case class PasskeyBox(rp: String, credential: String, iv: String, ciphertext: String) derives JsonCodec, Schema:
   override def toString: String = s"PasskeyBox($rp)"
 
-/** 密钥对的算法（#938）。 */
+/** 密钥对的算法（#938）：ed25519（SSH CA、Solana）、secp256k1（以太坊，#1092）。私钥怎么读见 [[SigningKeys]]。 */
 enum SigningAlgorithm(val label: String) extends Labeled:
-  case Ed25519 extends SigningAlgorithm("ed25519")
+  case Ed25519   extends SigningAlgorithm("ed25519")
+  case Secp256k1 extends SigningAlgorithm("secp256k1")
 
-object SigningAlgorithm extends Labels[SigningAlgorithm]("签名算法", SigningAlgorithm.values):
-  /** 某种算法的私钥文本读成能签名的东西（前后端共用）。ed25519 认 OpenSSH 私钥文件（不带口令）。 */
-  def readPrivate(alg: SigningAlgorithm, text: String): Either[String, SshCert.PrivateKey] = alg match
-    case Ed25519 => SshCert.readPrivate(text)
+object SigningAlgorithm extends Labels[SigningAlgorithm]("签名算法", SigningAlgorithm.values)
 
 // ---- secret 的三个维度（#1069）：怎么保存（服务端主密钥加密、用户的 passkey 加密或明文，见 [[SecretValue]]）× 内容 × 能否取出明文（[[SecretContent]]） ----
 
@@ -114,6 +112,7 @@ final case class SshCertRequest(publicKey: String, principals: List[String], min
     derives JsonCodec, Schema
 
 /** 要密钥对签的内容，带类型：签名的一方（浏览器或服务端）按类型自己拼出待签的字节，浏览器还解码成人能看懂的样子显示，不采信 agent 写的说明（#938）。
+  * 各分支的载荷读进来时就校验并解析好（地址、数值、EIP-712、Solana 交易），所以手里的内容都能显示、能签。签法、显示见 [[Signing]]。
   * 加一种内容就加一个分支。JSON 里 `kind` 是分支名。
   */
 @jsonDiscriminator("kind")
@@ -121,9 +120,25 @@ enum SignContent derives JsonCodec:
   /** SSH 用户证书（ed25519 CA）。 */
   case SshCert(request: SshCertRequest)
 
+  /** 以太坊交易（EIP-1559 或 legacy），结果是已签的交易，不广播（#1092）。 */
+  case EthTransaction(tx: chain.EthTx)
+
+  /** EIP-191 `personal_sign`。 */
+  case EthMessage(message: MessageBytes)
+
+  /** EIP-712 `eth_signTypedData_v4`。 */
+  case EthTypedData(data: chain.TypedData)
+
+  /** Solana 交易（legacy 或 v0），结果是填好这一位签名的交易。 */
+  case SolanaTransaction(tx: chain.SolanaTx)
+
+  /** Solana 链下消息（钱包的 signMessage）。 */
+  case SolanaMessage(message: SolanaOffchain)
+
   /** 这种内容要哪种算法的钥匙。 */
   def algorithm: SigningAlgorithm = this match
-    case SshCert(_) => SigningAlgorithm.Ed25519
+    case SshCert(_) | SolanaTransaction(_) | SolanaMessage(_)       => SigningAlgorithm.Ed25519
+    case EthTransaction(_) | EthMessage(_) | EthTypedData(_)        => SigningAlgorithm.Secp256k1
 
 object SignContent:
   given Schema[SignContent] =

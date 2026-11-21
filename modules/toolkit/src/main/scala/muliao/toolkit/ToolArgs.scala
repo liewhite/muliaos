@@ -4,7 +4,7 @@ import zio.Chunk
 import zio.json.ast.Json
 import muliao.contract.choices
 import zio.schema.{Schema, StandardType}
-import zio.schema.annotation.{caseName, description, fieldDefaultValue}
+import zio.schema.annotation.{caseName, description, discriminatorName, fieldDefaultValue}
 import zio.schema.codec.JsonCodec
 
 /** 工具参数：从参数类型的 zio-schema 生成解码器、JSON Schema 与敏感字段表。 */
@@ -30,7 +30,9 @@ object ToolArgs:
     case r: Schema.Record[?] => r.fields.filter(_.annotations.exists(_.isInstanceOf[sensitive])).map(_.name.toString).toSet
     case _                   => Set.empty
 
-  /** 给模型看的 JSON Schema（draft 2020-12 子集）：对象、数组、基本类型、可选、默认值、只有名字的枚举、字段说明。 */
+  /** 给模型看的 JSON Schema（draft 2020-12 子集）：对象、数组、基本类型、可选、默认值、只有名字的枚举、字段说明，
+    * 以及带 `@discriminatorName` 的分支类型（`oneOf`，每支的对象多一个取固定值的分支名字段）。
+    */
   def jsonSchema(schema: Schema[?]): Json = toJson(schema, None)
 
   private def unwrap(s: Schema[?]): Schema[?] = s match
@@ -72,6 +74,19 @@ object ToolArgs:
       case m: Schema.Map[?, ?]            => obj("type" -> Json.Str("object"), "additionalProperties" -> toJson(m.valueSchema, None))
       case e: Schema.Enum[?] if e.cases.forall(c => isSingleton(c.schema)) =>
         withDescription(obj("type" -> Json.Str("string"), "enum" -> Json.Arr(e.cases.map(c => Json.Str(caseLabel(c))))), descriptionOf(e.annotations))
+      case Tagged(e, tag) =>
+        val branches = e.cases.map { c =>
+          toJson(c.schema, descriptionOf(c.annotations)) match
+            case Json.Obj(fs) =>
+              val tagged = fs.map {
+                case ("properties", Json.Obj(ps)) => "properties" -> Json.Obj((tag -> obj("const" -> Json.Str(caseLabel(c)))) +: ps)
+                case ("required", Json.Arr(rs))   => "required"   -> Json.Arr(Json.Str(tag) +: rs)
+                case other                         => other
+              }
+              Json.Obj(if tagged.exists(_._1 == "required") then tagged else tagged :+ ("required" -> Json.Arr(Json.Str(tag))))
+            case other => other
+        }
+        withDescription(obj("oneOf" -> Json.Arr(branches)), descriptionOf(e.annotations))
       case Schema.Primitive(t, ann) =>
         ann.collectFirst { case choices(vs) => vs } match
           case Some(vs) => obj("type" -> Json.Str("string"), "enum" -> Json.Arr(Chunk.fromIterable(vs.map(Json.Str(_)))))
@@ -82,6 +97,12 @@ object ToolArgs:
   /** 枚举值在 JSON 里的写法：有 `@caseName` 用它（解码也认它），否则用名字。 */
   private def caseLabel(c: Schema.Case[?, ?]): String =
     c.annotations.collectFirst { case caseName(n) => n }.getOrElse(c.id)
+
+  /** 带 `@discriminatorName` 的分支类型与它的分支名字段。 */
+  private object Tagged:
+    def unapply(s: Schema[?]): Option[(Schema.Enum[?], String)] = s match
+      case e: Schema.Enum[?] => e.annotations.collectFirst { case discriminatorName(t) => e -> t }
+      case _                 => None
 
   private def isSingleton(s: Schema[?]): Boolean = unwrap(s) match
     case r: Schema.Record[?] => r.fields.isEmpty

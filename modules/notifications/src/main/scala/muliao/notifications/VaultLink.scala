@@ -1,6 +1,6 @@
 package muliao.notifications
 
-import muliao.contract.{AskWant, SignContent}
+import muliao.contract.{AskWant, Signing}
 import muliao.resources.agents.Agents
 import muliao.resources.vault.{Asked, Grants}
 import zio.*
@@ -10,15 +10,17 @@ object VaultLink:
   /** 没有会话时的授权页（AI 资产的 Secret 标签）。 */
   val Page = "/ai-assets?kind=secret"
 
-  /** 要拿去做什么只取第一行、截短（全文在会话或 Secret 页上）。 */
+  /** 要拿去做什么只取第一行、截短（全文在会话或 Secret 页上）；签名请求取内容的前三行。 */
   def notice(agent: String, a: Asked): Notice =
-    val first = a.purpose.what.linesIterator.map(_.trim).find(_.nonEmpty).getOrElse("")
-    val what  = if first.length > 120 then first.take(120) + "…" else first
+    def short(s: String) =
+      val first = s.linesIterator.map(_.trim).find(_.nonEmpty).getOrElse("")
+      if first.length > 120 then first.take(120) + "…" else first
     val where = a.purpose.session.fold("在 Secret 页")(_ => "点开在会话里")
     val (title, body) = a.want match
-      case AskWant.Reveal     => (s"$agent 要用 secret ${a.slot.key}", s"要拿它跑：$what。${where}用 passkey 批准（一次或一段时间）或拒绝。")
-      case AskWant.Sign(SignContent.SshCert(r)) =>
-        (s"$agent 要签 SSH 证书", s"可登 ${r.principals.mkString("、")}，${r.minutes} 分钟。${where}用 passkey 签发或拒绝。")
+      case AskWant.Reveal => (s"$agent 要用 secret ${a.slot.key}", s"要拿它跑：${short(a.purpose.what)}。${where}用 passkey 批准（一次或一段时间）或拒绝。")
+      case AskWant.Sign(c) =>
+        val gist = Signing.rows(c).take(3).map((k, v) => s"$k ${short(v)}").mkString("，")
+        (s"$agent 要${Signing.title(c)}", s"$gist。${where}用 passkey 签名或拒绝。")
     Notice(title, body, a.purpose.session.fold(Target.Page(Page))(Target.Session(_)))
 
   /** 在调用方的 scope 里订阅并转发：返回时已订上。 */

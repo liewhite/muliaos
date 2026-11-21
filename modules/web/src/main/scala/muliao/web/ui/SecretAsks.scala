@@ -7,7 +7,8 @@ import muliao.web.core.*
 import Http.ec
 
 /** passkey secret 等授权的请求（#915）：显示哪个 agent 要拿哪个 secret 跑什么，允许一次、一段时间或拒绝。
-  * 允许时浏览器用 passkey 解开，把明文交回服务端（只在内存里）。签 SSH 证书的请求（#938）显示能登哪些「账户@主机」、多久，签发时只交回证书。会话页显示这个会话的，Secret 页显示全部。
+  * 允许时浏览器用 passkey 解开，把明文交回服务端（只在内存里）。签名请求（SSH 证书 #938、链上交易与消息 #1092）逐行显示从内容本身解出的样子（[[Signing.rows]]），
+  * 签好只交回结果。会话页显示这个会话的，Secret 页显示全部。
   */
 object SecretAsks:
   /** 「一段时间」的几档（分钟）。 */
@@ -38,21 +39,24 @@ object SecretAsks:
           List(deny) ++ Spans.map((m, label) => Ui.btn(Variant.Secondary, Size.Sm, disabledIf = act.busy.signal)(title := "这个 agent 用这个 secret 在这段时间内不再问，正在等的一并放行", s"允许 $label", onClick --> (_ => answer(AskDecision.For(_, m))))) :+
             Ui.btn(Variant.Primary, Size.Sm, pending = act.busy.signal)("允许一次", onClick --> (_ => answer(AskDecision.Once(_))))
         )
-      case AskWant.Sign(content @ SignContent.SshCert(r)) =>
+      case AskWant.Sign(content) =>
         (
-          "要用密钥签 SSH 证书",
+          s"要用密钥${Signing.title(content)}",
           div(
-            cls := "grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm",
-            span(cls := "text-muted", "可登"), code(cls := "font-mono break-all", r.principals.mkString("  ")),
-            span(cls := "text-muted", "有效"), span(s"${r.minutes} 分钟（从签发时算起）"),
-            span(cls := "text-muted", "来源"), span(r.sourceAddress.getOrElse("不限")),
-            span(cls := "text-muted", "记录"), code(cls := "font-mono break-all text-xs", r.keyId)
+            cls := "grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm",
+            Signing.rows(content).flatMap((k, v) =>
+              List(
+                span(cls := "text-muted whitespace-nowrap", k),
+                if v.contains('\n') || v.length > 80 then pre(cls := Ui.CodeBlock + " max-h-60 overflow-auto whitespace-pre-wrap break-all text-xs", v)
+                else code(cls := "font-mono break-all", v)
+              )
+            )
           ),
           List(
             deny,
             Ui.btn(Variant.Primary, Size.Sm, pending = act.busy.signal)(
-              title := "用 passkey 解开 CA、在这个页面里签好证书交回，CA 私钥不离开浏览器",
-              "签发",
+              title := "用 passkey 解开密钥、在这个页面里按上面的内容签好交回，私钥不离开浏览器",
+              "签名",
               onClick --> (_ => reply(Passkey.sign(a.key, a.box, content).map(AskDecision.Signed(_))))
             )
           )

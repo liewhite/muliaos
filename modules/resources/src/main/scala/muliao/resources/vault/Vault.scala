@@ -1,6 +1,6 @@
 package muliao.resources.vault
 
-import muliao.contract.{AgentId, AgentName, AskPurpose, AssetKind, RevealScope, SecretContent, SecretValue, SignContent, SigningAlgorithm}
+import muliao.contract.{AgentId, AgentName, AskPurpose, AssetKind, RevealScope, SecretContent, SecretValue, SignContent, Signing, SigningKeys}
 import muliao.platform.AppError
 import muliao.resources.VaultSettings
 import muliao.resources.access.{Action, Decision, Permissions}
@@ -43,7 +43,7 @@ trait Vault:
     */
   def reveal(agent: AgentId, keys: List[String], use: SecretUse, purpose: AskPurpose): IO[AppError, Map[String, String]]
 
-  /** 用密钥对 `key` 签一份内容，返回签好的结果（SSH 证书是证书文件的一行）。服务端保管的在服务端直接签；
+  /** 用密钥对 `key` 签一份内容，返回签好的结果（SSH 证书是证书文件的一行，链上的是给 agent 的 JSON，见 [[Signing.sign]]）。服务端保管的在服务端直接签；
     * passkey 加密的等用户在浏览器里解开并签好交回（#938），私钥不出浏览器。要有 use 权限；不是这种算法的密钥对报错。
     */
   def sign(agent: AgentId, key: String, content: SignContent, purpose: AskPurpose): IO[AppError, String]
@@ -144,7 +144,7 @@ object Vault:
         _ <- nonEmpty(text)
         _ <- content match
                case SecretContent.KeyPair(alg, _) =>
-                 ZIO.fromEither(SigningAlgorithm.readPrivate(alg, text)).mapError(e => AppError.invalid(s"secret $key 是 ${alg.label} 密钥对，值不是认得的私钥：$e"))
+                 ZIO.fromEither(SigningKeys.identity(alg, text, JvmCrypto)).mapError(e => AppError.invalid(s"secret $key 是 ${alg.label} 密钥对，值不是认得的私钥：$e")).unit
                case SecretContent.Opaque(_) => ZIO.unit
       yield SecretBody.Server(fernet.encrypt(text, now), content)
 
@@ -185,7 +185,11 @@ object Vault:
         doc   <- usable(perms, snap, key)
         out <- doc.content.body match
                  case SecretBody.Server(token, SecretContent.KeyPair(alg, _)) if alg == content.algorithm =>
-                   decrypt(key, token).flatMap(pem => ServerSigner.sign(key, pem, content))
+                   decrypt(key, token).flatMap(text =>
+                     ZIO.attempt(Signing.sign(content, text, JvmCrypto))
+                       .mapError(e => AppError.internal(s"用 secret $key 签名失败：${e.getMessage}", e))
+                       .flatMap(r => ZIO.fromEither(r).mapError(e => AppError.invalid(s"用 secret $key 签名失败：$e")))
+                   )
                  case SecretBody.Passkey(box, SecretContent.KeyPair(alg, _)) if alg == content.algorithm =>
                    grants.sign(Slot(agent, key), content, purpose, box)
                  case _ =>

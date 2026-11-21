@@ -45,6 +45,7 @@ val V = new {
   val readability4j = "1.0.8"
   val flexmark   = "0.64.8"
   val cronUtils  = "9.2.1"
+  val bouncycastle = "1.87"
 }
 
 lazy val commonJvm = Seq(
@@ -125,7 +126,13 @@ def domain(name: String, deps: ClasspathDep[ProjectReference]*): Project =
     .settings(commonJvm)
 
 lazy val resources = domain("resources", exec)                   // 资源、agent 与权限（exec：可写范围算成写沙箱）
-  .settings(libraryDependencies += "org.snakeyaml" % "snakeyaml-engine" % V.snakeyaml)
+  .dependsOn(contract.jvm % "test->test") // 测试用 contract 的链上对照向量（ChainVectors）
+  .settings(
+    libraryDependencies ++= Seq(
+      "org.snakeyaml"    % "snakeyaml-engine" % V.snakeyaml,
+      "org.bouncycastle" % "bcprov-jdk18on"   % V.bouncycastle // 服务端保管的密钥对签名：secp256k1（JDK 已不带这条曲线）与 ed25519（#1092）
+    )
+  )
 lazy val models    = domain("models", exec)                      // 模型接入、MCP、外部服务
   .settings(
     libraryDependencies ++= Seq(
