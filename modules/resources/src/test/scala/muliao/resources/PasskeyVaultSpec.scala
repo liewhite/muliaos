@@ -2,7 +2,7 @@ package muliao.resources
 
 import muliao.contract.*
 import muliao.resources.agents.{AgentPatch, Agents, NewAgent}
-import muliao.resources.tree.{Formats, Owner, SecretFile, SecretLock}
+import muliao.resources.tree.{Formats, Owner, SecretBody, SecretFile}
 import muliao.resources.vault.*
 import zio.*
 import zio.test.*
@@ -34,13 +34,13 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
       a     <- ZIO.serviceWithZIO[Agents](_.create(NewAgent("alice", "x")))
       b     <- ZIO.serviceWithZIO[Agents](_.create(NewAgent("bob", "x")))
       vault <- ZIO.service[Vault]
-      _     <- vault.set(Actor.User, "PK_TOKEN", SecretValue.Passkey(box), muliao.resources.vault.ContentChange.Scope(muliao.contract.RevealScope.Scripts), Some("说明"), Owner.Agent(a.name))
+      _     <- vault.set("PK_TOKEN", SecretInput.ByUser(SecretValue.Passkey(box, SecretContent.Opaque(RevealScope.Scripts)), Owner.Agent(a.name)), Some("说明"))
       _     <- ZIO.serviceWithZIO[Agents](_.update(b.id, AgentPatch(allow = Some(List("use:secret:PK_*")))))
     yield (a, b, vault)
 
   val spec = suite("passkey secret")(
     test("文件格式：[passkey] 表往返；ciphertext 与 [passkey] 恰好一个") {
-      val f = SecretFile("d", SecretLock.Passkey(box), SecretContent.Opaque(RevealScope.Scripts))
+      val f = SecretFile("d", SecretBody.Passkey(box, SecretContent.Opaque(RevealScope.Scripts)))
       val text = Formats.renderSecret(f)
       assertTrue(
         Formats.parseSecret(text) == Right(f),
@@ -50,20 +50,18 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         Formats.parseSecret("[passkey]\nrp = \"a\"\n").isLeft
       )
     },
-    test("只有用户能设、能改值；agent 的 vault_set 改不动；说明与明文范围照常") {
+    test("只有用户能设、能改值（agent 交不出 passkey 值，类型上写不出）；agent 的 vault_set 改不动；说明与明文范围照常") {
       for
         (a, _, vault) <- setup
         dirs  <- ZIO.service[TestEnv.Dirs]
         raw   <- ZIO.succeed(Files.readString(dirs.assets.resolve("alice/secrets/PK_TOKEN.toml")))
-        e1    <- vault.set(Actor.Agent(a.id), "PK_TOKEN", SecretValue.Plain("降级"), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform).either
-        e2    <- vault.set(Actor.Agent(a.id), "OTHER", SecretValue.Passkey(box), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform).either
-        n     <- vault.set(Actor.User, "PK_TOKEN", SecretValue.Plain("用户改回普通的"), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform)
+        e1    <- vault.set("PK_TOKEN", SecretInput.ByAgent(a.id, "降级", None), None).either
+        n     <- vault.set("PK_TOKEN", SecretInput.ByUser(SecretValue.Server("用户改回普通的", SecretContent.Opaque(RevealScope.Scripts)), Owner.Platform), None)
         v     <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试"))
       yield assertTrue(
         raw.contains("[passkey]"),
         raw.contains("usage = \"scripts\""),
         reason(e1).contains("只能由用户在界面上改值"),
-        reason(e2).contains("只能由用户在界面上设值"),
         !n,
         v == Map("PK_TOKEN" -> "用户改回普通的")
       )
@@ -140,11 +138,10 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
     test("passkey 的只能签名密钥对（#938、#1069）：文件写 keypair 与 usage = sign；只有用户能设；取明文被拒、不发请求；口令不能拿来签") {
       for
         (a, _, vault) <- setup
-        _     <- vault.set(Actor.User, "SSH_CA", SecretValue.Passkey(box), ContentChange.Replace(SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)), Some("CA"), Owner.Agent(a.name))
+        _     <- vault.set("SSH_CA", SecretInput.ByUser(SecretValue.Passkey(box, SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)), Owner.Agent(a.name)), Some("CA"))
         dirs  <- ZIO.service[TestEnv.Dirs]
         raw   <- ZIO.succeed(Files.readString(dirs.assets.resolve("alice/secrets/SSH_CA.toml")))
-        e1    <- vault.set(Actor.Agent(a.id), "SSH_CA", SecretValue.Plain("降级"), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform).either
-        e2    <- vault.set(Actor.Agent(a.id), "OTHER", SecretValue.Passkey(box), ContentChange.Replace(SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)), None, Owner.Platform).either
+        e1    <- vault.set("SSH_CA", SecretInput.ByAgent(a.id, "降级", None), None).either
         rv    <- vault.reveal(a.id, List("SSH_CA"), SecretUse.Script, in("s1", "cat")).either
         none  <- ZIO.serviceWithZIO[Grants](_.view.map(_._1))
         req    = SshCertRequest("ssh-ed25519 AAAA", List("admin@relay"), 5, None, "id")
@@ -153,11 +150,10 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         raw.contains("[passkey]"),
         raw.contains("keypair = \"ed25519\""),
         raw.contains("usage = \"sign\""),
-        Formats.parseSecret(raw) == Right(SecretFile("CA", SecretLock.Passkey(box), SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly))),
+        Formats.parseSecret(raw) == Right(SecretFile("CA", SecretBody.Passkey(box, SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)))),
         Formats.parseSecret("description = \"d\"\nusage = \"sign\"\nciphertext = \"x\"\n").left.exists(_.contains("只有密钥对")),
         Formats.parseSecret("description = \"d\"\nusage = \"any\"\nciphertext = \"x\"\n").isLeft,
         reason(e1).contains("只能由用户在界面上改值"),
-        reason(e2).contains("只能由用户在界面上设值"),
         reason(rv).contains("取不出明文"),
         none.isEmpty,
         reason(gen).contains("不是 ed25519 密钥对")
@@ -166,7 +162,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
     test("签 SSH 证书（#938）：工具发出请求（带能登哪些、多久、记录名）；每张都要批；答错种类被拒；交回证书后写好钥匙与证书；拒绝") {
       for
         (a, _, vault) <- setup
-        _     <- vault.set(Actor.User, "SSH_CA", SecretValue.Passkey(box), ContentChange.Replace(SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)), Some("CA"), Owner.Agent(a.name))
+        _     <- vault.set("SSH_CA", SecretInput.ByUser(SecretValue.Passkey(box, SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)), Owner.Agent(a.name)), Some("CA"))
         tool  <- toolOf("ssh_certificate")
         sub   <- ZIO.serviceWithZIO[Grants](_.asked)
         bad   <- tool.invoke(Json.Obj("logins" -> Json.Arr(Json.Str("relay"))), Ctx(a.id)).either
@@ -207,9 +203,9 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         (a, _, vault) <- setup
         ca    <- SshKeys.generate
         pem    = SshCert.writePrivate(ca, 7, "ca")
-        signOnly = ContentChange.Replace(SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly))
-        bad   <- vault.set(Actor.User, "SSH_CA", SecretValue.Plain("不是私钥"), signOnly, Some("CA"), Owner.Agent(a.name)).either
-        _     <- vault.set(Actor.User, "SSH_CA", SecretValue.Plain(pem), signOnly, Some("CA"), Owner.Agent(a.name))
+        signOnly = SecretContent.KeyPair(SigningAlgorithm.Ed25519, KeyExposure.SignOnly)
+        bad   <- vault.set("SSH_CA", SecretInput.ByUser(SecretValue.Server("不是私钥", signOnly), Owner.Agent(a.name)), Some("CA")).either
+        _     <- vault.set("SSH_CA", SecretInput.ByUser(SecretValue.Server(pem, signOnly), Owner.Agent(a.name)), Some("CA"))
         rv    <- vault.reveal(a.id, List("SSH_CA"), SecretUse.Script, in("s1", "cat")).either
         tool  <- toolOf("ssh_certificate")
         out   <- tool.invoke(Json.Obj("logins" -> Json.Arr(Json.Str("admin@relay"))), Ctx(a.id))
@@ -221,7 +217,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         raw   <- ZIO.attemptBlocking(Files.readString(file))
         loosen <- ZIO.serviceWithZIO[muliao.resources.guard.AssetGuard](_.check(Actor.Agent(a.id), file, raw.replace("usage = \"sign\"\n", ""), muliao.resources.guard.Expectation.Unconditional)).either
         toScripts <- ZIO.serviceWithZIO[muliao.resources.guard.AssetGuard](_.check(Actor.Agent(a.id), file, raw.replace("usage = \"sign\"", "usage = \"scripts\""), muliao.resources.guard.Expectation.Unconditional)).either
-        widen <- vault.set(Actor.Agent(a.id), "SSH_CA", SecretValue.Plain(pem), ContentChange.Scope(RevealScope.Shell), None, Owner.Platform).either
+        widen <- vault.set("SSH_CA", SecretInput.ByAgent(a.id, pem, Some(RevealScope.Shell)), None).either
       yield
         // 证书行：类型 base64 注释；签名在末尾（string 类型名 + string 64 字节签名），签的是之前的全部字节
         val blob = java.util.Base64.getDecoder.decode(cert.trim.split(" ")(1))

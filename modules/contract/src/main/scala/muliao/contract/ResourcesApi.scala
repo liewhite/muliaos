@@ -155,15 +155,24 @@ final case class AssetItem(
     secret: Option[SecretView] = None
 ) derives JsonCodec, Schema
 
-/** secret 谁能解开：服务端主密钥，或用户的 passkey（每次用都要用户授权）。 */
-enum SecretLockView(val label: String) extends Labeled:
-  case Server  extends SecretLockView("server")
-  case Passkey extends SecretLockView("passkey")
+/** 一个 secret 的三个维度：怎么保存（服务端主密钥加密、用户的 passkey 加密，或明文）、内容与能否取明文。加密的不含值；明文保存的带值，
+  * 界面直接显示（#1093）。JSON 里 `kind` 是分支名。
+  */
+@jsonDiscriminator("kind")
+enum SecretView derives JsonCodec:
+  case Server(override val content: SecretContent)
+  case Passkey(override val content: SecretContent)
+  case Plain(value: String, scope: RevealScope)
 
-object SecretLockView extends Labels[SecretLockView]("解锁方", SecretLockView.values)
+  def content: SecretContent = this match
+    case Server(c)   => c
+    case Passkey(c)  => c
+    case Plain(_, s) => SecretContent.Opaque(s)
 
-/** 一个 secret 的三个维度（不含值）。 */
-final case class SecretView(lock: SecretLockView, content: SecretContent) derives JsonCodec, Schema
+object SecretView:
+  given Schema[SecretView] =
+    given sttp.tapir.generic.Configuration = sttp.tapir.generic.Configuration.default.withDiscriminator("kind")
+    Schema.derived
 
 final case class AssetIndex(root: String, items: List[AssetItem], problems: List[ProblemView], accessBroken: Option[String]) derives JsonCodec, Schema
 
@@ -174,12 +183,12 @@ final case class AssetFileWrite(path: String, content: String, fingerprint: Opti
 
 final case class SkillFiles(name: SkillName, owner: String, files: List[String]) derives JsonCodec, Schema
 
-/** 设 secret（值只能设不能看）：设值（连同内容与能否取明文；`owner` 只在新建时有用，缺省归平台；`description` 空的沿用原来的），
+/** 设 secret：设值（连同保存方式、内容与能否取明文；`owner` 只在新建时有用，缺省归平台；`description` 空的沿用原来的），
   * 或不动值只改说明与明文范围。JSON 里 `kind` 是分支名。
   */
 @jsonDiscriminator("kind")
 enum SecretWrite derives JsonCodec:
-  case Value(value: SecretValue, content: SecretContent, description: Option[String] = None, owner: Option[String] = None)
+  case Value(value: SecretValue, description: Option[String] = None, owner: Option[String] = None)
   case Settings(description: Option[String] = None, scope: Option[RevealScope] = None)
 
 object SecretWrite:

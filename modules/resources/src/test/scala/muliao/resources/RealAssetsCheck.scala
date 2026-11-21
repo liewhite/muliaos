@@ -85,7 +85,7 @@ object RealAssetsCheck extends ZIOAppDefault:
       unmatched = rules.filterNot(AccessValidation.matchesSomething(_, snap, names))
       _ <- Console.printLine(s"规则 ${rules.size} 条，匹配不上现有工具或资源的 ${unmatched.size} 条：${unmatched.map(_.text).mkString("、")}")
       fernet <- ZIO.fromEither(Fernet.fromKey(key)).mapError(AppError.invalid)
-      bad     = snap.secrets.filter(s => s.content.lock match { case muliao.resources.tree.SecretLock.Server(t) => fernet.decrypt(t).isLeft; case _ => false }).map(_.key)
+      bad     = snap.secrets.filter(s => s.content.body match { case muliao.resources.tree.SecretBody.Server(t, _) => fernet.decrypt(t).isLeft; case _ => false }).map(_.key)
       _ <- Console.printLine(s"secret 解密：${snap.secrets.size - bad.size}/${snap.secrets.size} 成功${if bad.isEmpty then "" else s"，失败：${bad.mkString("、")}"}")
       runs <- ZIO.foreach(rows.filter(_(2) == "0")) { r =>
                 res.forRun(AgentId.wrap(r.head)).either.map(r(1) -> _)

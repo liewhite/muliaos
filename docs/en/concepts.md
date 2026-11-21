@@ -151,7 +151,7 @@ push keys) are off limits to non-admin agents. When the sandbox blocks a command
 
 ## Secrets
 
-Secrets are stored encrypted in the assets directory and never appear in session records, logs or the UI. An agent uses a secret by
+Secrets are stored in the assets directory and never appear in session records or logs; encrypted ones never appear in the UI either. An agent uses a secret by
 naming it in `run_shell` / `skill_run` (`secrets=[KEY]`, injected as an environment variable and masked in the output) or as
 `${vault:KEY}` in an MCP configuration. There is no tool that reveals a secret's value.
 
@@ -159,7 +159,7 @@ Each secret has three dimensions, one choice each:
 
 | Dimension | Choices |
 |---|---|
-| Who can decrypt | **Server**: the platform, with the `[vault] key` from the config; **Passkey**: only your browser, with your passkey; each use waits for your approval (once, for a period, or deny) |
+| Storage | **Server-encrypted**: the platform decrypts it with the `[vault] key` from the config; **Passkey-encrypted**: only your browser, with your passkey; each use waits for your approval (once, for a period, or deny); **Plain**: not encrypted and shown in the UI, passwords only, for non-secret settings |
 | Content | **Password** (any text); **Key pair** (an ed25519 private key the platform can sign with, e.g. short-lived SSH certificates via `ssh_certificate`) |
 | Plaintext | **Any command**; **Scripts only** (usable by skill scripts and MCP servers, but not injectable into commands the agent writes itself); **Sign only** (key pairs only: the value can never be revealed) |
 

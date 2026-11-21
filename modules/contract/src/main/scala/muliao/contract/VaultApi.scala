@@ -22,7 +22,7 @@ object SigningAlgorithm extends Labels[SigningAlgorithm]("签名算法", Signing
   def readPrivate(alg: SigningAlgorithm, text: String): Either[String, SshCert.PrivateKey] = alg match
     case Ed25519 => SshCert.readPrivate(text)
 
-// ---- secret 的三个维度（#1069）：谁能解开（服务端主密钥或用户的 passkey，见 [[SecretValue]]）× 内容 × 能否取出明文（[[SecretContent]]） ----
+// ---- secret 的三个维度（#1069）：怎么保存（服务端主密钥加密、用户的 passkey 加密或明文，见 [[SecretValue]]）× 内容 × 能否取出明文（[[SecretContent]]） ----
 
 /** 解开后的明文能交给谁：任意命令（run_shell、触发器检查与常驻命令），或只给 skill 脚本（skill_run）和 MCP 配置。 */
 enum RevealScope(val label: String) extends Labeled:
@@ -84,17 +84,20 @@ object PasskeyAad:
   def plain(key: String): String                           = key
   def signing(key: String, alg: SigningAlgorithm): String = s"signing:${alg.label}:$key"
 
-/** secret 的新值，也就定了谁能解开：明文（服务端用主密钥加密），或浏览器里已用 passkey 加密好的密文（附加数据按 [[SecretContent.aad]]）。
-  * JSON 里 `kind` 是分支名。
+/** secret 的新值连同内容，也就定了怎么保存：交明文由服务端用主密钥加密（`Server`），浏览器里已用 passkey 加密好的密文（`Passkey`，附加数据按
+  * [[SecretContent.aad]]），或不加密照原样存、界面上直接显示（`Plain`，#1093）。明文保存的只能是口令：私钥明文放着谁都能读，「只能签名」没有意义，
+  * 所以它只带明文范围。JSON 里 `kind` 是分支名。
   */
 @jsonDiscriminator("kind")
 enum SecretValue derives JsonCodec:
-  case Plain(text: String)
-  case Passkey(box: PasskeyBox)
+  case Server(text: String, content: SecretContent)
+  case Passkey(box: PasskeyBox, content: SecretContent)
+  case Plain(text: String, scope: RevealScope)
 
   override def toString: String = this match
-    case Plain(_)   => "SecretValue.Plain(***)"
-    case Passkey(b) => s"SecretValue.Passkey($b)"
+    case Server(_, c)  => s"SecretValue.Server(***, $c)"
+    case Passkey(b, c) => s"SecretValue.Passkey($b, $c)"
+    case Plain(_, s)   => s"SecretValue.Plain(***, $s)"
 
 object SecretValue:
   given Schema[SecretValue] =

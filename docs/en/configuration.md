@@ -235,5 +235,5 @@ Local servers run in the agent's write sandbox.
 
 ### Secrets (`secrets/<KEY>.toml`)
 
-Set secrets in the UI (AI 资产 → Secret) or let an agent store one you give it with `vault_set`; the file holds only ciphertext.
+Set secrets in the UI (AI 资产 → Secret) or let an agent store one you give it with `vault_set`; the file holds only ciphertext, except secrets you set to plain in the UI (`value = "…"`).
 Keys start with an uppercase letter and contain uppercase letters, digits and underscores.

@@ -124,7 +124,7 @@ object AssetGuard:
             .whenZIO(ZIO.attemptBlocking(!Files.isRegularFile(main)).orDie)(ZIO.fail(refused(s"先写 $main，再写附件")))
             .as(content)
         case AssetPath.Secret(_, key) if old.isEmpty =>
-          ZIO.fail(refused(s"secret 文件不能手写新建：用 vault_set 存 $key 的值"))
+          ZIO.fail(refused(s"secret 文件不能手写新建：用 vault_set 存 $key 的值（明文保存的由用户在界面 Secret 页新建）"))
         case f: ParsedFile =>
           for
             _ <- f.subject match
@@ -158,9 +158,10 @@ object AssetGuard:
             prev <- ZIO
                       .fromOption(old.flatMap(o => Formats.parseSecret(o).toOption))
                       .orElseFail(refused("原文件已经坏了，用 vault_set 重新存一次值"))
-            // 手改只能动说明与明文范围：密文、内容类型、「只能签名」都不变（否则改一行就能把只能签名的私钥变成可取明文）
-            _ <- ZIO.when(doc.content.lock != prev.lock || doc.content.content.unscoped != prev.content.unscoped)(
-                   ZIO.fail(refused("只能手改 description 和 usage（shell / scripts）；改值用 vault_set，passkey 加密的、改内容类型或「只能签名」的只能由用户在界面上重新设值"))
+            // 手改只能动说明与明文范围（明文保存的还有值）：保存方式、密文、内容类型、「只能签名」都不变
+            // （否则改一行就能把只能签名的私钥变成可取明文，或把加密的换成明文）
+            _ <- ZIO.when(doc.content.body.fixed != prev.body.fixed)(
+                   ZIO.fail(refused("只能手改 description、usage（shell / scripts）和明文保存的 value；改加密的值用 vault_set，passkey 加密的、改保存方式、内容类型或「只能签名」的只能由用户在界面上重新设值"))
                  )
           yield content
 

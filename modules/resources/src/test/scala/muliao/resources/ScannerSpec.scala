@@ -55,7 +55,7 @@ object ScannerSpec extends ZIOSpecDefault:
         s.problems.isEmpty,
         s.skill(SkillName.wrap("code-std")).exists(d => d.description == "写代码时 读它" && d.approval == Set("scripts/run.sh") && d.owner == Owner.Platform),
         s.mcp("web").exists(_.config.secretRefs == Set("TOKEN_A")),
-        s.secret("TOKEN_A").exists(d => d.content.content == muliao.contract.SecretContent.Opaque(muliao.contract.RevealScope.Scripts) && d.owner == Owner.Agent(AgentName.wrap("alice"))),
+        s.secret("TOKEN_A").exists(d => d.content.body.content == muliao.contract.SecretContent.Opaque(muliao.contract.RevealScope.Scripts) && d.owner == Owner.Agent(AgentName.wrap("alice"))),
         s.profiles.get(AgentName.wrap("alice")).contains(AgentProfile("做事", "claude:x", Some("g"))),
         s.privateMemory(AgentName.wrap("alice")).exists(_.content == "私有"),
         s.sharedMemory("trading").isDefined,

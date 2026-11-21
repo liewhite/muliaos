@@ -6,7 +6,7 @@ import muliao.platform.db.Database
 import muliao.platform.events.ChangeBus
 import muliao.resources.{AgentExec, ResourcePaths}
 import muliao.resources.tree.Owner
-import muliao.resources.vault.{Actor, Vault}
+import muliao.resources.vault.Vault
 import muliao.sessions.{Answer, CallKey, Files, SessionConsole, Sessions}
 import muliao.sessions.TestEnv as S
 import muliao.sessions.TestEnv.{Script, call as modelCall, text as say}
@@ -206,7 +206,7 @@ object WorkspaceSpec extends ZIOSpecDefault:
         out <- withEnv(d, m) {
                  for
                    alice <- S.agent("alice")
-                   _     <- ZIO.serviceWithZIO[Vault](_.set(Actor.User, "TOKEN", muliao.contract.SecretValue.Plain("sekret-123"), muliao.resources.vault.ContentChange.Keep, Some("测试"), Owner.Agent(AgentName.wrap("alice"))))
+                   _     <- ZIO.serviceWithZIO[Vault](_.set("TOKEN", muliao.resources.vault.SecretInput.ByUser(muliao.contract.SecretValue.Server("sekret-123", muliao.contract.SecretContent.Default), Owner.Agent(AgentName.wrap("alice"))), Some("测试")))
                    ctx   <- context(alice)
                    sec   <- call("run_shell", args("command" -> str("echo token=$TOKEN"), "timeout" -> Json.Num(20), "secrets" -> Json.Arr(str("TOKEN"))), ctx)
                    no    <- call("run_shell", args("command" -> str("echo hi")), ctx)

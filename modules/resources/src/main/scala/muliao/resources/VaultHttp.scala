@@ -2,7 +2,7 @@ package muliao.resources
 
 import muliao.contract.*
 import muliao.platform.server.{Endpoints, Route}
-import muliao.resources.tree.{AssetStore, SecretLock}
+import muliao.resources.tree.{AssetStore, SecretBody}
 import muliao.resources.vault.{Grants, Slot}
 import zio.*
 
@@ -15,7 +15,7 @@ final case class VaultHttp(grants: Grants, store: AssetStore):
       (asks, live) <- grants.view
       snap         <- store.snapshot
     yield
-      val creds = snap.secrets.map(_.content.lock).collect { case SecretLock.Passkey(b) => PasskeyCredential(b.rp, b.credential) }.distinct
+      val creds = snap.secrets.map(_.content.body).collect { case SecretBody.Passkey(b, _) => PasskeyCredential(b.rp, b.credential) }.distinct
       VaultState(asks, live, creds)
 
   def routes: List[Route] =

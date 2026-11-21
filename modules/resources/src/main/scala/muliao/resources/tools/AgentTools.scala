@@ -7,7 +7,7 @@ import muliao.resources.access.BuiltinRole
 import muliao.contract.AgentState
 import muliao.resources.agents.{AgentRecord, Agents, NewAgent}
 import muliao.resources.tree.{AssetPath, Owner}
-import muliao.resources.vault.{Actor, ContentChange, SshKeys, Vault}
+import muliao.resources.vault.{SecretInput, SshKeys, Vault}
 import muliao.toolkit.*
 import zio.*
 import zio.json.*
@@ -118,7 +118,7 @@ object AgentTools:
 
   val VaultSetDef = ToolDef[ToolContext, VaultSet](
     "vault_set",
-    "把用户给的 secret 加密存进你的 `secrets/<KEY>.toml`（新 key 归你；改已有的要有改它的权限），值不进会话记录。之后用 `run_shell(secrets=[KEY])` / `skill_run(secrets=[KEY])` 当环境变量用，或在 MCP 配置里写 `${vault:KEY}`。",
+    "把用户给的 secret 加密存进你的 `secrets/<KEY>.toml`（新 key 归你；改已有的要有改它的权限，用户设成明文保存的改完仍是明文），值不进会话记录。之后用 `run_shell(secrets=[KEY])` / `skill_run(secrets=[KEY])` 当环境变量用，或在 MCP 配置里写 `${vault:KEY}`。",
     Access.Write,
     Scheduling.Ordered
   )
@@ -198,7 +198,7 @@ object AgentTools:
 
     val vaultSet = VaultSetDef { (in, ctx) =>
       vault
-        .set(Actor.Agent(ctx.agent), in.key, muliao.contract.SecretValue.Plain(in.value), in.usage.fold(ContentChange.Keep)(ContentChange.Scope(_)), Some(in.description), Owner.Platform)
+        .set(in.key, SecretInput.ByAgent(ctx.agent, in.value, in.usage), Some(in.description))
         .map(created => ToolOutcome.text(if created then s"已新建 secret ${in.key}。" else s"已更新 secret ${in.key}。"))
         .mapError(fail)
     }

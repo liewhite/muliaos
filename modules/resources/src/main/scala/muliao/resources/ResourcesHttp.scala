@@ -7,7 +7,7 @@ import muliao.resources.access.*
 import muliao.resources.agents.*
 import muliao.resources.guard.{AssetGuard, Expectation, FileFingerprint}
 import muliao.resources.tree.*
-import muliao.resources.vault.{Actor, ContentChange, Vault}
+import muliao.resources.vault.{Actor, SecretInput, Vault}
 import zio.*
 
 import java.nio.file.{Files, Path}
@@ -196,7 +196,7 @@ final case class ResourcesHttp(
       val skills = snap.skills.map(s => AssetItem(AssetItemKind.Skill, s.name.value, s.owner.label, rel(s.main), usedBy(AssetKind.Skill, s.name.value, s.owner), Some(s.description), None, None))
       val mcps = snap.mcps.map(m => AssetItem(AssetItemKind.Mcp, m.name, m.owner.label, rel(m.file), usedBy(AssetKind.Mcp, m.name, m.owner), None, Some(m.config.enabled), None))
       val secrets = snap.secrets.map(s =>
-        AssetItem(AssetItemKind.Secret, s.key, s.owner.label, rel(s.file), usedBy(AssetKind.Secret, s.key, s.owner), Some(s.content.description), None, Some(SecretView(s.content.lock.view, s.content.content)))
+        AssetItem(AssetItemKind.Secret, s.key, s.owner.label, rel(s.file), usedBy(AssetKind.Secret, s.key, s.owner), Some(s.content.description), None, Some(s.content.body.view))
       )
       val agentFiles = as.filter(a => snap.profiles.contains(a.name)).map(a =>
         AssetItem(AssetItemKind.Agent, a.name.value, a.name.value, AssetPath.render(AssetPath.AgentFile(a.name)).toString, List(a.name), snap.profiles.get(a.name).map(_.description), None, None)
@@ -245,17 +245,17 @@ final case class ResourcesHttp(
 
   private def putSecret(key: String, req: SecretWrite): IO[AppError, Unit] =
     req match
-      case SecretWrite.Value(value, content, description, owner) =>
+      case SecretWrite.Value(value, description, owner) =>
         for
           o <- ZIO.foreach(owner)(ownerOf).map(_.getOrElse(Owner.Platform))
-          _ <- vault.set(Actor.User, key, value, ContentChange.Replace(content), description, o)
+          _ <- vault.set(key, SecretInput.ByUser(value, o), description)
         yield ()
       case SecretWrite.Settings(description, scope) =>
         for
           snap    <- store.snapshot
           doc     <- ZIO.fromOption(snap.secret(key)).orElseFail(AppError.notFound(s"没有 secret $key（新建要给值）"))
-          content <- ZIO.fromEither(scope.fold(Right(doc.content.content))(doc.content.content.withScope)).mapError(AppError.invalid)
-          next     = doc.content.copy(description = description.map(_.trim).getOrElse(doc.content.description), content = content)
+          body    <- ZIO.fromEither(scope.fold(Right(doc.content.body))(doc.content.body.withScope)).mapError(AppError.invalid)
+          next     = SecretFile(description.map(_.trim).getOrElse(doc.content.description), body)
           _       <- store.write(AssetPath.Secret(doc.owner, key), Formats.renderSecret(next))
         yield ()
 

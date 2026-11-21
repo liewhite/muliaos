@@ -52,20 +52,20 @@ object VaultScopeToolsSpec extends ZIOSpecDefault:
         b     <- agents.flatMap(_.create(NewAgent("bob", "x")))
         vault <- ZIO.service[Vault]
         dirs  <- ZIO.service[TestEnv.Dirs]
-        n1    <- vault.set(Actor.Agent(a.id), "ALICE_TOKEN", muliao.contract.SecretValue.Plain("明文 v1"), muliao.resources.vault.ContentChange.Scope(muliao.contract.RevealScope.Scripts), Some("说明"), Owner.Platform)
+        n1    <- vault.set("ALICE_TOKEN", muliao.resources.vault.SecretInput.ByAgent(a.id, "明文 v1", Some(muliao.contract.RevealScope.Scripts)), Some("说明"))
         file   = dirs.assets.resolve("alice/secrets/ALICE_TOKEN.toml")
         raw   <- ZIO.succeed(Files.readString(file))
         perm  <- ZIO.succeed(Files.getPosixFilePermissions(file).toString)
         s1    <- vault.reveal(a.id, List("ALICE_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试"))
         e1    <- vault.reveal(a.id, List("ALICE_TOKEN"), SecretUse.Shell, muliao.contract.AskPurpose(None, "测试")).either
         e2    <- vault.reveal(b.id, List("ALICE_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试")).either
-        e3    <- vault.set(Actor.Agent(b.id), "ALICE_TOKEN", muliao.contract.SecretValue.Plain("hack"), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform).either
+        e3    <- vault.set("ALICE_TOKEN", muliao.resources.vault.SecretInput.ByAgent(b.id, "hack", None), None).either
         _     <- agents.flatMap(_.update(b.id, AgentPatch(allow = Some(List("use:secret:ALICE_*")))))
         s2    <- vault.reveal(b.id, List("ALICE_TOKEN"), SecretUse.Mcp, muliao.contract.AskPurpose(None, "测试"))
-        n2    <- vault.set(Actor.Agent(a.id), "ALICE_TOKEN", muliao.contract.SecretValue.Plain("v2"), muliao.resources.vault.ContentChange.Keep, Some(""), Owner.Platform)
+        n2    <- vault.set("ALICE_TOKEN", muliao.resources.vault.SecretInput.ByAgent(a.id, "v2", None), Some(""))
         s3    <- vault.reveal(a.id, List("ALICE_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试"))
         raw2  <- ZIO.succeed(Files.readString(file))
-        e4    <- vault.set(Actor.Agent(a.id), "bad-key", muliao.contract.SecretValue.Plain("v"), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform).either
+        e4    <- vault.set("bad-key", muliao.resources.vault.SecretInput.ByAgent(a.id, "v", None), None).either
         e5    <- vault.reveal(a.id, List("NOPE"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试")).either
       yield assertTrue(
         n1,
@@ -89,7 +89,7 @@ object VaultScopeToolsSpec extends ZIOSpecDefault:
     test("主密钥不对拒绝启动（已有 secret 一个都解不开）") {
       for
         vault <- ZIO.service[Vault]
-        _     <- vault.set(Actor.User, "PLATFORM_KEY", muliao.contract.SecretValue.Plain("v"), muliao.resources.vault.ContentChange.Keep, None, Owner.Platform)
+        _     <- vault.set("PLATFORM_KEY", muliao.resources.vault.SecretInput.ByUser(muliao.contract.SecretValue.Server("v", muliao.contract.SecretContent.Default), Owner.Platform), None)
         snap  <- ZIO.serviceWithZIO[AssetStore](_.snapshot)
         wrong  = Fernet.fromKey(Fernet.generateKey()).toOption.get
         right  = Fernet.fromKey(TestEnv.key).toOption.get
