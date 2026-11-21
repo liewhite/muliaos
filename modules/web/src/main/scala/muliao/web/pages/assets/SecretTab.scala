@@ -167,7 +167,7 @@ object SecretTab:
     val kindOn = v.signal.combineWith(existing, lockOn).map((f, e, l) => Kind.fit(l, f.kind.orElse(e.map(s => kindOf(s.content))).getOrElse(Kind.Password)))
     val usageOn  = v.signal.combineWith(existing, kindOn).map((f, e, k) => Usage.fit(k, f.usage.orElse(e.map(s => usageOf(s.content))).getOrElse(Usage.default(k))))
     val targetOn = lockOn.combineWith(kindOn, usageOn).map((l, k, u) => Target.of(l, k, u))
-    val targetNow = Var[Target](Target.Server(SecretShape.Opaque(RevealScope.Shell)))
+    val targetNow = Var[Target](Target.Server(SecretShape.Default))
     def save(): Unit =
       val f   = v.now()
       val key = f.key.trim

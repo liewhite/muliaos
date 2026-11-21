@@ -84,10 +84,7 @@ enum SecretContent derives JsonCodec:
   case KeyPair(identity: KeyIdentity, exposure: KeyExposure)
 
   /** 明文能交给谁；只能签名的没有。 */
-  def revealScope: Option[RevealScope] = this match
-    case Opaque(s)                         => Some(s)
-    case KeyPair(_, KeyExposure.Reveal(s)) => Some(s)
-    case KeyPair(_, KeyExposure.SignOnly)  => None
+  def revealScope: Option[RevealScope] = SecretShape.of(this).revealScope
 
   /** 只改明文范围（内容类型与「只能签名」不变）；只能签名的没有范围可改。 */
   def withScope(s: RevealScope): Either[String, SecretContent] = this match

@@ -168,7 +168,7 @@ object Formats:
       addr  <- t.string("address")
       id <- (alg, addr) match
               case (Some(a), Some(s)) => KeyIdentity.parse(a, s).map(Some(_)).left.map(e => s"address：$e")
-              case (Some(_), None)    => Left("密钥对缺少公开身份 address：在 Secret 页重新设一次它的值，平台会从私钥算出")
+              case (Some(_), None)    => Left("密钥对缺少公开身份 address：删掉这个文件，再在 Secret 页按原名、原主人重新建（重新粘贴私钥），平台会从私钥算出")
               case (None, Some(_))    => Left("只有密钥对（写了 keypair）有 address")
               case (None, None)       => Right(None)
       usage <- t.string("usage")

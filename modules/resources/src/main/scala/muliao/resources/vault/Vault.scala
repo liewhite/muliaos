@@ -143,7 +143,7 @@ object Vault:
     private def encrypt(key: String, text: String, shape: SecretShape, now: Long): IO[AppError, SecretBody] =
       for
         _ <- nonEmpty(text)
-        c <- ZIO.fromEither(shape.content(text, JvmCrypto)).mapError(e => AppError.invalid(s"secret $key 是密钥对，值不是认得的私钥：$e"))
+        c <- ZIO.fromEither(shape.content(text, JvmCrypto)).mapError(e => AppError.invalid(s"secret $key 的值不是认得的私钥：$e"))
       yield SecretBody.Server(fernet.encrypt(text, now), c)
 
     /** 这个 agent 能用的 secret 文件：不存在、没加载或没有 use 权限都报错。 */
