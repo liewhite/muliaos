@@ -48,6 +48,9 @@ val V = new {
   val bouncycastle = "1.87"
 }
 
+// Bouncy Castle 一家（bcprov 是 resources 直接依赖的，bcutil/bcpkix 由别的库带进来）要同一版本：不同版本里同名的类内容不同，打包时报 Deduplicate（#1092）
+ThisBuild / dependencyOverrides ++= Seq("bcprov-jdk18on", "bcutil-jdk18on", "bcpkix-jdk18on").map("org.bouncycastle" % _ % V.bouncycastle)
+
 lazy val commonJvm = Seq(
   libraryDependencies ++= Seq(
     "dev.zio" %% "zio"          % V.zio,
