@@ -69,6 +69,8 @@ trait SessionConsole:
   /** @param origins 只要这些来源（空是不限） */
   def list(agent: Option[AgentId], q: Option[String], before: Option[Long], limit: Int, origins: List[OriginKind] = Nil): IO[AppError, SessionPage]
   def detail(id: SessionId): IO[AppError, SessionDetail]
+  /** 所有会话里在等用户的调用（提问与批准），先等的在前。 */
+  def awaiting: IO[AppError, List[AwaitingCall]]
   def retry(id: SessionId): IO[AppError, Unit]
   def answer(id: SessionId, call: CallKey, a: Answer): IO[AppError, Unit]
   def compact(id: SessionId): IO[AppError, Boolean]
@@ -265,6 +267,20 @@ object Sessions:
         compactionThreshold = settings.compactionThresholdTokens,
         usage = UsageView(used.map(_.input).sum, used.map(_.output).sum, used.map(_.cacheRead).sum, used.map(_.cacheWrite).sum)
       )
+
+    /** 挂起的调用只在没结束的运行里：先取这些会话（走运行状态的索引），不扫全部调用。 */
+    def awaiting: IO[AppError, List[AwaitingCall]] =
+      for
+        runs  <- db.read(Repo.runsIn(RunState.activeOnes))
+        rows  <- db.read(Repo.suspendedCalls(runs.map(_.sessionId).distinct))
+        infos <- db.read(Repo.sessionsOf(rows.map(_.sessionId).distinct)).flatMap(ZIO.foreach(_)(SessionInfo.decode)).map(_.map(i => i.id -> i).toMap)
+        calls <- ZIO.foreach(rows)(r => Decode.call(r).map(r.sessionId -> _))
+        d     <- display
+      yield calls
+        .collect { case (s, c @ Call(_, _, _, _, _, CallStatus.Suspended(p, at))) if p.waitsForUser => (s, c, at) }
+        .flatMap((s, c, at) => infos.get(s).map(i => at -> AwaitingCall(s, i.agent, c.entryId, Timeline.call(c, d))))
+        .sortBy(_._1)
+        .map(_._2)
 
     def usage(from: Long, to: Long): IO[AppError, List[UsageLine]] =
       for

@@ -177,13 +177,16 @@ object SessionsSpec extends ZIOSpecDefault:
           _      <- eventually("等提问")(stateOf(id))(_ == WorkState.Waiting)
           d1     <- console.flatMap(_.detail(id))
           q       = d1.pending.head
+          w1     <- console.flatMap(_.awaiting)
           _      <- console.flatMap(_.answer(id, CallKey(q.entry, q.call), Answer.Answers(List("A"))))
           d2     <- eventually("等批准")(console.flatMap(_.detail(id)))(_.pending.exists(_.pending.isInstanceOf[PendingView.Approval]))
           a       = d2.pending.head
+          w2     <- console.flatMap(_.awaiting)
           _      <- console.flatMap(_.answer(id, CallKey(a.entry, a.call), Answer.Decision(approved = true, always = true)))
           _      <- eventually("回答完")(timeline(id))(_.exists(_.parts.exists(_.text.contains("都好了"))))
           _      <- idle(id)
           tl     <- timeline(id)
+          w3     <- console.flatMap(_.awaiting)
           ok     <- p.approvals.get
           evs    <- events.get
         yield assertTrue(
@@ -193,7 +196,11 @@ object SessionsSpec extends ZIOSpecDefault:
           ,
           tl.flatMap(_.parts.flatMap(_.call)).flatMap(_.result.map(_.text)).head.contains("方案（选哪个？）：A"),
           ok == List(true),
-          evs.collect { case SessionEvent.NeedsUser(`id`, _, _, true) => 1 }.size == 2
+          evs.collect { case SessionEvent.NeedsUser(`id`, _, _, true) => 1 }.size == 2,
+          // 跨会话的待办与会话详情里在等的一致，带上会话与 agent
+          w1.map(w => (w.session, w.agent, w.entry, w.call.id, w.call.pending)) == List((id, alice, q.entry, q.call, Some(q.pending))),
+          w2.map(w => (w.session, w.entry, w.call.id, w.call.name)) == List((id, a.entry, a.call, "approve_me")),
+          w3.isEmpty
         )
       }
     },

@@ -88,6 +88,7 @@ final case class SessionsHttp(sessions: Sessions, console: SessionConsole, files
       SessionsApi.list.secured(q => console.list(q.agent, q.q, q.before, q.limit.getOrElse(50), q.origin)),
       SessionsApi.create.secured(create),
       SessionsApi.get.secured(console.detail),
+      SessionsApi.awaiting.secured(_ => console.awaiting),
       SessionsApi.timeline.secured(sessions.timeline),
       live,
       SessionsApi.send.secured((id, m) => send(id, m)),

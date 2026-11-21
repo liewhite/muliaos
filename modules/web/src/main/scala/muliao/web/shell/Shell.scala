@@ -115,8 +115,8 @@ object Shell:
         .toSignal
     )
 
-  /** 首页导航的一项；通知带未读角标。 */
-  private def tabLink(item: NavItem, primary: Boolean, unread: Signal[Long], extra: String): HtmlElement =
+  /** 首页导航的一项；通知带角标（未读通知加待你处理的件数）。 */
+  private def tabLink(item: NavItem, primary: Boolean, badge: Signal[Long], extra: String): HtmlElement =
     if primary then
       Ui.appLink(item.route.url, withFrom = false)(
         aria.label := item.label,
@@ -136,12 +136,12 @@ object Shell:
           cls := "relative",
           Icon(item.icon, "size-5"),
           Option.when(item.route.section.contains(Section.Notifications))(
-            child.maybe <-- unread.map(n =>
+            child.maybe <-- badge.map(n =>
               Option.when(n > 0)(
                 span(
                   cls := "absolute -top-1.5 left-3 min-w-4 rounded-full bg-danger px-1 text-center text-[10px] leading-4 text-danger-foreground",
                   if n > 99 then "99+" else n.toString,
-                  span(cls := "sr-only", "条未读")
+                  span(cls := "sr-only", "条未读或待处理")
                 )
               )
             )
@@ -154,6 +154,8 @@ object Shell:
   def view(): HtmlElement =
     val unreadLoad = Remote(NotificationsApi.list)(Some(1)).map(_.map(_.unread))
     val unread     = unreadLoad.map(_.data.getOrElse(0L))
+    // 导航角标把待你处理的也算上（应用图标角标仍只算未读通知，与推送带来的数一致）
+    val badge      = unread.combineWith(pages.notifications.Awaiting.items.map(_.size.toLong)).map(_ + _)
     val route      = Router.location.map(_.route)
     div(
       cls := "flex h-full flex-col md:flex-row",
@@ -173,7 +175,7 @@ object Shell:
         cls := "hidden w-16 shrink-0 flex-col items-center gap-1 border-r border-separator bg-surface pt-[calc(env(safe-area-inset-top)+0.5rem)] pb-2 md:flex",
         Ui.iconBtn("Menu", "管理菜单", size = Size.Md)(onClick --> (_ => Ui.adminMenuOpen.set(true))),
         div(cls := "my-1 h-px w-8 bg-separator"),
-        Nav.activity.map((it, primary) => tabLink(it, primary, unread, "h-14 w-14 rounded-lg hover:bg-surface-hover"))
+        Nav.activity.map((it, primary) => tabLink(it, primary, badge, "h-14 w-14 rounded-lg hover:bg-surface-hover"))
       ),
       child.maybe <-- route.map(_.flatMap(_.section).exists(_.admin)).distinct.map(admin =>
         Option.when(admin)(
@@ -210,7 +212,7 @@ object Shell:
         navTag(
           aria.label := "动态",
           cls := "flex border-t border-separator bg-surface pb-[env(safe-area-inset-bottom)] md:hidden",
-          Nav.activity.map((it, primary) => tabLink(it, primary, unread, "h-14 flex-1"))
+          Nav.activity.map((it, primary) => tabLink(it, primary, badge, "h-14 flex-1"))
         )
       ),
       // 管理抽屉：换了页面就收起

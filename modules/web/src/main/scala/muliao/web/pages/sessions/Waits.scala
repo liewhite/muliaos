@@ -11,9 +11,6 @@ import scala.scalajs.js
 
 /** 等待面板：会话在等的后台任务、委派、到点唤醒、提问与批准——让人看得出它为什么挂起、在等谁。 */
 object Waits:
-  def askAnchor(call: CallId): String      = s"ask-${call.value}"
-  def approvalAnchor(call: CallId): String = s"approval-${call.value}"
-
   private def scrollTo(id: String): Unit =
     Option(dom.document.getElementById(id)).foreach(_.asInstanceOf[js.Dynamic].scrollIntoView(js.Dynamic.literal(behavior = "smooth")))
 
@@ -80,14 +77,14 @@ object Waits:
       row(
         Icon("MessageCircleQuestion", "size-3.5 shrink-0 text-muted"),
         span(cls := "shrink-0", "等你回答"),
-        Ui.btn(Variant.Ghost, Size.Sm)(cls := "ml-auto shrink-0", "跳到提问", onClick --> (_ => scrollTo(askAnchor(p.call))))
+        Ui.btn(Variant.Ghost, Size.Sm)(cls := "ml-auto shrink-0", "跳到提问", onClick --> (_ => scrollTo(CallAsks.anchor(p.call))))
       )
     case PendingView.Approval(_) =>
       row(
         Icon("ShieldQuestion", "size-3.5 shrink-0 text-muted"),
         span(cls := "shrink-0", "等你批准"),
         span(cls := "font-mono text-muted", p.name),
-        Ui.btn(Variant.Ghost, Size.Sm)(cls := "ml-auto shrink-0", "去批准", onClick --> (_ => scrollTo(approvalAnchor(p.call))))
+        Ui.btn(Variant.Ghost, Size.Sm)(cls := "ml-auto shrink-0", "去批准", onClick --> (_ => scrollTo(CallAsks.anchor(p.call))))
       )
     case PendingView.Agent(thread, agent) =>
       row(

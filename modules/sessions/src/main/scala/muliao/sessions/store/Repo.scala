@@ -344,6 +344,10 @@ private[sessions] object Repo:
   def openCalls(session: SessionId): Read[List[ToolCallRow]] =
     Sql.run(calls.filter(c => c.sessionId == lift(session) && c.state != lift(CallState.Done)).sortBy(c => (c.entryId, c.seq))).orInternal
 
+  /** 这些会话里挂起的调用。 */
+  def suspendedCalls(ids: List[SessionId]): Read[List[ToolCallRow]] =
+    Sql.run(calls.filter(c => liftQuery(ids).contains(c.sessionId) && c.state == lift(CallState.Suspended))).orInternal
+
   def callsIn(states: List[CallState]): Read[List[ToolCallRow]] =
     Sql.run(calls.filter(c => liftQuery(states).contains(c.state))).orInternal
 

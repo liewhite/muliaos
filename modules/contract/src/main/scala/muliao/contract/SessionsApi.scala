@@ -300,6 +300,11 @@ final case class SessionDetail(
     threads: List[SessionSummary] = Nil
 ) derives JsonCodec, Schema
 
+/** 一个在等用户的调用（ask_user 的提问、等批准的调用），跨会话列出（通知页「待你处理」，#1097）：哪个会话、
+  * 哪个 agent、哪条回复里的哪次调用（`call.pending` 是提问或批准）。答复走 [[SessionsApi.answer]]。
+  */
+final case class AwaitingCall(session: SessionId, agent: AgentId, entry: Long, call: CallView) derives JsonCodec, Schema
+
 /** 答复挂起的调用：提问给 `answers`（每题一个），批准给 `approved`（与 `always`）。 */
 final case class AnswerIn(answers: Option[List[String]] = None, approved: Option[Boolean] = None, always: Boolean = false)
     derives JsonCodec, Schema
@@ -384,6 +389,15 @@ object SessionsApi:
   val get: Endpoint[Option[String], SessionId, ApiError, SessionDetail, Any] =
     one.get.out(jsonBody[SessionDetail]).name("getSession")
 
+  /** 路径不放在 `sessions/` 下：那里的第二段是会话编号。 */
+  val awaiting: Endpoint[Option[String], Unit, ApiError, List[AwaitingCall], Any] =
+    Api.secure.get
+      .in("calls" / "awaiting")
+      .out(jsonBody[List[AwaitingCall]])
+      .name("awaitingCalls")
+      .refreshedBy(Topic.Sessions)
+      .description("所有会话里在等用户的调用（ask_user 的提问、等批准的调用），先等的在前。答复用 answerCall。")
+
   val timeline: Endpoint[Option[String], SessionId, ApiError, List[TimelineItem], Any] =
     one.get.in("timeline").out(jsonBody[List[TimelineItem]]).name("sessionTimeline").description("会话的完整时间线（含压缩点之前的原文）。")
 
@@ -446,4 +460,4 @@ object SessionsApi:
       .name("usage")
       .description("[from, to)（毫秒）之间按天（配置时区）、agent、模型汇总的 token 用量。")
 
-  val all = List(list, create, get, timeline, send, stop, retry, compact, read, delete, answer, upload, download, blob, usage)
+  val all = List(list, create, get, awaiting, timeline, send, stop, retry, compact, read, delete, answer, upload, download, blob, usage)

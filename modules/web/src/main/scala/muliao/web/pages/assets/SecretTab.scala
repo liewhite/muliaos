@@ -323,7 +323,7 @@ object SecretTab:
         Ui.loading(state) { st =>
           div(
             cls := "flex flex-col gap-2",
-            SecretAsks.list(st.map(_.asks), agents),
+            SecretAsks.list(st.map(_.asks)),
             children <-- st.map(_.grants).splitSeq(g => (g.agent, g.key, g.until))(s => grant(s.now(), agents))
           )
         }

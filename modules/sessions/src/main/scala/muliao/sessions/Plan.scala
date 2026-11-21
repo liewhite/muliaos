@@ -32,7 +32,7 @@ private[sessions] object Plan:
       case Some(r) =>
         val runnable   = open.filter(_.status.runnable)
         val suspended  = open.collect { case c @ Call(_, _, _, _, _, CallStatus.Suspended(p, _)) => c -> p }
-        val declinable = suspended.collect { case (c, p) if p.declinable => c }
+        val declinable = suspended.collect { case (c, p) if p.waitsForUser => c }
         if runnable.nonEmpty then Next.Execute(r, runnable)
         else if queued && declinable.nonEmpty then Next.Decline(r, declinable)
         else if suspended.nonEmpty then Next.Pause(r)

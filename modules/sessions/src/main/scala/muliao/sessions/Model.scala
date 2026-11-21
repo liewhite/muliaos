@@ -88,8 +88,8 @@ final case class QuestionOption(label: String, description: String) derives Json
 
 /** 工具调用挂起时在等什么。只有这几种：本领域的工具是 `Tool[RunContext, Pause]`，挂起时交出其中之一。 */
 sealed trait Pause derives JsonCodec:
-  /** 用户发来新信时当作没答复（等用户的提问与批准）；等别的 agent 回答的不算。 */
-  def declinable: Boolean = this match
+  /** 在等用户（提问与批准）：通知页「待你处理」列出它们，用户发来新信时当作没答复；等别的 agent 回答的不算。 */
+  def waitsForUser: Boolean = this match
     case _: Pause.AskUser | _: Pause.Approval => true
     case _: Pause.AwaitThread                 => false
 

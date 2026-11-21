@@ -39,80 +39,6 @@ final class TranscriptView:
 
   // ---- 工具调用 ----
 
-  private val diffLine: String => String = l =>
-    if l.startsWith("+") && !l.startsWith("+++") then "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-    else if l.startsWith("-") && !l.startsWith("---") then "bg-red-500/15 text-red-700 dark:text-red-300"
-    else if l.startsWith("@@") then "text-muted"
-    else ""
-
-  private def terminal(command: Option[String], output: Option[String], failed: Boolean): HtmlElement =
-    div(
-      cls := "my-1 max-h-96 overflow-auto rounded-lg bg-zinc-900 p-2.5 font-mono text-xs leading-relaxed text-zinc-100 dark:bg-black",
-      command.map(c => div(cls := "whitespace-pre-wrap break-all", span(cls := "select-none text-emerald-400", "$ "), c)),
-      output.map(o => div(cls := "whitespace-pre-wrap break-all " + (if failed then "text-red-400" else "text-zinc-300"), o))
-    )
-
-  private def titled(t: Option[String]): Option[HtmlElement] = t.map(x => div(cls := "mb-0.5 break-all font-mono text-xs text-muted", x))
-
-  /** 参数按字段画：短的字段排成两列，多行的（文件内容、提示词）单独成块。不是 JSON 对象的照原文。 */
-  private def argFields(args: String): Option[HtmlElement] =
-    argsShown(args).map { shown =>
-      scala.util.Try(scala.scalajs.js.JSON.parse(args).asInstanceOf[scala.scalajs.js.Dictionary[scala.scalajs.js.Any]]).toOption
-        .filter(d => scala.scalajs.js.typeOf(d) == "object" && !scala.scalajs.js.Array.isArray(d)) match
-        case None => pre(cls := Ui.CodeBlock, shown)
-        case Some(d) =>
-          val fields = d.toList.map { (k, v) =>
-            k -> (if scala.scalajs.js.typeOf(v) == "string" then v.asInstanceOf[String] else scala.scalajs.js.JSON.stringify(v, null: scala.scalajs.js.Array[scala.scalajs.js.Any], 2))
-          }
-          val (long, short) = fields.partition((_, v) => v.contains('\n') || v.length > 120)
-          div(
-            Option.when(short.nonEmpty)(
-              dl(cls := "my-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs", short.map((k, v) => div(cls := "contents", dt(cls := "text-muted", k), dd(cls := "break-all text-foreground", v))))
-            ),
-            long.map((k, v) => div(titled(Some(k)), pre(cls := Ui.CodeBlock, v)))
-          )
-    }
-
-  /** 参数与结果：按工具的展示方式画；可切到原文。 */
-  private def toolDetail(c: CallView): HtmlElement =
-    val raw     = Var(false)
-    val display = c.display
-    val result  = c.result
-    def rendered: Modifier[HtmlElement] = display match
-      case Display.Terminal(Some(command)) =>
-        terminal(Some(command), result.map(_.text), result.exists(_.isError))
-      case Display.Terminal(None) =>
-        // 没有命令参数的（skill 脚本）：参数按字段，输出进终端框
-        Seq(argFields(c.args), result.map(r => terminal(None, Some(r.text), r.isError)))
-      case Display.Code(path) =>
-        Seq(titled(path), result.map(r => pre(cls := Ui.CodeBlock, r.text)))
-      case Display.Diff(path) =>
-        Seq(
-          titled(path),
-          result.map(r => pre(cls := Ui.CodeBlock, r.text.split("\n", -1).toList.map(l => div(cls := diffLine(l), if l.isEmpty then " " else l))))
-        )
-      case Display.JsonData =>
-        Seq(argsShown(c.args).map(a => pre(cls := Ui.CodeBlock, a)), result.map(r => pre(cls := Ui.CodeBlock, prettyJson(r.text))))
-      case Display.Markdown =>
-        Seq(
-          argsShown(c.args).map(a => pre(cls := Ui.CodeBlock, a)),
-          result.map(r => div(cls := "my-1 rounded-lg border border-separator px-3 py-2 text-foreground", Markdown.view(r.text)))
-        )
-      case Display.SharedFile | Display.Plain | Display.Question | Display.Delegate(_, _) =>
-        Seq(argFields(c.args), result.map(r => pre(cls := Ui.CodeBlock, r.text)))
-    def original: Modifier[HtmlElement] =
-      Seq(argsShown(c.args).map(a => pre(cls := Ui.CodeBlock, a)), result.map(r => pre(cls := Ui.CodeBlock, r.text)))
-    div(
-      child <-- raw.signal.map(r => div(if r then original else rendered)),
-      Option.when(display != Display.Plain || argsShown(c.args).isDefined)(
-        div(
-          cls := "flex justify-end",
-          button(tpe := "button", cls := "text-xs text-muted hover:text-foreground", onClick --> (_ => raw.update(!_)), child.text <-- raw.signal.map(r => if r then "渲染" else "原文"))
-        )
-      ),
-      result.flatMap(r => Attachments.images(r.images))
-    )
-
   private def toolBlock(c: CallView, live: Boolean, ctx: TranscriptCtx): HtmlElement =
     val running = (x: CallView) => toolStatus(x, live, ctx.runActive) == ToolStatus.Running
     collapsible(
@@ -126,7 +52,7 @@ final class TranscriptView:
         )
       ),
       extra = "self-stretch"
-    )(toolDetail(c))
+    )(ToolDetail.view(c))
 
   private def threadLink(t: SessionSummary): HtmlElement =
     Ui.appLink(Route.session(t.id).url)(
@@ -170,103 +96,35 @@ final class TranscriptView:
 
   // ---- 提问与批准 ----
 
-  private val askCard = "flex w-full max-w-[88%] flex-col gap-3 self-start rounded-2xl border border-accent bg-surface p-3.5 text-sm"
-
-  /** agent 在等用户回答的问题：单选或多选，每题都可以在「其他」里自己写；全部答完才能提交。 */
-  private def questionForm(entry: Long, c: CallView, qs: List[QuestionView], ctx: TranscriptCtx): HtmlElement =
-    final case class Draft(selected: List[String], other: String):
-      def answered: Boolean = selected.nonEmpty || other.trim.nonEmpty
-      def text: String       = (selected ++ Option(other.trim).filter(_.nonEmpty)).mkString("、")
-    val drafts = Var(qs.map(_ => Draft(Nil, "")))
-    val action = new Action
-    def toggle(qi: Int, label: String): Unit = drafts.update(_.zipWithIndex.map { (d, i) =>
-      if i != qi then d
-      else
-        val on = d.selected.contains(label)
-        if qs(qi).multiSelect then d.copy(selected = if on then d.selected.filterNot(_ == label) else d.selected :+ label)
-        else d.copy(selected = if on then Nil else List(label))
-    })
-    div(
-      cls := s"$askCard scroll-mt-4",
-      idAttr := Waits.askAnchor(c.id),
-      div(cls := "flex items-center gap-1.5 text-accent", Icon("CircleHelp", "size-4"), "需要你回答"),
-      qs.zipWithIndex.map { (q, qi) =>
-        fieldSet(
-          cls := "flex flex-col gap-2",
-          legend(
-            cls := "mb-2 flex items-center gap-2",
-            Ui.chip(q.header)(),
-            span(cls := "font-medium", q.question),
-            Option.when(q.multiSelect)(span(cls := "text-xs text-muted", "可多选"))
-          ),
-          q.options.map { o =>
-            val on = drafts.signal.map(_(qi).selected.contains(o.label))
-            button(
-              tpe := "button",
-              role := (if q.multiSelect then "checkbox" else "radio"),
-              aria.checked <-- on.map(_.toString),
-              onClick --> (_ => toggle(qi, o.label)),
-              cls <-- on.map(x => "flex flex-col items-start rounded-xl border px-3 py-2 text-left " + (if x then "border-accent bg-accent-soft" else "border-separator hover:bg-surface-hover")),
-              span(o.label),
-              Option.when(o.description.nonEmpty)(span(cls := "text-xs text-muted", o.description))
-            )
-          },
-          input(
-            placeholder := "其他（自己写）",
-            aria.label := s"${q.header}：其他",
-            cls := "rounded-xl border border-separator bg-transparent px-3 py-2 outline-none focus:border-accent",
-            controlled(value <-- drafts.signal.map(_(qi).other), onInput.mapToValue --> (v => drafts.update(ds => ds.updated(qi, ds(qi).copy(other = v)))))
-          )
-        )
-      },
-      action.errorView(),
-      Ui.btn(pending = action.busy.signal, disabledIf = drafts.signal.map(!_.forall(_.answered)))(
-        cls := "self-start",
-        "提交回答",
-        onClick --> (_ => action.fire(ctx.answer(entry, c.id, AnswerIn(answers = Some(drafts.now().map(_.text))))))
-      ),
-      div(cls := "text-xs text-muted", "也可以不回答，直接在下面发消息。")
-    )
+  /** 在等用户的调用是待办卡片（[[CallAsks]]，与通知页同一个）；答复过的留下结果。 */
+  private def waiting(entry: Long, c: CallView, ctx: TranscriptCtx): Option[HtmlElement] =
+    Option.when(c.state == CallState.Suspended)(CallAsks.card(c, Todo.Place.InSession, ctx.answer(entry, c.id, _))).flatten
 
   private def note(icon: String, text: String): HtmlElement =
     div(cls := "flex items-center gap-1.5 self-start text-xs text-muted", Icon(icon, "size-3.5"), text)
 
   private def askBlock(entry: Long, c: CallView, ctx: TranscriptCtx): HtmlElement =
-    c.pending match
-      case Some(PendingView.Question(qs)) if c.state == CallState.Suspended => questionForm(entry, c, qs, ctx)
-      case _ =>
-        c.result match
-          case Some(r) if !r.isError => div(cls := "flex max-w-[88%] flex-col gap-1.5 self-start rounded-2xl border border-dashed border-separator px-3.5 py-2.5 text-sm whitespace-pre-wrap", r.text)
-          case Some(r)               => note("CircleHelp", r.text.linesIterator.nextOption().getOrElse("没有回答这些问题"))
-          case None                  => note("CircleHelp", "提问中…")
-
-  /** 停下来等用户批准的调用：显示工具与参数，待批准时给出拒绝、始终允许、批准（始终允许：以后同样的调用不再问，设置页可撤销）。 */
-  private def approvalBlock(entry: Long, c: CallView, ctx: TranscriptCtx): HtmlElement =
-    val pendingNow = c.state == CallState.Suspended
-    val action     = new Action
-    def decide(ok: Boolean, always: Boolean): Unit = action.fire(ctx.answer(entry, c.id, AnswerIn(approved = Some(ok), always = always)))
-    val stateText = c.state match
-      case CallState.Suspended      => "这次调用要你批准才执行"
-      case CallState.Approved       => "已批准"
-      case CallState.ApprovedAlways => "已始终允许"
-      case _ if c.result.exists(_.isError) => "已拒绝或没执行"
-      case _                 => "已提交决定"
-    div(
-      idAttr := Waits.approvalAnchor(c.id),
-      cls := "flex scroll-mt-4 flex-col gap-2 self-stretch rounded-xl border border-warning/40 bg-surface p-3 shadow-sm",
-      div(cls := "flex items-center gap-1.5 text-sm", Icon("ShieldQuestion", "size-4 shrink-0 text-warning"), span(stateText), span(cls := "font-mono text-muted", c.name)),
-      c.pending.collect { case PendingView.Approval(s) => div(cls := "text-sm whitespace-pre-wrap", s) },
-      toolDetail(c),
-      action.errorView(),
-      Option.when(pendingNow)(
-        div(
-          cls := "flex justify-end gap-2",
-          Ui.btn(Variant.Secondary, Size.Sm, disabledIf = action.busy.signal)("拒绝", onClick --> (_ => decide(false, false))),
-          Ui.btn(Variant.Secondary, Size.Sm, disabledIf = action.busy.signal)("始终允许", onClick --> (_ => decide(true, true))),
-          Ui.btn(Variant.Primary, Size.Sm, disabledIf = action.busy.signal)("批准", onClick --> (_ => decide(true, false)))
-        )
-      )
+    waiting(entry, c, ctx).getOrElse(
+      c.result match
+        case Some(r) if !r.isError => div(cls := "flex max-w-[88%] flex-col gap-1.5 self-start rounded-2xl border border-dashed border-separator px-3.5 py-2.5 text-sm whitespace-pre-wrap", r.text)
+        case Some(r)               => note("CircleHelp", r.text.linesIterator.nextOption().getOrElse("没有回答这些问题"))
+        case None                  => note("CircleHelp", "提问中…")
     )
+
+  /** 要批准的调用：在等时是待办卡片；批准或拒绝后显示决定、工具与参数。 */
+  private def approvalBlock(entry: Long, c: CallView, ctx: TranscriptCtx): HtmlElement =
+    waiting(entry, c, ctx).getOrElse {
+      val stateText = c.state match
+        case CallState.Approved              => "已批准"
+        case CallState.ApprovedAlways        => "已始终允许"
+        case _ if c.result.exists(_.isError) => "已拒绝或没执行"
+        case _                               => "已提交决定"
+      div(
+        cls := "flex flex-col gap-2 self-stretch rounded-xl border border-separator bg-surface p-3",
+        div(cls := "flex items-center gap-1.5 text-sm", Icon("ShieldCheck", "size-4 shrink-0 text-muted"), span(stateText), span(cls := "font-mono text-muted", c.name)),
+        ToolDetail.view(c)
+      )
+    }
 
   // ---- 来信与事件 ----
 
