@@ -124,7 +124,7 @@ agent 的命令（shell、skill 脚本、触发器的前置检查和常驻命令
 
 ## Secret
 
-secret 存在资源目录里，值不会出现在会话记录和日志里；加密的也不显示在界面上。agent 用 secret 的方式：在 `run_shell` / `skill_run` 里点名（`secrets=[KEY]`，作为环境变量注入，输出里自动打码），
+secret 存在资源目录里，加密的值不会出现在会话记录、日志和界面上（明文保存的例外：界面直接显示，任何 agent 读文件也看得到）。agent 用 secret 的方式：在 `run_shell` / `skill_run` 里点名（`secrets=[KEY]`，作为环境变量注入，输出里自动打码），
 或在 MCP 配置里写 `${vault:KEY}`。没有能读出 secret 明文的工具。
 
 每个 secret 有三个维度，各选一项：

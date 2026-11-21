@@ -1,6 +1,6 @@
 package muliao.resources.vault
 
-import muliao.contract.{AgentId, AskPurpose, AssetKind, RevealScope, SecretContent, SecretValue, SignContent, SigningAlgorithm}
+import muliao.contract.{AgentId, AgentName, AskPurpose, AssetKind, RevealScope, SecretContent, SecretValue, SignContent, SigningAlgorithm}
 import muliao.platform.AppError
 import muliao.resources.VaultSettings
 import muliao.resources.access.{Action, Decision, Permissions}
@@ -72,11 +72,14 @@ object Vault:
 
   private final case class Live(fernet: Fernet, store: AssetStore, agents: Agents, grants: Grants, lock: Semaphore) extends Vault:
 
-    private def permissions(id: AgentId): IO[AppError, Permissions] =
+    /** agent 的名字与权限。 */
+    private def access(id: AgentId): IO[AppError, (AgentName, Permissions)] =
       for
-        a      <- agents.get(id)
-        access <- store.access
-      yield Permissions.of(a.id, a.name, access.config)
+        a   <- agents.get(id)
+        cfg <- store.access
+      yield (a.name, Permissions.of(a.id, a.name, cfg.config))
+
+    private def permissions(id: AgentId): IO[AppError, Permissions] = access(id).map(_._2)
 
     def set(key: String, input: SecretInput, description: Option[String]): IO[AppError, Boolean] =
       lock.withPermit {
@@ -85,11 +88,7 @@ object Vault:
           snap <- store.snapshot
           // agent 改已有的要看权限，新建的归它自己；用户新建的归他选的主人
           who <- input match
-                   case SecretInput.ByAgent(id, _, _) =>
-                     for
-                       a      <- agents.get(id)
-                       access <- store.access
-                     yield (Some(Permissions.of(a.id, a.name, access.config)), Owner.Agent(a.name))
+                   case SecretInput.ByAgent(id, _, _) => access(id).map((name, p) => (Some(p), Owner.Agent(name)))
                    case SecretInput.ByUser(_, o) => ZIO.succeed((None, o))
           (perms, newOwner) = who
           now <- Clock.currentTime(java.util.concurrent.TimeUnit.SECONDS)

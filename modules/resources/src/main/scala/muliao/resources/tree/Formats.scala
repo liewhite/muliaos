@@ -165,7 +165,6 @@ object Formats:
       plain <- t.string("value")
       alg   <- t.string("keypair").flatMap(o => o.fold(Right(None))(s => SigningAlgorithm.parse(s).map(Some(_))))
       usage <- t.string("usage")
-      // 加密保存的内容（明文保存的只是口令，下面单独读）
       content = (alg, usage) match
                   case (None, Some(SignUsage))    => Left(s"只有密钥对（写了 keypair）能 usage = \"$SignUsage\"")
                   case (None, u)                  => scopeOf(u).map(SecretContent.Opaque(_))
@@ -175,11 +174,10 @@ object Formats:
                 case (Some(token), None, None) => content.map(SecretBody.Server(token, _))
                 case (None, Some(p), None)     => passkeyBox(p).flatMap(b => content.map(SecretBody.Passkey(b, _)))
                 case (None, None, Some(v)) =>
-                  for
-                    _ <- Either.cond(alg.isEmpty, (), "明文保存的（value）只能是口令，不能写 keypair")
-                    _ <- Either.cond(!usage.contains(SignUsage), (), s"明文保存的（value）不能 usage = \"$SignUsage\"")
-                    s <- scopeOf(usage)
-                  yield SecretBody.Plain(v, s)
+                  content.flatMap {
+                    case SecretContent.Opaque(s)     => Right(SecretBody.Plain(v, s))
+                    case SecretContent.KeyPair(_, _) => Left("明文保存的（value）只能是口令，不能写 keypair")
+                  }
                 case (None, None, None) => Left("缺少 ciphertext（或 [passkey]、value）")
                 case _                  => Left("ciphertext、[passkey]、value 只能有一个")
     yield SecretFile(desc.getOrElse(""), body)

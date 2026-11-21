@@ -151,7 +151,7 @@ push keys) are off limits to non-admin agents. When the sandbox blocks a command
 
 ## Secrets
 
-Secrets are stored in the assets directory and never appear in session records or logs; encrypted ones never appear in the UI either. An agent uses a secret by
+Secrets are stored in the assets directory; encrypted values never appear in session records, logs or the UI (plain ones are the exception: the UI shows them and any agent can read the file). An agent uses a secret by
 naming it in `run_shell` / `skill_run` (`secrets=[KEY]`, injected as an environment variable and masked in the output) or as
 `${vault:KEY}` in an MCP configuration. There is no tool that reveals a secret's value.
 
