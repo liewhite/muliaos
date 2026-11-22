@@ -10,7 +10,7 @@ import zio.test.*
 
 import java.nio.file.{Files, Path}
 
-/** 明文保存的 secret（#1093）：文件写 value、只能是口令；agent 照常使用；vault_set 不能新建、改已有的仍是明文；手改能改值，不能换保存方式。 */
+/** 明文保存的 secret（#1093）：文件写 value、只能是口令；agent 照常使用；vault_set 新建时可选明文（#1121）、改已有的沿用原保存方式；手改能改值，不能换保存方式。 */
 object PlainSecretSpec extends ZIOSpecDefault:
 
   def reason(e: Either[muliao.platform.AppError, ?]): String = e.left.toOption.map(_.message).getOrElse("（没被拒）")
@@ -36,7 +36,7 @@ object PlainSecretSpec extends ZIOSpecDefault:
         SecretBody.Server("t", SecretContent.Opaque(RevealScope.Shell)).view == SecretView.Server(SecretContent.Opaque(RevealScope.Shell))
       )
     },
-    test("用户设成明文：文件里是原值；agent 照常取用（范围照旧管）；不能拿来签名；agent 改值仍是明文、可改范围；agent 新建的总是加密") {
+    test("用户设成明文：文件里是原值；agent 照常取用（范围照旧管）；不能拿来签名；agent 改值仍是明文、可改范围；agent 新建缺省加密、选明文就明文；选明文改已有的加密的仍加密") {
       for
         a     <- ZIO.serviceWithZIO[Agents](_.create(NewAgent("alice", "x")))
         b     <- ZIO.serviceWithZIO[Agents](_.create(NewAgent("bob", "x")))
@@ -54,6 +54,12 @@ object PlainSecretSpec extends ZIOSpecDefault:
         s2    <- vault.reveal(b.id, List("PLAIN_URL"), SecretUse.Shell, why)
         _     <- vault.set("PLAIN_NEW", SecretInput.ByAgent(b.id, "v", None), None)
         raw3  <- ZIO.attemptBlocking(Files.readString(dirs.assets.resolve("bob/secrets/PLAIN_NEW.toml")))
+        n4    <- vault.set("PLAIN_CFG", SecretInput.ByAgent(b.id, "https://c.example", Some(RevealScope.Scripts), NewStorage.Plain), Some("地址"))
+        raw4  <- ZIO.attemptBlocking(Files.readString(dirs.assets.resolve("bob/secrets/PLAIN_CFG.toml")))
+        s4    <- vault.reveal(b.id, List("PLAIN_CFG"), SecretUse.Script, why)
+        _     <- vault.set("PLAIN_NEW", SecretInput.ByAgent(b.id, "v2", None, NewStorage.Plain), None)
+        raw5  <- ZIO.attemptBlocking(Files.readString(dirs.assets.resolve("bob/secrets/PLAIN_NEW.toml")))
+        emp2  <- vault.set("PLAIN_EMPTY", SecretInput.ByAgent(b.id, "", None, NewStorage.Plain), None).either
         empty <- vault.set("PLAIN_URL", SecretInput.ByUser(SecretValue.Plain("", RevealScope.Shell), Owner.Platform), None).either
       yield assertTrue(
         n,
@@ -69,6 +75,14 @@ object PlainSecretSpec extends ZIOSpecDefault:
         s2 == Map("PLAIN_URL" -> "https://b.example"),
         raw3.contains("ciphertext"),
         !raw3.contains("value"),
+        n4,
+        raw4.contains("value = \"https://c.example\""),
+        raw4.contains("usage = \"scripts\""),
+        !raw4.contains("ciphertext"),
+        s4 == Map("PLAIN_CFG" -> "https://c.example"),
+        raw5.contains("ciphertext"),
+        !raw5.contains("v2"),
+        reason(emp2).contains("不能为空"),
         reason(empty).contains("不能为空")
       )
     },

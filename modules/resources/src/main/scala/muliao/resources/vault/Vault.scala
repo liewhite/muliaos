@@ -17,15 +17,19 @@ enum Actor:
 enum SecretUse:
   case Shell, Script, Mcp
 
+/** agent 新建 secret 时选的保存方式（#1121）：服务端加密，或明文（只该放地址、账户名这类不保密的配置）。改已有的不看它。 */
+enum NewStorage:
+  case Encrypted, Plain
+
 /** 谁在设、设成什么。 */
 enum SecretInput:
-  /** agent 的 vault_set：只给明文与可选的明文范围，保存方式与内容类型沿用原来的（新建的服务端加密、是口令，范围缺省任意命令）。 */
-  case ByAgent(id: AgentId, text: String, scope: Option[RevealScope])
+  /** agent 的 vault_set：只给明文、可选的明文范围与新建时的保存方式；改已有的沿用原来的保存方式与内容类型（新建的是口令，范围缺省任意命令）。 */
+  case ByAgent(id: AgentId, text: String, scope: Option[RevealScope], fresh: NewStorage = NewStorage.Encrypted)
   /** 用户在界面上：保存方式、内容与能否取明文整个指定；新建的归 `owner`（改已有的归属不变）。 */
   case ByUser(value: SecretValue, owner: Owner)
 
   override def toString: String = this match
-    case ByAgent(id, _, s) => s"SecretInput.ByAgent($id, ***, $s)"
+    case ByAgent(id, _, s, f) => s"SecretInput.ByAgent($id, ***, $s, $f)"
     case ByUser(v, o)      => s"SecretInput.ByUser($v, ${o.label})"
 
 /** secret 的保存与使用。值只在这里出现：不进日志、不进错误信息。
@@ -88,7 +92,7 @@ object Vault:
           snap <- store.snapshot
           // agent 改已有的要看权限，新建的归它自己；用户新建的归他选的主人
           who <- input match
-                   case SecretInput.ByAgent(id, _, _) => access(id).map((name, p) => (Some(p), Owner.Agent(name)))
+                   case SecretInput.ByAgent(id, _, _, _) => access(id).map((name, p) => (Some(p), Owner.Agent(name)))
                    case SecretInput.ByUser(_, o) => ZIO.succeed((None, o))
           (perms, newOwner) = who
           now <- Clock.currentTime(java.util.concurrent.TimeUnit.SECONDS)
@@ -120,16 +124,20 @@ object Vault:
       }
 
     /** 新值存成什么。用户的照指定的存：明文的原样存、交明文要加密的用主密钥加密（密钥对先核对私钥认得）、passkey 的密文浏览器里已加密好原样存。
-      * agent 的沿用原来的保存方式与内容类型（新建的服务端加密的口令），可改明文范围；passkey 加密的改不了。
+      * agent 新建的是口令、按它选的加密或明文存；改已有的沿用原来的保存方式与内容类型，可改明文范围；passkey 加密的改不了。
       */
     private def seal(key: String, input: SecretInput, before: Option[SecretBody], now: Long): IO[AppError, SecretBody] =
       input match
         case SecretInput.ByUser(SecretValue.Server(text, s), _) => encrypt(key, text, s, now)
         case SecretInput.ByUser(SecretValue.Passkey(box, c), _) => ZIO.succeed(SecretBody.Passkey(box, c))
         case SecretInput.ByUser(SecretValue.Plain(text, s), _)  => nonEmpty(text).as(SecretBody.Plain(text, s))
-        case SecretInput.ByAgent(_, text, scope) =>
+        case SecretInput.ByAgent(_, text, scope, fresh) =>
           before match
-            case None => encrypt(key, text, SecretShape.Opaque(scope.getOrElse(RevealScope.Shell)), now)
+            case None =>
+              val s = scope.getOrElse(RevealScope.Shell)
+              fresh match
+                case NewStorage.Encrypted => encrypt(key, text, SecretShape.Opaque(s), now)
+                case NewStorage.Plain     => nonEmpty(text).as(SecretBody.Plain(text, s))
             case Some(SecretBody.Server(_, c)) =>
               ZIO.fromEither(scope.fold(Right(c))(c.withScope)).mapError(AppError.invalid).flatMap(c => encrypt(key, text, SecretShape.of(c), now))
             case Some(SecretBody.Plain(_, s)) => nonEmpty(text).as(SecretBody.Plain(text, scope.getOrElse(s)))

@@ -7,7 +7,7 @@ import muliao.resources.access.BuiltinRole
 import muliao.contract.AgentState
 import muliao.resources.agents.{AgentRecord, Agents, NewAgent}
 import muliao.resources.tree.{AssetPath, Owner}
-import muliao.resources.vault.{SecretInput, SshKeys, Vault}
+import muliao.resources.vault.{NewStorage, SecretInput, SshKeys, Vault}
 import muliao.toolkit.*
 import zio.*
 import zio.json.*
@@ -35,13 +35,15 @@ object AgentTools:
   )
   given Schema[CreateAgent] = DeriveSchema.gen[CreateAgent]
 
-  @description("加密保存一个 secret")
+  @description("保存一个 secret（缺省加密）")
   final case class VaultSet(
       @description("名字，如 `SLACK_TOKEN`：大写字母开头，大写字母、数字、下划线") key: String,
       @sensitive @description("值") value: String,
       @description("是什么、哪个账户或服务、和谁配对") description: String = "",
       @description("明文给谁：`shell` 任意命令；`scripts` 只能经 skill 脚本（skill_run）和 MCP 使用，不能注入自写命令。省略时新 secret 为 shell，已有的不变")
-      usage: Option[muliao.contract.RevealScope] = None
+      usage: Option[muliao.contract.RevealScope] = None,
+      @description("true：新建的明文保存（文件里写原值，任何 agent read_file 都读得到），只用于地址、账户名这类不保密的配置，口令、token、私钥不用。只在新建时生效，改已有的沿用原来的保存方式")
+      plain: Boolean = false
   )
   given Schema[VaultSet] = DeriveSchema.gen[VaultSet]
 
@@ -118,7 +120,7 @@ object AgentTools:
 
   val VaultSetDef = ToolDef[ToolContext, VaultSet](
     "vault_set",
-    "把用户给的 secret 加密存进你的 `secrets/<KEY>.toml`（新 key 归你；改已有的要有改它的权限，用户设成明文保存的改完仍是明文），值不进会话记录。之后用 `run_shell(secrets=[KEY])` / `skill_run(secrets=[KEY])` 当环境变量用，或在 MCP 配置里写 `${vault:KEY}`。",
+    "把 secret 存进你的 `secrets/<KEY>.toml`：缺省加密，不保密的配置可在新建时选 `plain` 明文存（新 key 归你；改已有的要有改它的权限，保存方式沿用原来的），值不进会话记录。之后用 `run_shell(secrets=[KEY])` / `skill_run(secrets=[KEY])` 当环境变量用，或在 MCP 配置里写 `${vault:KEY}`。",
     Access.Write,
     Scheduling.Ordered
   )
@@ -204,8 +206,13 @@ object AgentTools:
 
     val vaultSet = VaultSetDef { (in, ctx) =>
       vault
-        .set(in.key, SecretInput.ByAgent(ctx.agent, in.value, in.usage), Some(in.description))
-        .map(created => ToolOutcome.text(if created then s"已新建 secret ${in.key}。" else s"已更新 secret ${in.key}。"))
+        .set(in.key, SecretInput.ByAgent(ctx.agent, in.value, in.usage, if in.plain then NewStorage.Plain else NewStorage.Encrypted), Some(in.description))
+        .map(created =>
+          ToolOutcome.text(
+            if created then s"已新建 secret ${in.key}（${if in.plain then "明文" else "加密"}保存）。"
+            else s"已更新 secret ${in.key}（保存方式沿用原来的）。"
+          )
+        )
         .mapError(fail)
     }
 

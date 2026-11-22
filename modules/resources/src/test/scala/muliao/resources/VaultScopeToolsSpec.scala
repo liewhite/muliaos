@@ -198,6 +198,8 @@ object VaultScopeToolsSpec extends ZIOSpecDefault:
         out   <- tools("vault_set").invoke(args, Ctx(b.id))
         got   <- vault.reveal(b.id, List("MY_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试"))
         sh    <- vault.reveal(b.id, List("MY_TOKEN"), SecretUse.Shell, muliao.contract.AskPurpose(None, "测试")).either
+        pl    <- tools("vault_set").invoke(Json.Obj("key" -> Json.Str("MY_URL"), "value" -> Json.Str("https://x.example"), "plain" -> Json.Bool(true)), Ctx(b.id))
+        pl2   <- tools("vault_set").invoke(Json.Obj("key" -> Json.Str("MY_TOKEN"), "value" -> Json.Str("v2"), "plain" -> Json.Bool(true)), Ctx(b.id))
         ga    <- tools("get_agent").invoke(Json.Obj("agent" -> Json.Str("BOB")), Ctx(a.id))
         la    <- tools("list_agents").invoke(Json.Obj(), Ctx(a.id))
         self  <- tools("delete_agent").invoke(Json.Obj("agent" -> Json.Str("alice")), Ctx(a.id)).either
@@ -212,6 +214,9 @@ object VaultScopeToolsSpec extends ZIOSpecDefault:
           !vs.redact(args).toJson.contains("top-secret"),
           vs.inputSchema.toJson.contains("\"usage\""),
           text(out).contains("已新建"),
+          text(out).contains("加密保存"),
+          text(pl).contains("明文保存"),
+          text(pl2).contains("沿用原来的"),
           got == Map("MY_TOKEN" -> "top-secret"),
           sh.isLeft,
           view.get(zio.json.ast.JsonCursor.field("name")).toOption.contains(Json.Str("bob")),

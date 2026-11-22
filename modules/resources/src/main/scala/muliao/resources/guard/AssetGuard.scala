@@ -124,7 +124,7 @@ object AssetGuard:
             .whenZIO(ZIO.attemptBlocking(!Files.isRegularFile(main)).orDie)(ZIO.fail(refused(s"先写 $main，再写附件")))
             .as(content)
         case AssetPath.Secret(_, key) if old.isEmpty =>
-          ZIO.fail(refused(s"secret 文件不能手写新建：用 vault_set 存 $key 的值（明文保存的由用户在界面 Secret 页新建）"))
+          ZIO.fail(refused(s"secret 文件不能手写新建：用 vault_set 存 $key 的值（要明文保存带 plain=true）"))
         case f: ParsedFile =>
           for
             _ <- f.subject match

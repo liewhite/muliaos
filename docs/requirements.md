@@ -77,7 +77,7 @@ muliao 是跑在用户自己一台 Mac 上的个人多 agent 助手平台：用�
 - **委派**：`delegate_task`（交给某 agent 的 thread，不等；默认回答推给用户，`report_back` 时回答作为事件交回自己）、`ask_agent`（等对方回答，作为工具结果）、`list_threads`、`stop_thread`。目标可以是自己（开一个新的自己做旁支任务）。
 - **定时唤醒**：`wake_me`（一个会话至多一个，再约就替换，可取消）。
 - **agent 管理**：`list_agents`、`get_agent`、`create_agent`、`delete_agent`。
-- **secret**：`vault_set`（加密存入，值不进会话记录与日志）。
+- **secret**：`vault_set`（缺省加密存入，新建时可选明文保存不保密的配置；值不进会话记录与日志）。
 - **看板**：`issue_list`、`issue_show`、`issue_create`（可一次建一批互相依赖的）、`issue_update`、`issue_comment`、`issue_stop`。
 - **触发器**：`trigger_kinds`、`trigger_list`、`trigger_create`、`trigger_update`、`trigger_run`、`trigger_delete`。
 - **工作历史**：`history_append`、`history_search`、`activity_overview`（某天的活动汇总）、`session_read`（读一个会话的时间线，可按标签和正则筛选）。

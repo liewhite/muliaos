@@ -229,4 +229,4 @@ approval: [scripts/deploy.sh]
 
 ### Secret（`secrets/<KEY>.toml`）
 
-在界面（AI 资产 → Secret）里设，或把值交给 agent 让它用 `vault_set` 存；文件里只有密文（你在界面上设成明文保存的除外：`value = "…"`）。KEY 以大写字母开头，由大写字母、数字和下划线组成。
+在界面（AI 资产 → Secret）里设，或让 agent 用 `vault_set` 存；文件里只有密文（明文保存的除外：`value = "…"`，由你在界面上设，或 agent 新建不保密的配置时用 `vault_set(plain=true)`）。KEY 以大写字母开头，由大写字母、数字和下划线组成。
