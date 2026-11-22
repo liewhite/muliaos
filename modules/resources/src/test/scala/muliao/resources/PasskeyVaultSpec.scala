@@ -58,7 +58,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         (a, _, vault) <- setup
         dirs  <- ZIO.service[TestEnv.Dirs]
         raw   <- ZIO.succeed(Files.readString(dirs.assets.resolve("alice/secrets/PK_TOKEN.toml")))
-        e1    <- vault.set("PK_TOKEN", SecretInput.ByAgent(a.id, "降级", None), None).either
+        e1    <- vault.set("PK_TOKEN", SecretInput.ByAgent(a.id, "降级", None, NewStorage.Encrypted), None).either
         n     <- vault.set("PK_TOKEN", SecretInput.ByUser(SecretValue.Server("用户改回普通的", SecretShape.Opaque(RevealScope.Scripts)), Owner.Platform), None)
         v     <- vault.reveal(a.id, List("PK_TOKEN"), SecretUse.Script, muliao.contract.AskPurpose(None, "测试"))
       yield assertTrue(
@@ -144,7 +144,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         _     <- vault.set("SSH_CA", SecretInput.ByUser(SecretValue.Passkey(box, SecretContent.KeyPair(caId, KeyExposure.SignOnly)), Owner.Agent(a.name)), Some("CA"))
         dirs  <- ZIO.service[TestEnv.Dirs]
         raw   <- ZIO.succeed(Files.readString(dirs.assets.resolve("alice/secrets/SSH_CA.toml")))
-        e1    <- vault.set("SSH_CA", SecretInput.ByAgent(a.id, "降级", None), None).either
+        e1    <- vault.set("SSH_CA", SecretInput.ByAgent(a.id, "降级", None, NewStorage.Encrypted), None).either
         rv    <- vault.reveal(a.id, List("SSH_CA"), SecretUse.Script, in("s1", "cat")).either
         none  <- ZIO.serviceWithZIO[Grants](_.view.map(_._1))
         req    = SshCertRequest("ssh-ed25519 AAAA", List("admin@relay"), 5, None, "id")
@@ -227,7 +227,7 @@ object PasskeyVaultSpec extends ZIOSpecDefault:
         // 公开身份从私钥算出（#1098），手改不动
         caAddr     = chain.Base58.encode(ca.publicKey.bytes)
         reAddr    <- ZIO.serviceWithZIO[muliao.resources.guard.AssetGuard](_.check(Actor.Agent(a.id), file, raw.replace(caAddr, caId.address), muliao.resources.guard.Expectation.Unconditional)).either
-        widen <- vault.set("SSH_CA", SecretInput.ByAgent(a.id, pem, Some(RevealScope.Shell)), None).either
+        widen <- vault.set("SSH_CA", SecretInput.ByAgent(a.id, pem, Some(RevealScope.Shell), NewStorage.Encrypted), None).either
       yield
         // 证书行：类型 base64 注释；签名在末尾（string 类型名 + string 64 字节签名），签的是之前的全部字节
         val blob = java.util.Base64.getDecoder.decode(cert.trim.split(" ")(1))

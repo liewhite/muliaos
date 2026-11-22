@@ -24,13 +24,13 @@ enum NewStorage:
 /** 谁在设、设成什么。 */
 enum SecretInput:
   /** agent 的 vault_set：只给明文、可选的明文范围与新建时的保存方式；改已有的沿用原来的保存方式与内容类型（新建的是口令，范围缺省任意命令）。 */
-  case ByAgent(id: AgentId, text: String, scope: Option[RevealScope], fresh: NewStorage = NewStorage.Encrypted)
+  case ByAgent(id: AgentId, text: String, scope: Option[RevealScope], fresh: NewStorage)
   /** 用户在界面上：保存方式、内容与能否取明文整个指定；新建的归 `owner`（改已有的归属不变）。 */
   case ByUser(value: SecretValue, owner: Owner)
 
   override def toString: String = this match
     case ByAgent(id, _, s, f) => s"SecretInput.ByAgent($id, ***, $s, $f)"
-    case ByUser(v, o)      => s"SecretInput.ByUser($v, ${o.label})"
+    case ByUser(v, o)          => s"SecretInput.ByUser($v, ${o.label})"
 
 /** secret 的保存与使用。值只在这里出现：不进日志、不进错误信息。
   * 三种保存方式（[[SecretBody]]）：服务端主密钥加密的用时直接解、在服务端签；passkey 的用时经 [[Grants]] 等用户在界面上解开或签好；

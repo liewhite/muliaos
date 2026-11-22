@@ -120,7 +120,7 @@ object GuardSpec extends ZIOSpecDefault:
         a     <- alice
         vault <- ZIO.service[Vault]
         _     <- vault.set("OTHER_KEY", muliao.resources.vault.SecretInput.ByUser(muliao.contract.SecretValue.Server("v", muliao.contract.SecretShape.Default), Owner.Platform), None)
-        _     <- vault.set("MY_KEY", muliao.resources.vault.SecretInput.ByAgent(a.id, "v", None), None)
+        _     <- vault.set("MY_KEY", muliao.resources.vault.SecretInput.ByAgent(a.id, "v", None, muliao.resources.vault.NewStorage.Encrypted), None)
         f      = dirs.assets.resolve("alice/mcp/web.json")
         x     <- guard(Actor.Agent(a.id), f, """{"transport":"http","url":"ftp://x"}""").either
         y     <- guard(Actor.Agent(a.id), f, """{"transport":"http","url":"https://x","headers":{"A":"${vault:OTHER_KEY}"}}""").either
@@ -133,7 +133,7 @@ object GuardSpec extends ZIOSpecDefault:
         dirs  <- ZIO.service[TestEnv.Dirs]
         a     <- alice
         vault <- ZIO.service[Vault]
-        _     <- vault.set("MY_KEY", muliao.resources.vault.SecretInput.ByAgent(a.id, "v", None), Some("说明"))
+        _     <- vault.set("MY_KEY", muliao.resources.vault.SecretInput.ByAgent(a.id, "v", None, muliao.resources.vault.NewStorage.Encrypted), Some("说明"))
         f      = dirs.assets.resolve("alice/secrets/MY_KEY.toml")
         text  <- ZIO.succeed(Files.readString(f))
         ct     = text.linesIterator.find(_.startsWith("ciphertext")).get

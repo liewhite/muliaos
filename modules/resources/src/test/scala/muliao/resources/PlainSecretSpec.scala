@@ -49,10 +49,10 @@ object PlainSecretSpec extends ZIOSpecDefault:
         s1    <- vault.reveal(b.id, List("PLAIN_URL"), SecretUse.Script, why)
         sh    <- vault.reveal(b.id, List("PLAIN_URL"), SecretUse.Shell, why).either
         sig   <- vault.sign(a.id, "PLAIN_URL", SignContent.SshCert(SshCertRequest("ssh-ed25519 AAAA", List("a@b"), 5, None, "id")), why).either
-        _     <- vault.set("PLAIN_URL", SecretInput.ByAgent(b.id, "https://b.example", Some(RevealScope.Shell)), None)
+        _     <- vault.set("PLAIN_URL", SecretInput.ByAgent(b.id, "https://b.example", Some(RevealScope.Shell), NewStorage.Encrypted), None)
         raw2  <- ZIO.attemptBlocking(Files.readString(file))
         s2    <- vault.reveal(b.id, List("PLAIN_URL"), SecretUse.Shell, why)
-        _     <- vault.set("PLAIN_NEW", SecretInput.ByAgent(b.id, "v", None), None)
+        _     <- vault.set("PLAIN_NEW", SecretInput.ByAgent(b.id, "v", None, NewStorage.Encrypted), None)
         raw3  <- ZIO.attemptBlocking(Files.readString(dirs.assets.resolve("bob/secrets/PLAIN_NEW.toml")))
         n4    <- vault.set("PLAIN_CFG", SecretInput.ByAgent(b.id, "https://c.example", Some(RevealScope.Scripts), NewStorage.Plain), Some("地址"))
         raw4  <- ZIO.attemptBlocking(Files.readString(dirs.assets.resolve("bob/secrets/PLAIN_CFG.toml")))
@@ -92,7 +92,7 @@ object PlainSecretSpec extends ZIOSpecDefault:
         vault <- ZIO.service[Vault]
         dirs  <- ZIO.service[TestEnv.Dirs]
         _     <- vault.set("PLAIN_URL", SecretInput.ByUser(SecretValue.Plain("v1", RevealScope.Shell), Owner.Agent(a.name)), Some("地址"))
-        _     <- vault.set("ENC_KEY", SecretInput.ByAgent(a.id, "secret", None), Some("加密的"))
+        _     <- vault.set("ENC_KEY", SecretInput.ByAgent(a.id, "secret", None, NewStorage.Encrypted), Some("加密的"))
         plain  = dirs.assets.resolve("alice/secrets/PLAIN_URL.toml")
         enc    = dirs.assets.resolve("alice/secrets/ENC_KEY.toml")
         ct    <- ZIO.attemptBlocking(Files.readString(enc)).map(_.linesIterator.find(_.startsWith("ciphertext")).get)
