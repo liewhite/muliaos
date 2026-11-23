@@ -105,7 +105,8 @@ object SitePages:
     val page    = pages.map(_.data.flatMap(_.find(p => p.agent == agent && p.page == name)))
     // 刷新时递增：iframe 换一个重新加载
     val version = Var(0)
-    val sharing = Var(false)
+    // 正在分享的页面。弹窗不放在随页面数据重建的顶栏里：生成链接成功后界面会重拉数据，顶栏重建会把弹窗和刚生成的链接一起丢掉
+    val sharing = Var(Option.empty[PageView])
     Ui.page(
       child.text <-- page.map(_.fold(name)(p => s"${p.page} · ${p.agentName}")),
       back = Some(Route.Single(Page.Pages)),
@@ -114,12 +115,12 @@ object SitePages:
         div(
           cls := "flex items-center gap-2",
           Ui.iconBtn("RefreshCw", "刷新", iconCls = "size-4")(onClick --> (_ => version.update(_ + 1))),
-          Ui.iconBtn("Share2", "分享", iconCls = "size-4")(onClick --> (_ => sharing.set(true))),
-          child.maybe <-- sharing.signal.map(on => Option.when(on)(shareDialog(p, () => sharing.set(false)))),
+          Ui.iconBtn("Share2", "分享", iconCls = "size-4")(onClick --> (_ => sharing.set(Some(p)))),
           a(href := p.url, target := "_blank", rel := "noreferrer", aria.label := "新窗口打开", title := "新窗口打开", Icon("ExternalLink", "size-4"))
         )
       })
     )(
+      child.maybe <-- sharing.signal.map(_.map(p => shareDialog(p, () => sharing.set(None)))),
       Ui.loading(pages) { list =>
         child <-- list.map(_.find(p => p.agent == agent && p.page == name)).distinct.combineWith(version.signal).map {
           case (Some(p), _) =>
