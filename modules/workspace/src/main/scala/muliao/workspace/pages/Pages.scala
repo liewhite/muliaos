@@ -23,6 +23,10 @@ enum PageGrant:
     case Permanent => true
     case Until(t)  => nowSecond < t
 
+  def expiresAtMillis: Option[Long] = this match
+    case Permanent => None
+    case Until(t)  => Some(t * 1000)
+
 /** 页面链接的签名：页面在与界面隔离的环境里运行、拿不到登录 cookie，靠链接里的签名段访问。签名只绑定 agent、页面名与有效期，
   * 所以页面里的相对链接（脚本、样式、数据文件）沿用同一个前缀即可。签名段的写法：永久是 `<签名>`（与加有效期前发出的链接相同），
   * 有期限的是 `<到期秒>.<签名>`；到期时刻在签名里，改了就对不上。
@@ -33,7 +37,7 @@ final class PageSigner private (key: Array[Byte]):
     m.init(SecretKeySpec(key, "HmacSHA256"))
     m.doFinal(text.getBytes(StandardCharsets.UTF_8)).take(16).map(b => f"${b & 0xff}%02x").mkString
 
-  // 页面名、agent 编号里没有 `/`，永久与有期限的签名内容不会重合
+  // 调用方保证 agent 编号与页面名里没有 `/`（取文件时检查过），永久与有期限的签名内容不会重合
   private def sig(agent: AgentId, page: String, grant: PageGrant): String = grant match
     case PageGrant.Permanent => mac(s"${agent.value}/$page")
     case PageGrant.Until(t)  => mac(s"${agent.value}/$page/$t")
@@ -156,17 +160,12 @@ object Pages:
                .filterOrFail(identity)(missing)
         now <- Clock.instant
         grant = lifetime(ttl).fold(PageGrant.Permanent)(s => PageGrant.Until(now.getEpochSecond + s))
-      yield PageShare(
-        url(signer, agent, page, grant),
-        grant match
-          case PageGrant.Permanent => None
-          case PageGrant.Until(t)  => Some(t * 1000)
-      )
+      yield PageShare(url(signer, agent, page, grant), grant.expiresAtMillis)
 
     def file(agent: AgentId, page: String, token: String, file: List[String]): IO[AppError, PageFile] =
       val missing = AppError.notFound("页面文件不存在")
       val segs    = if file.isEmpty then List("index.html") else file
-      if !(page :: segs).forall(validName) then ZIO.fail(missing)
+      if !(agent.value :: page :: segs).forall(validName) then ZIO.fail(missing)
       else
         val root = siteDir(paths, agent).resolve(page)
         for

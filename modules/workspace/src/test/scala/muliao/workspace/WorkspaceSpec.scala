@@ -428,9 +428,10 @@ object WorkspaceSpec extends ZIOSpecDefault:
                    past   = signer.token(alice, "board", PageGrant.Until(now.getEpochSecond - 1))
                    gone  <- pages.file(alice, "board", past, Nil).either
                    bad   <- pages.file(alice, "board", "x.y.z", Nil).either
-                 yield (list, hour, month, ever, none, now, exp, index, data, other, gone, bad)
+                   bare  <- pages.file(alice, "board", sig.drop(1), Nil).either
+                 yield (list, hour, month, ever, none, now, exp, index, data, other, gone, bad, bare)
                }
-        (list, hour, month, ever, none, now, exp, index, data, other, gone, bad) = out
+        (list, hour, month, ever, none, now, exp, index, data, other, gone, bad, bare) = out
       yield assertTrue(
         hour.expiresAt.contains(exp * 1000),
         exp - now.getEpochSecond > 3590 && exp - now.getEpochSecond <= 3600,
@@ -441,7 +442,8 @@ object WorkspaceSpec extends ZIOSpecDefault:
         data.contentType == "application/json",
         other.isLeft,
         gone.isLeft,
-        bad.isLeft
+        bad.isLeft,
+        bare.isLeft
       )
     },
     test("页面与浏览：签名链接取文件，签名不对或走出目录都不行；目录浏览不出工作目录") {
