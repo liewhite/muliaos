@@ -182,4 +182,4 @@ They appear in the inbox and are delivered by Web Push to every subscribed devic
 ## Agent pages
 
 An agent can publish a web page by writing `site/<page>/index.html` (and assets) in its workspace. Pages are listed in the UI and open
-inside it, served from signed URLs in an isolated origin: scripts run, but they cannot see your login cookie or call the platform API.
+inside it, served from signed URLs in an isolated origin: scripts run, but they cannot see your login cookie or call the platform API. From an open page, 分享 (Share) creates a link that works without logging in, valid for 1 hour, 1 day, 1 month or forever; a link cannot be revoked on its own before it expires (changing `cookie_secret` invalidates all page links).

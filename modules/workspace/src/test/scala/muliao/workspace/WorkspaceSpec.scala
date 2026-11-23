@@ -12,7 +12,7 @@ import muliao.sessions.TestEnv as S
 import muliao.sessions.TestEnv.{Script, call as modelCall, text as say}
 import muliao.workspace.TestEnv.*
 import muliao.workspace.jobs.Jobs
-import muliao.workspace.pages.Pages
+import muliao.workspace.pages.{PageGrant, Pages}
 import muliao.workspace.scripts.ScriptGrants
 import muliao.workspace.store.Repo
 import zio.*
@@ -401,6 +401,47 @@ object WorkspaceSpec extends ZIOSpecDefault:
         gl.map(g => (g.skill, g.script, g.args, g.current)) == List(("deploy", "scripts/go.sh", List("prod"), true)),
         !results.exists(_.contains("deployed v2")),
         gl2.map(_.current) == List(false)
+      )
+    },
+    test("页面分享：有期限的链接到期前能取（含附件）、到期后与改了到期时刻的都不行；永久同内嵌链接；没有的页面报不存在") {
+      for
+        d <- S.dirs
+        m <- model(PartialFunction.empty)
+        out <- withEnv(d, m) {
+                 for
+                   alice <- S.agent("alice")
+                   ws    <- workspaceOf(alice)
+                   _     <- write(ws.resolve("site/board/index.html"), "<h1>hi</h1>")
+                   _     <- write(ws.resolve("site/board/data.json"), "{}")
+                   pages <- ZIO.service[Pages]
+                   list  <- pages.list
+                   hour  <- pages.share(alice, "board", PageShareTtl.Hour)
+                   month <- pages.share(alice, "board", PageShareTtl.Month)
+                   ever  <- pages.share(alice, "board", PageShareTtl.Forever)
+                   none  <- pages.share(alice, "nope", PageShareTtl.Day).either
+                   now   <- Clock.instant
+                   token  = hour.url.split('/')(4)
+                   (exp, sig) = (token.takeWhile(_ != '.').toLong, token.dropWhile(_ != '.'))
+                   index <- pages.file(alice, "board", token, Nil)
+                   data  <- pages.file(alice, "board", token, List("data.json"))
+                   other <- pages.file(alice, "board", s"${exp + 3600}$sig", Nil).either
+                   past   = signer.token(alice, "board", PageGrant.Until(now.getEpochSecond - 1))
+                   gone  <- pages.file(alice, "board", past, Nil).either
+                   bad   <- pages.file(alice, "board", "x.y.z", Nil).either
+                 yield (list, hour, month, ever, none, now, exp, index, data, other, gone, bad)
+               }
+        (list, hour, month, ever, none, now, exp, index, data, other, gone, bad) = out
+      yield assertTrue(
+        hour.expiresAt.contains(exp * 1000),
+        exp - now.getEpochSecond > 3590 && exp - now.getEpochSecond <= 3600,
+        month.expiresAt.exists(_ - now.toEpochMilli > 29L * 86400 * 1000),
+        ever == PageShare(list.head.url, None),
+        none.isLeft,
+        String(index.bytes, "UTF-8") == "<h1>hi</h1>",
+        data.contentType == "application/json",
+        other.isLeft,
+        gone.isLeft,
+        bad.isLeft
       )
     },
     test("页面与浏览：签名链接取文件，签名不对或走出目录都不行；目录浏览不出工作目录") {

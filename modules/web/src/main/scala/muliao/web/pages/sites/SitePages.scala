@@ -1,8 +1,10 @@
 package muliao.web.pages.sites
 
 import com.raquo.laminar.api.L.*
-import muliao.contract.{AgentId, PageView, WorkspaceApi}
+import muliao.contract.{AgentId, PageShare, PageShareRequest, PageShareTtl, PageView, WorkspaceApi}
+import org.scalajs.dom
 import muliao.web.core.*
+import muliao.web.core.Http.ec
 import muliao.web.ui.*
 
 /** 「页面」：agent 在工作目录 site/<名>/ 下写的网页（监控、数据展示）。列表是按 agent 分组的卡片网格、按最近更新排；点开在 iframe 里全屏显示。
@@ -54,11 +56,56 @@ object SitePages:
       )
     )
 
+  private given Shown[PageShareTtl] = {
+    case PageShareTtl.Hour    => "1 小时"
+    case PageShareTtl.Day     => "1 天"
+    case PageShareTtl.Month   => "1 个月"
+    case PageShareTtl.Forever => "永久"
+  }
+
+  /** 分享弹窗：选有效期生成不要登录的链接（服务端给站内路径，这里补上当前访问的源），显示到期时间、可复制。 */
+  private def shareDialog(pv: PageView, onClose: () => Unit): HtmlElement =
+    val act    = new Action
+    val shared = Var(Option.empty[(PageShareTtl, PageShare)])
+    def make(ttl: PageShareTtl): Unit =
+      act.fire(Http.call(WorkspaceApi.sharePage)(PageShareRequest(pv.agent, pv.page, ttl)).map(s => shared.set(Some(ttl -> s))))
+    Dialog(onClose, "分享页面", size = "md")(
+      Dialog.header(Dialog.heading(s"分享 ${pv.page}")),
+      Dialog.body(
+        cls := "flex flex-col gap-3",
+        p(cls := "text-sm text-muted", "拿到链接的人不用登录就能打开，到期后失效；到期前不能单独作废。"),
+        div(
+          cls := "flex flex-wrap gap-2",
+          PageShareTtl.values.toList.map(ttl =>
+            Ui.btn(Variant.Secondary, Size.Sm, disabledIf = act.busy.signal)(
+              ttl.shown,
+              dataAttr("selected") <-- shared.signal.map(_.exists(_._1 == ttl).toString),
+              onClick --> (_ => make(ttl))
+            )
+          )
+        ),
+        child.maybe <-- shared.signal.map(_.map { (_, s) =>
+          val full = dom.window.location.origin + s.url
+          div(
+            cls := "flex flex-col gap-2",
+            input(cls := "input w-full font-mono text-xs", readOnly := true, value := full, onFocus --> (e => e.target.asInstanceOf[dom.html.Input].select())),
+            div(
+              cls := "flex items-center justify-between gap-2",
+              span(cls := "text-xs text-muted", s.expiresAt.fold("永久有效")(t => s"${Format.time(t)} 到期")),
+              Ui.btn(Variant.Primary, Size.Sm)(Icon("Copy"), "复制链接", onClick --> (_ => Ui.copyText(full, "链接")))
+            )
+          )
+        }),
+        act.errorView()
+      )
+    )
+
   def pageView(agent: AgentId, name: String): HtmlElement =
     val pages   = load()
     val page    = pages.map(_.data.flatMap(_.find(p => p.agent == agent && p.page == name)))
     // 刷新时递增：iframe 换一个重新加载
     val version = Var(0)
+    val sharing = Var(false)
     Ui.page(
       child.text <-- page.map(_.fold(name)(p => s"${p.page} · ${p.agentName}")),
       back = Some(Route.Single(Page.Pages)),
@@ -67,6 +114,8 @@ object SitePages:
         div(
           cls := "flex items-center gap-2",
           Ui.iconBtn("RefreshCw", "刷新", iconCls = "size-4")(onClick --> (_ => version.update(_ + 1))),
+          Ui.iconBtn("Share2", "分享", iconCls = "size-4")(onClick --> (_ => sharing.set(true))),
+          child.maybe <-- sharing.signal.map(on => Option.when(on)(shareDialog(p, () => sharing.set(false)))),
           a(href := p.url, target := "_blank", rel := "noreferrer", aria.label := "新窗口打开", title := "新窗口打开", Icon("ExternalLink", "size-4"))
         )
       })

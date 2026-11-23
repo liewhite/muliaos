@@ -44,6 +44,20 @@ final case class DirListing(path: String, entries: List[DirEntry], truncated: Bo
 /** agent 写的一个网页（工作目录的 `site/<page>/index.html`）。`url` 是带签名的地址，内嵌打开。 */
 final case class PageView(agent: AgentId, agentName: String, page: String, url: String, modifiedAt: Long) derives JsonCodec, Schema
 
+/** 分享链接的有效期（一个月按 30 天）。 */
+enum PageShareTtl(val label: String) extends Labeled:
+  case Hour    extends PageShareTtl("1h")
+  case Day     extends PageShareTtl("1d")
+  case Month   extends PageShareTtl("30d")
+  case Forever extends PageShareTtl("forever")
+
+object PageShareTtl extends Labels[PageShareTtl]("分享有效期", PageShareTtl.values)
+
+final case class PageShareRequest(agent: AgentId, page: String, ttl: PageShareTtl) derives JsonCodec, Schema
+
+/** 一条分享链接：`url` 是站内路径（前端补上自己的源），`expiresAt` 到期时刻（毫秒），永久为空。不要登录，到期前不能单独作废。 */
+final case class PageShare(url: String, expiresAt: Option[Long]) derives JsonCodec, Schema
+
 // ---- skill 脚本的始终允许 ----
 
 /** `current`：skill 的文件和记下时一样（改过之后这条不再生效，可以撤销）。 */
@@ -108,6 +122,14 @@ object WorkspaceApi:
   val listPages: Endpoint[Option[String], Unit, ApiError, List[PageView], Any] =
     Api.secure.get.in("pages").out(jsonBody[List[PageView]]).name("listPages").description("全部 agent 写的网页。")
 
+  val sharePage: Endpoint[Option[String], PageShareRequest, ApiError, PageShare, Any] =
+    Api.secure.post
+      .in("pages" / "share")
+      .in(jsonBody[PageShareRequest])
+      .out(jsonBody[PageShare])
+      .name("sharePage")
+      .description("给一个页面生成分享链接（1 小时 / 1 天 / 30 天 / 永久）：不要登录，到期后打不开。")
+
   val listGrants: Endpoint[Option[String], Unit, ApiError, List[ScriptGrantView], Any] =
     Api.secure.get.in("script-grants").out(jsonBody[List[ScriptGrantView]]).name("listScriptGrants").description("skill 脚本的「始终允许」列表。")
 
@@ -118,4 +140,4 @@ object WorkspaceApi:
       .name("revokeScriptGrant")
       .description("撤销一条「始终允许」：之后同样的调用又要批准。")
 
-  val all = List(listDir, workspaceFile, skillFile, listJobs, jobLog, killJob, listPages, listGrants, revokeGrant)
+  val all = List(listDir, workspaceFile, skillFile, listJobs, jobLog, killJob, listPages, sharePage, listGrants, revokeGrant)

@@ -17,18 +17,18 @@ final case class WorkspaceHttp(browse: Browse, jobs: Jobs, pages: Pages, grants:
 
   private def asTuple(d: Download): (String, String, Array[Byte]) = (d.contentType, d.disposition, d.bytes)
 
-  /** 页面文件：`/site/<agent>/<page>/<签名>/<文件路径>`，不要登录（页面拿不到 cookie），靠签名；带隔离响应头。 */
+  /** 页面文件：`/site/<agent>/<page>/<签名段>/<文件路径>`，不要登录（页面拿不到 cookie），靠签名（可带到期时刻）；带隔离响应头。 */
   val pageEndpoint: ZServerEndpoint[Any, ZioStreams] =
     endpoint.get
-      .in(Pages.Prefix / path[String]("agent") / path[String]("page") / path[String]("sig"))
+      .in(Pages.Prefix / path[String]("agent") / path[String]("page") / path[String]("token"))
       .in(paths)
       .out(statusCode)
       .out(headers)
       .out(byteArrayBody)
       .name("pageFile")
-      .zServerLogic[Any] { (agent, page, sig, file) =>
+      .zServerLogic[Any] { (agent, page, token, file) =>
         pages
-          .file(AgentId.wrap(agent), page, sig, file)
+          .file(AgentId.wrap(agent), page, token, file)
           .map(f => (StatusCode.Ok, Header("Content-Type", f.contentType) :: Pages.IsolationHeaders.map(Header(_, _)), f.bytes))
           .catchAll {
             case e: AppError.Domain => ZIO.succeed((StatusCode.NotFound, List(Header("Content-Type", "text/plain; charset=utf-8")), e.message.getBytes("UTF-8")))
@@ -48,6 +48,7 @@ final case class WorkspaceHttp(browse: Browse, jobs: Jobs, pages: Pages, grants:
       WorkspaceApi.jobLog.secured((id, lines) => jobs.tail(id, lines.getOrElse(200).max(1).min(5000))),
       WorkspaceApi.killJob.secured(id => jobs.kill(id).unit),
       WorkspaceApi.listPages.secured(_ => pages.list),
+      WorkspaceApi.sharePage.secured(r => pages.share(r.agent, r.page, r.ttl)),
       WorkspaceApi.listGrants.secured(_ => grants.list),
       WorkspaceApi.revokeGrant.secured(grants.revoke),
       Route.unsecured(pageEndpoint)
