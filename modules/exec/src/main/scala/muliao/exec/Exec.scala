@@ -78,17 +78,20 @@ object Exec:
   val KillGrace: Duration = 3.seconds
 
   /** 命令的标准输入接什么。 */
-  private[exec] enum Stdin(private[exec] val reopen: String):
+  private enum Stdin:
     /** 管道：由服务写入（写完关闭，或对话中一直开着）。 */
-    case Piped extends Stdin("")
+    case Piped
     /** /dev/null：没有要喂的。不用空管道，是因为 ripgrep 这类命令见标准输入是管道就去搜它、不搜当前目录（#1318）。 */
-    case Null extends Stdin("""open(STDIN, "<", "/dev/null") or die qq(/dev/null: $!\n); """)
+    case Null
 
   // 让命令自成进程组（便于整组结束），按需把标准输入换成 /dev/null，再 exec 成真正的命令，进程号不变。
   private def prelude(stdin: Stdin): Chunk[String] =
-    Chunk("/usr/bin/perl", "-e", s"setpgrp(0,0); ${stdin.reopen}" + "exec { $ARGV[0] } @ARGV or die qq(exec $ARGV[0]: $!\\n)")
+    val reopen = stdin match
+      case Stdin.Piped => ""
+      case Stdin.Null  => """open(STDIN, "<", "/dev/null"); """
+    Chunk("/usr/bin/perl", "-e", "setpgrp(0,0); " + reopen + "exec { $ARGV[0] } @ARGV or die qq(exec $ARGV[0]: $!\\n)")
 
-  private[exec] def argv(spec: CommandSpec, stdin: Stdin): Chunk[String] =
+  private def argv(spec: CommandSpec, stdin: Stdin): Chunk[String] =
     val command = spec.program match
       case Program.Shell(script)  => Chunk("/bin/bash", "-c", script)
       case Program.Argv(p, args)  => p +: args
@@ -106,7 +109,7 @@ object Exec:
     val masker = Masker(spec.secrets)
     ZIO.scoped(
       for
-        process <- launch(spec, stderr.merged, NonEmptyChunk.fromChunk(stdin).fold(Stdin.Null)(_ => Stdin.Piped))
+        process <- launch(spec, stderr.merged, if stdin.isEmpty then Stdin.Null else Stdin.Piped)
         pid     <- process.pid.orElseSucceed(-1L)
         exit    <- process.exitCode.map(_.code).orElseSucceed(-1).forkDaemon
         _       <- ZIO.addFinalizer(exit.poll.flatMap(done => ZIO.when(done.isEmpty)(killGroup(pid, exit))))
