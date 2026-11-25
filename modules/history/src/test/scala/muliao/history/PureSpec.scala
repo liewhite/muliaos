@@ -140,6 +140,8 @@ object PureSpec extends ZIOSpecDefault:
         one.contains("## 活跃的会话（0）\n（无）"),
         one.contains("- [2] 修好了（#7）"),
         IssueActivity.path(List((1, 2), (2, 2), (2, 3))) == List(1, 2, 3),
+        IssueActivity.path(List((1, 2), (3, 4))) == List(1, 2, 3, 4),
+        OverviewText.excerpt("短\n" + "x" * 170, IssueId.wrap(5)) == List("短", "x" * 160 + "…", "…（共 172 字，全文用 issue_show(5) 看）"),
         IssueActivity.path(List.empty[(Int, Int)]).isEmpty
       )
     },
@@ -156,7 +158,7 @@ object PureSpec extends ZIOSpecDefault:
       val o    = DayOverview(None, LocalDate.parse("2026-11-15"), zone, SessionActivity(ss, Nil, Nil), Nil, Nil)
       val text = OverviewText(Map(bob -> "bob", carol -> "carol"), zone).lines(o).mkString("\n")
       assertTrue(
-        OverviewText.byTrigger(ss).map(_.map(_.id.value.take(1))) == List(List("a", "b", "d", "e"), List("c")),
+        OverviewText.byTrigger(ss).map((h, t) => (h :: t).map(_.id.value.take(1))) == List(List("a", "b", "d", "e"), List("c")),
         text.contains(
           "## 活跃的会话（5）\n- bob [触发器 watch] 4 个会话 | 8 条消息 08:00–08:31 | 运行 4 次，失败 1 次\n" +
             "  eeeeeeee（最近，running）、bbbbbbbb（失败 1 次）；其余 2 个空闲、无失败\n" +

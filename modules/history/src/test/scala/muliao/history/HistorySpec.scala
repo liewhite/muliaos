@@ -175,6 +175,7 @@ object HistorySpec extends ZIOSpecDefault:
           _     <- b.comment(By(Actor.Agent(carol, None)), ids(1), "carol 的进展")
           _     <- b.update(By(Actor.Agent(bob, Some(s1))), ids.head, Patch(status = Some(IssueStatus.Blocked), assignee = Some(Some(Assignee.User))))
           _     <- b.update(By(Actor.Agent(bob, Some(s1))), ids.head, Patch(status = Some(IssueStatus.Backlog)))
+          _     <- b.update(By.user, ids.head, Patch(status = Some(IssueStatus.Cancelled)))
           _     <- h.append(bob, None, List(entry(today, "今天做的", "部署"), entry(today.minusDays(1), "昨天做的", "整理")))
           (_, rs) <- ask(bob, tool("activity_overview", "{}"))
           bobDay  = rs.head._2
@@ -192,12 +193,13 @@ object HistorySpec extends ZIOSpecDefault:
           bobDay.contains(s"${s1.value.take(8)} 说：\n  帮我部署"),
           bobDay.contains("说：\n  工具 activity_overview {}"),
           !bobDay.contains("carol 的事"),
-          bobDay.contains(s"## 对 issue 的操作（1 个 issue，6 条动态）\n- #${ids.head.value} bob 的活 | 6 条动态"),
-          bobDay.contains("  状态：backlog → blocked → backlog\n  指派：bob → user\n"),
+          bobDay.contains(s"## 对 issue 的操作（1 个 issue，7 条动态）\n- #${ids.head.value} bob 的活 | 7 条动态"),
+          bobDay.contains("  状态：backlog → blocked → backlog → cancelled\n  指派：bob → user\n"),
           bobDay.contains("] 用户 建了这个 issue\n"),
           bobDay.contains("] bob 评论：\n    bob 的进展\n"),
           bobDay.contains("] 用户 评论：\n    用户的意见"),
-          !bobDay.contains("把状态从"),
+          bobDay.contains("] 用户 把状态从 backlog 改成 cancelled"),
+          !bobDay.contains("把状态从 blocked"),
           !bobDay.contains("给 carol 的意见"),
           !bobDay.contains("carol 的进展"),
           bobDay.contains("## 失败的运行（1）"),

@@ -273,7 +273,7 @@ object Board:
             assignees = IssueActivity.path(es.collect { case IssueEvent(_, _, _, _, Activity.AssigneeChanged(f, t)) => (r.assignee(f), r.assignee(t)) }),
             events = es.flatMap { e =>
               e.activity match
-                case Activity.StatusChanged(_, _) | Activity.AssigneeChanged(_, _) => None
+                case Activity.StatusChanged(_, _) | Activity.AssigneeChanged(_, _) if e.actor != Actor.User => None
                 case a =>
                   val (text, body) = r.activity(a)
                   Some(IssueActivity.Event(e.at, e.actor, r.actor(e.actor), text, body))

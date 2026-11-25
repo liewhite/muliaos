@@ -1,7 +1,7 @@
 package muliao.history
 
 import muliao.board.{Actor, IssueActivity}
-import muliao.contract.{AgentId, Origin, SessionId, TriggerName, WorkState}
+import muliao.contract.{AgentId, IssueId, Origin, SessionId, TriggerName, WorkState}
 import muliao.sessions.*
 
 import java.time.{Instant, LocalDate, ZoneId}
@@ -29,7 +29,7 @@ final class OverviewText(names: AgentId => String, zone: ZoneId):
   /** 会话编号只给前 8 位（session_read 认前缀）。 */
   private def short(id: SessionId): String = id.value.take(8)
 
-  private def indent(text: String, by: String = "  "): List[String] = text.linesIterator.map(by + _).toList
+  private def indent(text: String, prefix: String = "  "): List[String] = text.linesIterator.map(prefix + _).toList
 
   def lines(o: DayOverview): List[String] =
     val who                  = o.agent.fold("全部 agent")(names)
@@ -56,8 +56,8 @@ final class OverviewText(names: AgentId => String, zone: ZoneId):
       )
 
     val sessions = OverviewText.byTrigger(o.sessions.sessions).map {
-      case List(s) => session(s)
-      case ss      => triggerRuns(ss)
+      case (s, Nil)  => session(s)
+      case (s, more) => triggerRuns(s :: more)
     }
     val said = o.sessions.said.map(u => s"- [${at(u.at)}] ${short(u.session)} ${by(u.agent)}说：" :: indent(u.text))
     val issues = o.issues.map { i =>
@@ -69,7 +69,7 @@ final class OverviewText(names: AgentId => String, zone: ZoneId):
         e.body.fold(List(head)) { b =>
           val shown = e.actor match
             case Actor.User => indent(b, "    ")
-            case _          => OverviewText.excerpt(b, i.issue.value).map("    " + _)
+            case _          => OverviewText.excerpt(b, i.issue).map("    " + _)
           (head + "：") :: shown
         }
       }
@@ -87,23 +87,23 @@ final class OverviewText(names: AgentId => String, zone: ZoneId):
 
 object OverviewText:
   /** 正文开头给几行、每行至多几字；省掉了就加一行指向全文。 */
-  val ExcerptLines = 3
-  val ExcerptWidth = 160
+  private val ExcerptLines = 3
+  private val ExcerptWidth = 160
 
   /** agent 与平台写的正文只给开头（跳过空行），全文用 issue_show 看。 */
-  def excerpt(text: String, issue: Long): List[String] =
+  def excerpt(text: String, issue: IssueId): List[String] =
     val all   = text.linesIterator.filter(_.trim.nonEmpty).toList
     val shown = all.take(ExcerptLines).map(l => if l.length > ExcerptWidth then l.take(ExcerptWidth) + "…" else l)
-    if shown == all then shown else shown :+ s"…（共 ${text.length} 字，全文用 issue_show($issue) 看）"
+    if shown == all then shown else shown :+ s"…（共 ${text.length} 字，全文用 issue_show(${issue.value}) 看）"
 
-  /** 同一 agent 同一触发器的会话合成一组，其余会话各自一组；组按各自第一个会话的位置排。 */
-  def byTrigger(ss: List[ActiveSession]): List[List[ActiveSession]] =
+  /** 同一 agent 同一触发器的会话合成一组（第一个，其余的），其余会话各自一组；组按各自第一个会话的位置排。 */
+  def byTrigger(ss: List[ActiveSession]): List[(ActiveSession, List[ActiveSession])] =
     val key: ActiveSession => Either[SessionId, (AgentId, TriggerName)] = s =>
       s.origin match
         case Origin.Trigger(n) => Right((s.agent, n))
         case _                 => Left(s.id)
     val groups = ss.groupBy(key)
-    ss.map(key).distinct.map(groups)
+    ss.map(key).distinct.map(k => (groups(k).head, groups(k).tail))
 
   /** 会话是怎么开的。 */
   def origin(o: Origin): String = o match
