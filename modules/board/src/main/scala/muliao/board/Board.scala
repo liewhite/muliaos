@@ -256,12 +256,30 @@ object Board:
                       case (Actor.Agent(id, _), Some(a))  => id == a
                       case (Actor.User, Some(_))          => mine.exists(_(e.issue))
                   }
-        titles <- db.read(Repo.links(picked.map(_.issue).distinct)).map(_.map(l => l.id -> l.title).toMap)
+        order   = picked.map(_.issue).distinct
+        titles <- db.read(Repo.links(order)).map(_.map(l => l.id -> l.title).toMap)
         r      <- render(Nil, picked)
-      yield picked.map { e =>
-        val (text, body) = r.activity(e.activity)
-        IssueActivity(e.issue, titles.getOrElse(e.issue, ""), e.at, r.actor(e.actor), e.actor.where, text, body)
-      }
+      yield
+        val byIssue = picked.groupBy(_.issue)
+        order.map { id =>
+          val es = byIssue(id)
+          IssueActivity(
+            issue = id,
+            title = titles.getOrElse(id, ""),
+            count = es.size,
+            first = es.head.at,
+            last = es.last.at,
+            statuses = IssueActivity.path(es.collect { case IssueEvent(_, _, _, _, Activity.StatusChanged(f, t)) => (f, t) }),
+            assignees = IssueActivity.path(es.collect { case IssueEvent(_, _, _, _, Activity.AssigneeChanged(f, t)) => (r.assignee(f), r.assignee(t)) }),
+            events = es.flatMap { e =>
+              e.activity match
+                case Activity.StatusChanged(_, _) | Activity.AssigneeChanged(_, _) => None
+                case a =>
+                  val (text, body) = r.activity(a)
+                  Some(IssueActivity.Event(e.at, e.actor, r.actor(e.actor), text, body))
+            }
+          )
+        }
 
     // ---- 写 ----
 

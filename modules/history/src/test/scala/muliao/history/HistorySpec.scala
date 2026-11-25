@@ -173,6 +173,8 @@ object HistorySpec extends ZIOSpecDefault:
           _     <- b.comment(By.user, ids.head, "用户的意见")
           _     <- b.comment(By.user, ids(1), "给 carol 的意见")
           _     <- b.comment(By(Actor.Agent(carol, None)), ids(1), "carol 的进展")
+          _     <- b.update(By(Actor.Agent(bob, Some(s1))), ids.head, Patch(status = Some(IssueStatus.Blocked), assignee = Some(Some(Assignee.User))))
+          _     <- b.update(By(Actor.Agent(bob, Some(s1))), ids.head, Patch(status = Some(IssueStatus.Backlog)))
           _     <- h.append(bob, None, List(entry(today, "今天做的", "部署"), entry(today.minusDays(1), "昨天做的", "整理")))
           (_, rs) <- ask(bob, tool("activity_overview", "{}"))
           bobDay  = rs.head._2
@@ -190,9 +192,12 @@ object HistorySpec extends ZIOSpecDefault:
           bobDay.contains(s"${s1.value.take(8)} 说：\n  帮我部署"),
           bobDay.contains("说：\n  工具 activity_overview {}"),
           !bobDay.contains("carol 的事"),
-          bobDay.contains("bob 的活：bob 评论：\n  bob 的进展"),
-          bobDay.contains("bob 的活：用户 评论：\n  用户的意见"),
-          bobDay.contains("bob 的活：用户 建了这个 issue"),
+          bobDay.contains(s"## 对 issue 的操作（1 个 issue，6 条动态）\n- #${ids.head.value} bob 的活 | 6 条动态"),
+          bobDay.contains("  状态：backlog → blocked → backlog\n  指派：bob → user\n"),
+          bobDay.contains("] 用户 建了这个 issue\n"),
+          bobDay.contains("] bob 评论：\n    bob 的进展\n"),
+          bobDay.contains("] 用户 评论：\n    用户的意见"),
+          !bobDay.contains("把状态从"),
           !bobDay.contains("给 carol 的意见"),
           !bobDay.contains("carol 的进展"),
           bobDay.contains("## 失败的运行（1）"),
@@ -200,7 +205,8 @@ object HistorySpec extends ZIOSpecDefault:
           bobDay.contains("## 当天的工作历史（1）\n- [1] 今天做的\n  部署"),
           allDay.contains(s"${s3.value.take(8)} carol [用户新建] carol 的事"),
           allDay.contains("给 carol 的意见"),
-          allDay.contains("carol 的活：carol 评论：\n  carol 的进展"),
+          allDay.contains("carol 的活 | 3 条动态"),
+          allDay.contains("] carol 评论：\n    carol 的进展"),
           allDay.contains("- bob [1] 今天做的"),
           ry.head._2.contains("## 活跃的会话（0）"),
           ry.head._2.contains("## 当天的工作历史（1）\n- [1] 昨天做的"),

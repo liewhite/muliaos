@@ -93,9 +93,10 @@ object HistoryTools:
 
   val ActivityOverviewDef = ToolDef[RunContext, OverviewIn](
     "activity_overview",
-    """某天（配置时区）的活动汇总，文字：活跃的会话（编号前 8 位、来源、标题、状态、当天消息数与时间跨度、运行与失败次数）、用户当天亲手发的每条消息（全文）、
-      |对 issue 的操作（该 agent 做的，加上用户在它负责或被指派的 issue 上做的，评论全文）、失败的运行及错误、当天的工作历史。
-      |回顾今天或最近的工作用它（history_search 一般只到昨天），要细看某个会话再用 session_read。输出太长时最后一行说明从哪个 offset 继续。""".stripMargin,
+    """某天（配置时区）的活动汇总，列重点、给索引，细节自己去翻：活跃的会话（编号前 8 位、来源、标题、状态、当天消息数与时间跨度、运行与失败次数；同一触发器的会话合成一项，单列最近的、失败的、没空闲的编号）、
+      |用户当天亲手发的每条消息（全文）、对 issue 的操作（该 agent 做的，加上用户在它负责或被指派的 issue 上做的；按 issue 合并，状态和指派写成变化路径，用户的评论给全文，其余评论只给开头，全文用 issue_show）、
+      |失败的运行及错误、当天的工作历史。不含 agent 的回答正文：找以前说过的话，在这里找到会话后用 session_read 的 grep。
+      |回顾今天或最近的工作用它（history_search 一般只到昨天）。输出太长时最后一行说明从哪个 offset 继续。""".stripMargin,
     Access.Read,
     display = _ => Display.Markdown
   )

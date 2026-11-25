@@ -1,6 +1,6 @@
 package muliao.history
 
-import muliao.board.IssueActivity
+import muliao.board.{Actor, IssueActivity}
 import muliao.contract.*
 import muliao.sessions.*
 import zio.test.*
@@ -104,7 +104,22 @@ object PureSpec extends ZIOSpecDefault:
           List(UserSaid(sid, bob, at(9, 0), "第一行\n第二行")),
           List(RunFailure(sid, bob, RunId.wrap(3), at(9, 30), "模型不可用"))
         ),
-        issues = List(IssueActivity(IssueId.wrap(7), "修 bug", at(9, 10), "carol", None, "评论", Some("看过了"))),
+        issues = List(
+          IssueActivity(
+            IssueId.wrap(7),
+            "修 bug",
+            count = 6,
+            first = at(9, 10),
+            last = at(10, 0),
+            statuses = List(IssueStatus.Backlog, IssueStatus.InProgress, IssueStatus.InReview),
+            assignees = List("bob", "user"),
+            events = List(
+              IssueActivity.Event(at(9, 10), Actor.User, "用户", "评论", Some("可以\n\n但别太省")),
+              IssueActivity.Event(at(9, 20), Actor.Agent(carol, None), "carol", "评论", Some("看过了")),
+              IssueActivity.Event(at(10, 0), Actor.Agent(bob, None), "bob", "评论", Some("一\n二\n\n三\n四\n" + "长" * 200))
+            )
+          )
+        ),
         history = List(entry(9, "修好了", "改了投递", refs = List("#7"), imp = Importance.Notable))
       )
       val names = Map(bob -> "bob", carol -> "carol")
@@ -114,12 +129,39 @@ object PureSpec extends ZIOSpecDefault:
         text.startsWith("# 2026-11-15 全部 agent 的活动（时区 Asia/Shanghai）"),
         text.contains("## 活跃的会话（1）\n- 01234567 bob [issue #7] #7 修 bug | idle | 4 条消息 09:00–09:30 | 运行 2 次，失败 1 次"),
         text.contains("## 用户说的话（1）\n- [09:00] 01234567 bob 说：\n  第一行\n  第二行"),
-        text.contains("## 对 issue 的操作（1）\n- [09:10] #7 修 bug：carol 评论：\n  看过了"),
+        text.contains(
+          "## 对 issue 的操作（1 个 issue，6 条动态）\n- #7 修 bug | 6 条动态 09:10–10:00\n  状态：backlog → in_progress → in_review\n  指派：bob → user\n" +
+            "  [09:10] 用户 评论：\n    可以\n    \n    但别太省\n  [09:20] carol 评论：\n    看过了\n" +
+            "  [10:00] bob 评论：\n    一\n    二\n    三\n    …（共 209 字，全文用 issue_show(7) 看）"
+        ),
         text.contains("## 失败的运行（1）\n- [09:30] 01234567 bob 运行 3：\n  模型不可用"),
         text.contains("## 当天的工作历史（1）\n- bob [2] 修好了（#7）\n  改了投递"),
         one.startsWith("# 2026-11-15 bob 的活动"),
         one.contains("## 活跃的会话（0）\n（无）"),
-        one.contains("- [2] 修好了（#7）")
+        one.contains("- [2] 修好了（#7）"),
+        IssueActivity.path(List((1, 2), (2, 2), (2, 3))) == List(1, 2, 3),
+        IssueActivity.path(List.empty[(Int, Int)]).isEmpty
+      )
+    },
+    test("活动回顾：同一 agent 同一触发器的会话合成一项，单列最近的、失败的、没空闲的；只有一个的照常一行") {
+      def s(id: String, agent: AgentId, trigger: String, state: WorkState, first: (Int, Int), failed: Int = 0) =
+        ActiveSession(SessionId.wrap(id * 8), agent, Origin.Trigger(TriggerName.wrap(trigger)), "检查", state, 2, at(first._1, first._2), at(first._1, first._2 + 1), 1, failed)
+      val ss = List(
+        s("a", bob, "watch", WorkState.Idle, (8, 0)),
+        s("b", bob, "watch", WorkState.Idle, (8, 10), failed = 1),
+        s("c", carol, "watch", WorkState.Idle, (8, 15)),
+        s("d", bob, "watch", WorkState.Idle, (8, 20)),
+        s("e", bob, "watch", WorkState.Running, (8, 30))
+      )
+      val o    = DayOverview(None, LocalDate.parse("2026-11-15"), zone, SessionActivity(ss, Nil, Nil), Nil, Nil)
+      val text = OverviewText(Map(bob -> "bob", carol -> "carol"), zone).lines(o).mkString("\n")
+      assertTrue(
+        OverviewText.byTrigger(ss).map(_.map(_.id.value.take(1))) == List(List("a", "b", "d", "e"), List("c")),
+        text.contains(
+          "## 活跃的会话（5）\n- bob [触发器 watch] 4 个会话 | 8 条消息 08:00–08:31 | 运行 4 次，失败 1 次\n" +
+            "  eeeeeeee（最近，running）、bbbbbbbb（失败 1 次）；其余 2 个空闲、无失败\n" +
+            "- cccccccc carol [触发器 watch] 检查 | idle | 2 条消息 08:15–08:16 | 运行 1 次"
+        )
       )
     }
   )

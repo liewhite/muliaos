@@ -135,5 +135,26 @@ object Halt:
         m.toRight("改成 in_progress 是改方向，要给留言（message）说清接下来做什么").map(_ => Halt(status, m))
       case s => Left(s"叫停后不能改成 ${s.label}：停下不是做完，只能是 backlog / blocked / cancelled / in_progress（改方向，要留言）")
 
-/** 一条动态连同它所在的 issue（活动回顾用），文字已按 [[Render]] 写好。 */
-final case class IssueActivity(issue: IssueId, title: String, at: Long, actor: String, session: Option[SessionId], text: String, comment: Option[String])
+/** 一个 issue 在一段时间里的动态（活动回顾用），文字已按 [[Render]] 写好。
+  * 状态、指派的改动各压成一条变化路径（如 backlog → in_progress → in_review），其余动态逐条在 `events`；`count` 是全部动态条数，`first` / `last` 最早、最晚一条的时刻。
+  */
+final case class IssueActivity(
+    issue: IssueId,
+    title: String,
+    count: Int,
+    first: Long,
+    last: Long,
+    statuses: List[IssueStatus],
+    assignees: List[String],
+    events: List[IssueActivity.Event]
+)
+
+object IssueActivity:
+  /** 一条动态：谁、做了什么、正文（评论、打回理由、错误）。 */
+  final case class Event(at: Long, actor: Actor, who: String, text: String, body: Option[String])
+
+  /** 一串改动接成的变化路径（前后相同的并掉）；没有改动是空。 */
+  def path[A](changes: List[(A, A)]): List[A] =
+    changes match
+      case Nil            => Nil
+      case (from, _) :: _ => (from :: changes.map(_._2)).foldRight(List.empty[A])((a, acc) => if acc.headOption.contains(a) then acc else a :: acc)
