@@ -81,7 +81,7 @@ object PlainSecretSpec extends ZIOSpecDefault:
         !raw4.contains("ciphertext"),
         s4 == Map("PLAIN_CFG" -> "https://c.example"),
         raw5.contains("ciphertext"),
-        !raw5.contains("v2"),
+        !raw5.contains("value"),
         reason(emp2).contains("不能为空"),
         reason(empty).contains("不能为空")
       )
