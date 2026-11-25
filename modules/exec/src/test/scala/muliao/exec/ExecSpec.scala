@@ -54,6 +54,12 @@ object ExecSpec extends ZIOSpecDefault:
         code <- Exec.follow(shell("exit 0", dir), Stderr.Separate, Chunk.fill(20000)("x" * 10))(_ => ZIO.unit)
       yield assertTrue(code == 0)
     },
+    test("不喂输入时标准输入是 /dev/null 而不是空管道（ripgrep 不带路径时才搜当前目录），读它立刻 EOF") {
+      for
+        dir <- tempDir
+        r   <- Exec.run(shell("""if [ -p /dev/stdin ]; then echo pipe; else echo notpipe; fi; cat; echo done""", dir), 10.seconds)
+      yield assertTrue(r.ending == Ending.Exited(0), r.output == "notpipe\ndone")
+    },
     test("命令自成进程组") {
       for
         dir <- tempDir

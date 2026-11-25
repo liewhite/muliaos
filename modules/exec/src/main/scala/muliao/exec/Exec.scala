@@ -77,20 +77,28 @@ object Exec:
   /** TERM 之后等多久再 KILL。 */
   val KillGrace: Duration = 3.seconds
 
-  // 让命令自成进程组（便于整组结束），再 exec 成真正的命令，进程号不变。
-  private val setpgrp = Chunk("/usr/bin/perl", "-e", "setpgrp(0,0); exec { $ARGV[0] } @ARGV or die qq(exec $ARGV[0]: $!\\n)")
+  /** 命令的标准输入接什么。 */
+  private[exec] enum Stdin(private[exec] val reopen: String):
+    /** 管道：由服务写入（写完关闭，或对话中一直开着）。 */
+    case Piped extends Stdin("")
+    /** /dev/null：没有要喂的。不用空管道，是因为 ripgrep 这类命令见标准输入是管道就去搜它、不搜当前目录（#1318）。 */
+    case Null extends Stdin("""open(STDIN, "<", "/dev/null") or die qq(/dev/null: $!\n); """)
 
-  private[exec] def argv(spec: CommandSpec): Chunk[String] =
+  // 让命令自成进程组（便于整组结束），按需把标准输入换成 /dev/null，再 exec 成真正的命令，进程号不变。
+  private def prelude(stdin: Stdin): Chunk[String] =
+    Chunk("/usr/bin/perl", "-e", s"setpgrp(0,0); ${stdin.reopen}" + "exec { $ARGV[0] } @ARGV or die qq(exec $ARGV[0]: $!\\n)")
+
+  private[exec] def argv(spec: CommandSpec, stdin: Stdin): Chunk[String] =
     val command = spec.program match
       case Program.Shell(script)  => Chunk("/bin/bash", "-c", script)
       case Program.Argv(p, args)  => p +: args
     val sandboxed = spec.sandbox match
       case Sandbox.Unrestricted   => command
       case c: Sandbox.Confined     => Chunk("/usr/bin/sandbox-exec", "-p", Sandbox.profile(c)) ++ command
-    setpgrp ++ sandboxed
+    prelude(stdin) ++ sandboxed
 
   /** 起命令，逐行读完它的输出（先打码再分行，跨行的 secret 也换得掉），每行交给 `each`，得到退出码。
-    *   - `stdin` 每项一行写进标准输入，写完关闭。
+    *   - `stdin` 每项一行写进标准输入，写完关闭；没有要写的，标准输入接 /dev/null。
     *   - 主进程退出后限时读完余下的输出：留在后台的子进程占着输出不放时，到时就不再等，也不杀它。
     *   - 被中断（超时、取消、服务关停）时主进程还没退出就结束整组。
     */
@@ -98,7 +106,7 @@ object Exec:
     val masker = Masker(spec.secrets)
     ZIO.scoped(
       for
-        process <- launch(spec, stderr.merged, ProcessInput.Pipe)
+        process <- launch(spec, stderr.merged, NonEmptyChunk.fromChunk(stdin).fold(Stdin.Null)(_ => Stdin.Piped))
         pid     <- process.pid.orElseSucceed(-1L)
         exit    <- process.exitCode.map(_.code).orElseSucceed(-1).forkDaemon
         _       <- ZIO.addFinalizer(exit.poll.flatMap(done => ZIO.when(done.isEmpty)(killGroup(pid, exit))))
@@ -148,7 +156,7 @@ object Exec:
   /** 起一条走标准输入输出对话的命令（同样自成进程组、进写沙箱、注入 secret）；scope 结束时关输入并结束整组。 */
   def attach(spec: CommandSpec): ZIO[Scope, AppError, AttachedCommand] =
     for
-      process <- launch(spec, mergeStderr = false, ProcessInput.Pipe)
+      process <- launch(spec, mergeStderr = false, Stdin.Piped)
       pid     <- process.pid.orElseSucceed(-1L)
       exit    <- process.exitCode.map(_.code).orElseSucceed(-1).forkDaemon
       lock    <- Semaphore.make(1)
@@ -156,13 +164,14 @@ object Exec:
       _       <- ZIO.addFinalizer(attached.closeInput *> exit.poll.flatMap(done => ZIO.when(done.isEmpty)(attached.kill)))
     yield attached
 
-  private def launch(spec: CommandSpec, mergeStderr: Boolean, stdin: ProcessInput): IO[AppError, zio.process.Process] =
-    val all = argv(spec)
+  // Java 那头总是管道（zio-process 不提供从文件重定向）；Stdin.Null 时子进程在 exec 前换成 /dev/null，管道没人读，写空关掉即可
+  private def launch(spec: CommandSpec, mergeStderr: Boolean, stdin: Stdin): IO[AppError, zio.process.Process] =
+    val all = argv(spec, stdin)
     Command(all.head, all.tail*)
       .workingDirectory(spec.cwd.toFile)
       .env(spec.env ++ spec.secrets.map(s => s.name -> s.value))
       .redirectErrorStream(mergeStderr)
-      .stdin(stdin)
+      .stdin(ProcessInput.Pipe)
       .run
       .mapError(e => AppError.internal(s"起命令失败：${e.getMessage}", e))
 
